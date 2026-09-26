@@ -194,6 +194,30 @@ describe("professional report authoring (Laudo)", () => {
     expect(await screen.findByText("23,550520° S, 46,633308° O")).toBeInTheDocument();
   });
 
+  test("figures come from the library and are cited in the text by a marker the document numbers", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const figure = (id: string, section: string, caption: string) => ({ figure_id: id, content_id: "00000001-0000-4000-8000-000000000000", original_sha256: "a".repeat(64), caption, section_kind: section, width: 1200, height: 900 });
+    const figured = { ...baseSnapshot, figures: [figure("PHOTO-B", "ATTACHMENTS", "Anexo fotográfico"), figure("PHOTO-A", "INSPECTION", "Fissura na parede leste")] };
+    vi.stubGlobal("fetch", routed(baseSnapshot, (body) => { bodies.push(body); return response(200, envelope(figured, 4)); }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Trazer figuras da biblioteca" }));
+    await waitFor(() => expect(bodies).toEqual([{ expected_revision: 3, action: "SET_FIGURES", values: {} }]));
+    expect(await screen.findByText("Figura 1")).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Figura 1 – Fissura na parede leste" })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Inserir referência a figura ou tabela"), { target: { value: "[[FIGURA:PHOTO-B]]" } });
+    expect(screen.getByDisplayValue("Afirmação documentada. [[FIGURA:PHOTO-B]]")).toBeInTheDocument();
+    expect(screen.getByText(/conforme a ordem final: Figura 2/)).toBeInTheDocument();
+  });
+
+  test("the writing assistant says it is unavailable and why, and never decides", async () => {
+    vi.stubGlobal("fetch", routed(baseSnapshot));
+    render(<ReportFoundationView workspaceId={ID} />);
+    fireEvent.click(await screen.findByText("Assistente de redação"));
+    expect(screen.getByText("Indisponível nesta instalação")).toBeInTheDocument();
+    expect(screen.getByText(/Por padrão, nada do caso sai desta máquina/)).toBeInTheDocument();
+    expect(screen.getByText(/Nada entra no laudo sem a sua decisão/)).toBeInTheDocument();
+  });
+
   test("requires the master expert profile before starting a report", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

@@ -22,6 +22,7 @@ APPLICATION_ARTIFACT_OWNERSHIP = {
         ArtifactOwnership("EXPERT_MASTER_PROFILE_V1", "Expert Profile Application Service", True),
         ArtifactOwnership("INSPECTION_SESSION_V1", "Inspection Application Service", True),
         ArtifactOwnership("PERICIAL_PLANNING_SNAPSHOT_V1", "Pericial Planning Application Service", True),
+        ArtifactOwnership("PHOTO_LIBRARY_V1", "Photo Library Application Service", True),
         ArtifactOwnership("PJE_INTAKE_V1", "PJe Intake Application Service", True),
         ArtifactOwnership("PROCESS_CASE", "Process Case Application Service", True),
         ArtifactOwnership("REPORT_SNAPSHOT_V1", "Report Application Service", True),

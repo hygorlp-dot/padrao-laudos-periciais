@@ -10,6 +10,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from urllib.parse import unquote_to_bytes, urlsplit
 
+from ..application.photo_library import DuplicatePhoto, photo_library_to_mapping
 from ..application.site_location import LocationInputError, site_location_to_mapping
 from ..application.content import (
     DOCUMENT_IO_CHUNK_BYTES,
@@ -174,6 +175,10 @@ class LocalApiServices:
     store_delivery_template: object | None = None
     store_default_delivery_template: object | None = None
     get_site_location: object | None = None
+    get_photo_library: object | None = None
+    ai_assistant_status: object | None = None
+    curate_photo_library: object | None = None
+    read_photo_thumbnail: object | None = None
     propose_site_location: object | None = None
     confirm_site_location: object | None = None
     get_delivery_artifact: object | None = None
@@ -288,6 +293,17 @@ def _json_response(status: int, value: object) -> HttpResponse:
                 "Cache-Control": "no-store",
             }
         ),
+        body=body,
+    )
+
+
+def _thumbnail_response(body: bytes) -> HttpResponse:
+    """A derived JPEG preview; never the original, never another media type."""
+    if type(body) is not bytes or not body.startswith(b"\xff\xd8\xff"):
+        raise RepositoryIntegrityError("miniatura inválida")
+    return HttpResponse(
+        status=200,
+        headers=MappingProxyType({"Content-Type": "image/jpeg", "Content-Length": str(len(body)), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}),
         body=body,
     )
 
@@ -682,7 +698,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -710,6 +726,51 @@ class LocalApi:
                     record = self._services.create_workspace.execute(dto["name"])
                     return _json_response(201, _workspace_dto(record))
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if raw_segments == ("v1", "ai-assistant", "status"):
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.ai_assistant_status is None:
+                    return _json_response(200, {"available": False, "mode": None, "reasons": ["NO_LOCAL_PROVIDER", "PRIVATE_CASE_EGRESS_NOT_AUTHORIZED"], "proposal_only": True})
+                return _json_response(200, self._services.ai_assistant_status.execute())
+
+            if len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "photo-library":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if self._services.get_photo_library is None or self._services.curate_photo_library is None or self._services.read_photo_thumbnail is None:
+                    return _error(503, "PHOTO_LIBRARY_UNAVAILABLE")
+                tail = raw_segments[4:]
+                if len(tail) == 3 and tail[0] == "photos" and tail[2] == "thumbnail":
+                    if normalized_method != "GET":
+                        return _error(405, "METHOD_NOT_ALLOWED")
+                    return _thumbnail_response(self._services.read_photo_thumbnail.execute(workspace_id, tail[1]))
+                if not tail:
+                    if normalized_method != "GET":
+                        return _error(405, "METHOD_NOT_ALLOWED")
+                    record, library = self._services.get_photo_library.execute(workspace_id)
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "library": photo_library_to_mapping(library)})
+                if len(tail) != 1 or tail[0] not in {"photos", "descriptions", "selection", "removals"}:
+                    return _error(404, "NOT_FOUND")
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                dto = self._request_dto(request_headers, body)
+                expected = dto.get("expected_revision") if type(dto) is dict else None
+                if expected is not None and (type(expected) is not int or expected < 1):
+                    raise ValueError("Photo Library expected revision is invalid")
+                curate = self._services.curate_photo_library
+                try:
+                    if tail[0] == "photos" and set(dto) == {"expected_revision", "content_id"} and type(dto["content_id"]) is str:
+                        record, library = curate.register(workspace_id, content_id=dto["content_id"], expected_revision=expected)
+                    elif tail[0] == "descriptions" and set(dto) == {"expected_revision", "photo_id", "caption", "tags"} and expected is not None:
+                        record, library = curate.describe(workspace_id, photo_id=dto["photo_id"], caption=dto["caption"], tags=dto["tags"], expected_revision=expected)
+                    elif tail[0] == "selection" and set(dto) == {"expected_revision", "selection"} and expected is not None:
+                        record, library = curate.select(workspace_id, selection=dto["selection"], expected_revision=expected)
+                    elif tail[0] == "removals" and set(dto) == {"expected_revision", "photo_id"} and expected is not None:
+                        record, library = curate.remove(workspace_id, photo_id=dto["photo_id"], expected_revision=expected)
+                    else:
+                        raise ValueError("Photo Library request is invalid")
+                except DuplicatePhoto as exc:
+                    return _json_response(409, {"error": {"code": "PHOTO_DUPLICATE", "message": "foto já está na biblioteca", "photo_id": exc.photo_id}})
+                return _json_response(201 if tail[0] == "photos" else 200, {"revision": record.revision, "updated_at": record.created_at, "library": photo_library_to_mapping(library)})
 
             if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "site-location":
                 workspace_id = self._workspace_id(raw_segments[2])

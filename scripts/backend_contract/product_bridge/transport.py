@@ -21,6 +21,7 @@ from ..streaming import (
 
 
 _CANONICAL_UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_PHOTO_ID = re.compile(r"PHOTO-[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}")
 _ASSET_PATH = re.compile(r"/assets/[A-Za-z0-9][A-Za-z0-9._-]*")
 _SECURITY_HEADERS = {
     "Content-Security-Policy": (
@@ -95,6 +96,8 @@ def _proxy_target(path: str, method: str) -> str | None:
         return "/v1/workspaces"
     if path == "/app-api/v1/recovery" and method == "GET":
         return "/v1/recovery"
+    if path == "/app-api/v1/ai-assistant/status" and method == "GET":
+        return "/v1/ai-assistant/status"
     # Recuperação (#183): sem estas rotas, proteger ou restaurar uma perícia
     # continuaria exigindo terminal — bloqueador de produto.
     recovery_prefix = "/app-api/v1/recovery/"
@@ -145,6 +148,12 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/technical-snapshot/{remainder[2]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "construction-defect-analysis" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "photo-library" and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/photo-library"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "photo-library" and remainder[2] in {"photos", "descriptions", "selection", "removals"} and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/photo-library/{remainder[2]}"
+        if len(remainder) == 5 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:3] == ["photo-library", "photos"] and _PHOTO_ID.fullmatch(remainder[3]) and remainder[4] == "thumbnail" and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/photo-library/photos/{remainder[3]}/thumbnail"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "site-location" and method in {"GET", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["site-location", "confirmation"] and method == "POST":

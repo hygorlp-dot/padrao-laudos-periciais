@@ -460,6 +460,38 @@ class ReportSiteLocation:
         return f"{latitude}, {longitude}"
 
 
+FIGURE_SECTION_KINDS = ("INSPECTION", "TECHNICAL_ANALYSIS", "TECHNICAL_FINDINGS", "ATTACHMENTS")
+FIGURE_TOKEN = re.compile(r"\[\[FIGURA:([^\]]*)\]\]")
+TABLE_TOKEN = re.compile(r"\[\[TABELA:([^\]]*)\]\]")
+FINDINGS_TABLE_KEY = "ACHADOS"
+_FIGURE_ID = re.compile(r"^PHOTO-[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$")
+
+
+@dataclass(frozen=True, slots=True)
+class ReportFigure:
+    """A photo the expert chose as a figure, bound to its original's bytes.
+
+    The report presents a derivative (upright, resized, without metadata);
+    the original stays intact in private storage and is named by SHA-256, so
+    a figure can only ever be rendered from the bytes it was chosen for.
+    """
+    figure_id: str
+    content_id: str
+    original_sha256: str
+    caption: str
+    section_kind: str
+    width: int
+    height: int
+
+    def __post_init__(self):
+        if _FIGURE_ID.fullmatch(self.figure_id or "") is None or not _text(self.content_id) or not _text(self.caption) or self.caption != self.caption.strip() or len(self.caption) > 300:
+            raise ValueError("report figure is invalid")
+        if type(self.original_sha256) is not str or len(self.original_sha256) != 64 or any(ch not in "0123456789abcdef" for ch in self.original_sha256):
+            raise ValueError("report figure binding is invalid")
+        if self.section_kind not in FIGURE_SECTION_KINDS or any(type(value) is not int or not 1 <= value <= 100_000 for value in (self.width, self.height)):
+            raise ValueError("report figure is invalid")
+
+
 @dataclass(frozen=True, slots=True)
 class ReportReviewDecision:
     review_id: str
@@ -520,6 +552,7 @@ class ReportSnapshot:
     references: tuple[ReportReference, ...] | None = None
     findings_table: tuple[ReportFindingRow, ...] | None = None
     site_location: ReportSiteLocation | None = None
+    figures: tuple[ReportFigure, ...] | None = None
 
     def __post_init__(self):
         _all_text(self, ("schema_version", "report_id", "workspace_id"))
@@ -558,6 +591,19 @@ class ReportSnapshot:
                 raise ValueError("report references must be unique")
         if self.site_location is not None and type(self.site_location) is not ReportSiteLocation:
             raise ValueError("report site location is invalid")
+        if self.figures is not None:
+            if type(self.figures) is not tuple or not self.figures or any(type(item) is not ReportFigure for item in self.figures):
+                raise ValueError("report figures are invalid")
+            if len({item.figure_id for item in self.figures}) != len(self.figures) or len({item.original_sha256 for item in self.figures}) != len(self.figures):
+                raise ValueError("report figures must be unique")
+        # A cross-reference names something the report presents, or nothing.
+        figure_ids = {item.figure_id for item in self.figures or ()}
+        texts = [item.text for item in self.claims] + [item.text for item in self.answers]
+        for text in texts:
+            if any(target not in figure_ids for target in FIGURE_TOKEN.findall(text)):
+                raise ValueError("report text cites a figure the report does not present")
+            if any(target != FINDINGS_TABLE_KEY or not self.findings_table for target in TABLE_TOKEN.findall(text)):
+                raise ValueError("report text cites a table the report does not present")
         if self.findings_table is not None:
             if type(self.findings_table) is not tuple or not self.findings_table or any(type(item) is not ReportFindingRow for item in self.findings_table):
                 raise ValueError("report findings table is invalid")
@@ -646,7 +692,7 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     if type(value) is not dict:
         raise ValueError("ReportSnapshot mapping is invalid")
     allowed = {item.name for item in fields(ReportSnapshot)}
-    optional = {"references", "findings_table", "site_location"}
+    optional = {"references", "findings_table", "site_location", "figures"}
     if not allowed - optional <= set(value) <= allowed:
         raise ValueError("ReportSnapshot fields are invalid")
     data = dict(value)
@@ -660,7 +706,7 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
             if type(site.get(name)) is int:
                 site[name] = float(site[name])
         data["site_location"] = _construct(ReportSiteLocation, site)
-    for name in ("references", "findings_table"):
+    for name in ("references", "findings_table", "figures"):
         if name not in data:
             data[name] = None
         elif type(data[name]) is not list or not data[name]:
@@ -668,6 +714,8 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
             raise ValueError(f"ReportSnapshot {name} is invalid")
     if data["references"] is not None:
         data["references"] = tuple(_construct(ReportReference, item) for item in data["references"])
+    if data["figures"] is not None:
+        data["figures"] = tuple(_construct(ReportFigure, item) for item in data["figures"])
     if data["findings_table"] is not None:
         data["findings_table"] = tuple(_construct(ReportFindingRow, item, nested={"provenance": ReportProvenance}) for item in data["findings_table"])
     data["source_snapshot"] = _construct(ReportSourceSnapshot, data["source_snapshot"])
@@ -728,7 +776,7 @@ def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     for answer in mapping["answers"]:
         if answer["question_text"] is None:
             del answer["question_text"]
-    for name in ("references", "findings_table", "site_location"):
+    for name in ("references", "findings_table", "site_location", "figures"):
         if mapping[name] is None:
             del mapping[name]
     return mapping

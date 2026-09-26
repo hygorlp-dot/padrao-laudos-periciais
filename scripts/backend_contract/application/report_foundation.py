@@ -25,6 +25,7 @@ from ..report_foundation import (
     REPORT_SNAPSHOT_ARTIFACT_KIND,
     ReportCoverage,
     ReportAnswer,
+    ReportFigure,
     ReportFindingRow,
     ReportProvenance,
     ReportReference,
@@ -397,7 +398,7 @@ class SaveReportSnapshot:
                         raise ValueError("Report new version requires a superseded or stale predecessor")
                 elif not allow_review_transition and snapshot.review_decisions != predecessor.review_decisions:
                     raise ValueError("Report Snapshot review decisions require the professional review command")
-                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table", "site_location")
+                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table", "site_location", "figures")
                 if not allow_new_version and predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
                     raise ValueError("Report Snapshot material change requires a new draft before professional review")
             created_at = self.clock.now()
@@ -488,6 +489,7 @@ class AmendReportDraft:
     get_technical_snapshot: object | None = None
     get_construction_defect_analysis: object | None = None
     get_site_location: object | None = None
+    get_photo_library: object | None = None
 
     def execute(self, workspace_id, *, expected_revision: int, action: str, values: dict):
         record, snapshot = self.get_snapshot.execute(workspace_id)
@@ -545,6 +547,25 @@ class AmendReportDraft:
             if values != {} or snapshot.findings_table is None:
                 raise ValueError("Report findings table amendment is invalid")
             amended = replace(snapshot, findings_table=None)
+        elif action == "SET_FIGURES":
+            # The figures are the library's current selection, in its order.
+            if values != {} or self.get_photo_library is None:
+                raise ValueError("Report figures amendment is invalid")
+            try:
+                _library_record, library = self.get_photo_library.execute(workspace_id)
+            except ArtifactRevisionNotFound as exc:
+                raise ValueError("Report figures require selected photos") from exc
+            figures = tuple(
+                ReportFigure(item.photo_id, item.content_id, item.original_sha256, item.caption, item.report_section, item.width, item.height)
+                for item in library.selected
+            )
+            if not figures:
+                raise ValueError("Report figures require selected photos")
+            amended = replace(snapshot, figures=figures)
+        elif action == "REMOVE_FIGURES":
+            if values != {} or snapshot.figures is None:
+                raise ValueError("Report figures amendment is invalid")
+            amended = replace(snapshot, figures=None)
         elif action == "SET_SITE_LOCATION":
             if values != {} or self.get_site_location is None:
                 raise ValueError("Report site location amendment is invalid")

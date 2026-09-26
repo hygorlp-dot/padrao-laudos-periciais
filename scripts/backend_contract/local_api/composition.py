@@ -12,6 +12,8 @@ from pathlib import Path
 from threading import Lock
 from uuid import UUID, uuid4
 
+from ..application.ai_assistant import AIAssistantStatus
+from ..application.photo_library import CuratePhotoLibrary, GetPhotoLibrary, ReadPhotoThumbnail
 from ..application.site_location import ConfirmSiteLocation, GetSiteLocation, ProposeSiteLocation
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.workspace_recovery import (
@@ -486,6 +488,7 @@ def build_local_api(
         local_ids,
     )
     get_site_location = GetSiteLocation(get_latest_artifact)
+    get_photo_library = GetPhotoLibrary(get_latest_artifact)
     propose_site_location = ProposeSiteLocation(
         store.revisions,
         get_latest_artifact,
@@ -752,12 +755,19 @@ def build_local_api(
             get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile,
             save_report_snapshot, local_ids, get_construction_defect_analysis, get_site_location,
         ),
-        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids, get_case_analysis, get_technical_snapshot, get_construction_defect_analysis, get_site_location),
+        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids, get_case_analysis, get_technical_snapshot, get_construction_defect_analysis, get_site_location, get_photo_library),
         list_report_sources=ListReportSources(get_case_analysis, get_inspection_session, get_technical_snapshot, get_construction_defect_analysis),
         export_report_audit_trail=ExportReportAuditTrail(get_report_snapshot),
         store_delivery_template=generic_store,
         store_default_delivery_template=StoreDefaultDeliveryTemplate(get_report_snapshot, generic_store),
         get_site_location=get_site_location,
+        get_photo_library=get_photo_library,
+        ai_assistant_status=AIAssistantStatus(),
+        curate_photo_library=CuratePhotoLibrary(
+            store.revisions, get_latest_artifact, get_private_content,
+            private_store.authority_guard if private_store is not None else nullcontext, local_clock, local_ids,
+        ) if get_private_content is not None else None,
+        read_photo_thumbnail=ReadPhotoThumbnail(get_photo_library, get_private_content) if get_private_content is not None else None,
         propose_site_location=propose_site_location,
         confirm_site_location=ConfirmSiteLocation(get_site_location, get_latest_artifact, propose_site_location),
         get_delivery_artifact=get_private_content,

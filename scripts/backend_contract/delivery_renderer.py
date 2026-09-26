@@ -23,6 +23,7 @@ from pypdf import PdfReader
 from pypdf.generic import BooleanObject
 from pypdf.generic import ContentStream, StreamObject
 
+from .report_figures import figure_numbers, image_size, resolve_references
 from .report_foundation import FINDING_SITUATIONS, ReportSnapshot
 from .report_foundation import report_snapshot_to_mapping
 from .report_template import (
@@ -696,9 +697,10 @@ def _word_part_priority(name: str) -> tuple[int, str]:
 def render_word_candidate(
     *, template_bytes: bytes, report: ReportSnapshot, manifest: TemplateBindingManifest,
     toc_pages: tuple[int, ...] | None = None,
+    figure_images: dict[str, bytes] | None = None,
 ) -> DocumentBindingResult:
     result = bind_report_template(template_bytes, report, manifest)
-    output = _inject_canonical_report(result.output_bytes, report, toc_pages)
+    output = _inject_canonical_report(result.output_bytes, report, toc_pages, figure_images)
     validate_final_artifact(output, manifest.output_kind)
     return DocumentBindingResult(output, result.integrity)
 
@@ -781,6 +783,8 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
     if report.site_location is not None:
         site = report.site_location
         lines.append(f"LOCALIZAÇÃO | SITE_LOCATION_V1 | revisão {site.source_revision} | {site.source_checksum} | {site.latitude}, {site.longitude} | {site.address_label or 'SEM_ENDEREÇO'}")
+    for figure in report.figures or ():
+        lines.append(f"FIGURA | {figure.figure_id} | {figure.section_kind} | {figure.content_id} | {figure.original_sha256} | {figure.caption}")
     for row in report.findings_table or ():
         lines.append(f"TABELA DE ACHADOS | {row.provenance.source_kind} | {row.provenance.source_id} | revisão {row.provenance.source_revision} | {row.manifestation} | {row.environment or 'SEM_AMBIENTE'} | {row.finding} | {row.situation or 'SEM_SITUAÇÃO'}")
     for reference in report.references or ():
@@ -816,6 +820,8 @@ class ReportPresentationBlock:
     lead: str = ""
     # A TABLE block carries its cells, header row first; its text is empty.
     rows: tuple[tuple[str, ...], ...] = ()
+    # A FIGURE block names the figure whose derivative it shows; no text.
+    figure_id: str = ""
 
     @property
     def visible_text(self) -> str:
@@ -872,6 +878,14 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
     answers_by_section: dict[str, list] = {section.section_id: [] for section in report.sections}
     for answer in report.answers:
         answers_by_section[answer.section_id].append(answer)
+    numbers = figure_numbers(report)
+
+    def prose(text: str) -> list[str]:
+        return _presentation_paragraphs(resolve_references(text, numbers))
+
+    figures_by_section: dict[str, list] = {}
+    for figure in report.figures or ():
+        figures_by_section.setdefault(figure.section_kind, []).append(figure)
     blocks: list[ReportPresentationBlock] = []
     number = 0
     for section in sorted(report.sections, key=lambda item: item.order):
@@ -881,11 +895,11 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
         if section.kind == "TECHNICAL_FINDINGS" and report.findings_table:
             body.extend(_findings_table_blocks(report, 1))
         for claim in claims_by_section[section.section_id]:
-            body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in _presentation_paragraphs(claim.text))
+            body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in prose(claim.text))
         for index, answer in enumerate(answers_by_section[section.section_id], 1):
             question = " ".join(_presentation_paragraphs(answer.question_text)) if answer.question_text else ""
             body.append(ReportPresentationBlock("QUESTION", question, f"Quesito {index}:"))
-            paragraphs = _presentation_paragraphs(answer.text)
+            paragraphs = prose(answer.text)
             body.append(ReportPresentationBlock("ANSWER", paragraphs[0] if paragraphs else "", "Resposta:"))
             body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in paragraphs[1:])
         if section.kind == "REFERENCES" and report.references:
@@ -893,6 +907,10 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
             # alphabetical order of their entries as ABNT NBR 6023 arranges them.
             entries = sorted((_canonical_text(item.entry) for item in report.references), key=str.casefold)
             body.extend(ReportPresentationBlock("REFERENCE", entry) for entry in entries)
+        for figure in figures_by_section.get(section.kind, ()):
+            # ABNT places an illustration's title above it.
+            body.append(ReportPresentationBlock("CAPTION", _canonical_text(f"Figura {numbers[figure.figure_id]} – {figure.caption}")))
+            body.append(ReportPresentationBlock("FIGURE", "", figure_id=figure.figure_id))
         if not body:
             continue
         number += 1
@@ -1791,10 +1809,18 @@ def _ordered_image_layouts_match(
                 for page, bottom, _top, _start, _end in preceding_regions
             ):
                 return False
+            # The next content may open the following page -- a caption kept
+            # with its own picture moves there when that picture does not fit
+            # (reproduced with Word 16).  Where that text may sit is bound by
+            # the text flow check, which only lets a page break or such a
+            # keep-with-picture chain open a page.
             if following_regions and not any(
-                page == candidate.page
-                and candidate.bottom >= top - 2.0
-                and candidate.bottom - top <= 72.0
+                (
+                    page == candidate.page
+                    and candidate.bottom >= top - 2.0
+                    and candidate.bottom - top <= 72.0
+                )
+                or (page == candidate.page + 1 and top >= candidate.page_height * 0.70)
                 for page, _bottom, top, _start, _end in following_regions
             ):
                 return False
@@ -2167,6 +2193,26 @@ def _word_content_kinds(xml_roots: dict[str, ElementTree.Element]) -> tuple[str,
             elif local_name in {"blip", "imagedata"}:
                 values.append("IMAGE")
     return _collapse_content_kinds(values)
+
+
+def _positional_content_kinds(positioned: list[_PositionedText], images: list[_PdfImageLayout]) -> tuple[str, ...]:
+    """Text and pictures in the order they sit on the pages, top to bottom."""
+    events = [(fragment.page, -fragment.top, "TEXT") for fragment in positioned if fragment.text.strip()]
+    events.extend((image.page, -image.top, "IMAGE") for image in images)
+    return _collapse_content_kinds([kind for _page, _top, kind in sorted(events)])
+
+
+def _pdf_pictures_drawn_last(reader: PdfReader) -> bool:
+    """Every page streams its text first and its pictures after -- Word's layout."""
+    for page in reader.pages:
+        images = {str(name) for name in page.images.keys()}
+        seen_picture = False
+        for operands, operator in ContentStream(page.get_contents(), reader).operations:
+            if operator == b"Do" and operands and str(operands[0]) in images:
+                seen_picture = True
+            elif seen_picture and operator in {b"Tj", b"TJ", b"'", b'"'} and _text_show_has_content(operator, operands):
+                return False
+    return True
 
 
 def _pdf_content_kinds(reader: PdfReader) -> tuple[str, ...]:
@@ -3593,7 +3639,22 @@ def _word_text_expectations(
             for table in _current_iter(xml_roots[name], "tbl")
             for paragraph in _current_iter(table, "p")
         }
-        for paragraph in _current_iter(xml_roots[name], "p"):
+        # A paragraph kept with a following picture -- directly or through a
+        # chain of keep-with-next paragraphs -- moves to the next page with it
+        # when the picture does not fit: ordinary Word layout the text flow
+        # alone cannot predict (reproduced with Word 16 on a figure caption
+        # and on the section heading above it).  Only such a chain may open a
+        # page unannounced.
+        part_paragraphs = list(_current_iter(xml_roots[name], "p"))
+        kept_with_picture: set[int] = set()
+        for current, following in reversed(list(zip(part_paragraphs, part_paragraphs[1:]))):
+            if (
+                _current_named(next(_children_named(current, "pPr"), None), "keepNext") is not None
+                and _current_first(current, "drawing") is None
+                and (_current_first(following, "drawing") is not None or id(following) in kept_with_picture)
+            ):
+                kept_with_picture.add(id(current))
+        for paragraph in part_paragraphs:
             in_table = id(paragraph) in table_paragraph_ids
             # The anchor loop asks this with _current_first; asking it with the
             # unpruned helper made a tracked-deleted picture switch the body-flow
@@ -3712,7 +3773,7 @@ def _word_text_expectations(
                 page_break_node is not None
                 and (_attribute_named(page_break_node, "val") or "true").casefold()
                 not in {"0", "false", "off"}
-            )
+            ) or id(paragraph) in kept_with_picture
             segments: list[
                 tuple[
                     str,
@@ -6374,6 +6435,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         ) = _pdfium_visible_layout(pdf_content)
         reading_positioned = _positioned_reading_order(positioned)
         pdf_content_kinds = _pdf_content_kinds(reader)
+        pictures_drawn_last = _pdf_pictures_drawn_last(reader)
         unsafe_text = unsafe_text or pdfium_unsafe
     except Exception as exc:
         # The module's third pypdf guard, and the last one still enumerating its
@@ -6581,8 +6643,18 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     text_sizes_match = _text_sizes_match(
         word_text_expectations, reading_positioned, barriers
     )
+    # Word 16 draws a page's inline pictures after all of its text, so its
+    # content stream is not reading order (reproduced: caption, picture, then
+    # heading on one page streamed as text, text, picture).  For a stream of
+    # exactly that shape the order on the page -- top to bottom -- is the
+    # reading; any other stream order is still judged as streamed.
     content_order_matches = _content_kinds_are_ordered_subsequence(
         word_content_kinds, pdf_content_kinds
+    ) or (
+        pictures_drawn_last
+        and _content_kinds_are_ordered_subsequence(
+            word_content_kinds, _positional_content_kinds(reading_positioned, pdf_image_layouts)
+        )
     )
     if (
         not source_tokens
@@ -6661,7 +6733,25 @@ def _text_width_twips(document: bytes | None) -> int | None:
     return width if 3000 <= width <= 20000 else None
 
 
-def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_style: str | None = None, *, break_before_first_heading: bool = False, styles: bytes | None = None, text_width: int | None = None) -> bytes:
+_FIGURE_DOCPR_BASE = 72000
+_FIGURE_MAX_WIDTH_EMU = 5_400_000
+_FIGURE_MAX_HEIGHT_EMU = 3_960_000
+
+
+def _figure_part(index: int) -> tuple[str, str]:
+    """The media part and relationship identity of the index-th figure."""
+    return f"word/media/plp-figure-{index:03d}.jpeg", f"rIdPLPFig{index:03d}"
+
+
+def _figure_extent(image: bytes, text_width: int | None) -> tuple[int, int]:
+    """Display size in EMU: the derivative's proportions within the text box."""
+    width, height = image_size(image)
+    box_width = min((text_width or 9000) * 635, _FIGURE_MAX_WIDTH_EMU)
+    scale = min(box_width / width, _FIGURE_MAX_HEIGHT_EMU / height)
+    return max(1, int(width * scale)), max(1, int(height * scale))
+
+
+def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_style: str | None = None, *, break_before_first_heading: bool = False, styles: bytes | None = None, text_width: int | None = None, figure_images: dict[str, bytes] | None = None) -> bytes:
     """The professional presentation, written in the package's own prefix."""
     def escaped(value: str) -> bytes:
         return (
@@ -6716,10 +6806,36 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
             body.append(wrap(b"tr", wrap(b"trPr", element(b"cantSplit")) + cells))
         return wrap(b"tbl", properties + grid + b"".join(body))
 
+    def figure(block: ReportPresentationBlock, index: int) -> bytes:
+        if not figure_images or block.figure_id not in figure_images:
+            raise ValueError("report figures require their images")
+        caption = next(item.caption for item in report.figures if item.figure_id == block.figure_id)
+        cx, cy = _figure_extent(figure_images[block.figure_id], text_width)
+        _part, relationship = _figure_part(index)
+        identity = str(_FIGURE_DOCPR_BASE + index)
+        # The drawing namespaces are declared where they are used, so the
+        # template's root need not know them.
+        drawing = (
+            '<wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">'
+            f'<wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="{identity}" name="Figura {index}" descr="{_xml_attribute(caption)}"/>'
+            '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">'
+            f'<pic:nvPicPr><pic:cNvPr id="{identity}" name="figura-{index:03d}.jpeg" descr="{_xml_attribute(caption)}"/><pic:cNvPicPr/></pic:nvPicPr>'
+            f'<pic:blipFill><a:blip r:embed="{relationship}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
+            f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
+            '</pic:pic></a:graphicData></a:graphic></wp:inline>'
+        ).encode("utf-8")
+        properties = wrap(b"pPr", element(b"keepLines") + element(b"spacing", value(b"after", "240")) + element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", "center")))
+        return wrap(b"p", properties + wrap(b"r", wrap(b"drawing", drawing)))
+
     paragraphs = []
     heading_index = 0
+    figure_index = 0
     for block in professional_report_blocks(report):
-        if block.kind == "TABLE":
+        if block.kind == "FIGURE":
+            figure_index += 1
+            paragraphs.append(figure(block, figure_index))
+        elif block.kind == "TABLE":
             paragraphs.append(table(block.rows))
         elif block.kind == "CAPTION":
             properties = wrap(b"pPr", styled(caption_style, element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", "center"))) + element(b"keepNext"))
@@ -6806,7 +6922,7 @@ def _verify_canonical_binding(part: bytes, report: ReportSnapshot) -> None:
         raise ValueError("canonical report did not bind to its content control")
 
 
-def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_style: str | None = None, *, tag: str = "CANONICAL_REPORT", markup: bytes | None = None, break_before_first_heading: bool = False, styles: bytes | None = None) -> bytes:
+def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_style: str | None = None, *, tag: str = "CANONICAL_REPORT", markup: bytes | None = None, break_before_first_heading: bool = False, styles: bytes | None = None, figure_images: dict[str, bytes] | None = None) -> bytes:
     """Replace a tagged control's content without touching other bytes."""
     prefix = _wordprocessing_prefix(part)
     anchor = _canonical_tag_anchor(part, prefix, tag)
@@ -6817,7 +6933,7 @@ def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_styl
     if start < 0 or end_of_open < 0:
         raise ValueError("CANONICAL_REPORT content control is incomplete")
     if markup is None:
-        markup = _canonical_content_markup(report, prefix, heading_style, break_before_first_heading=break_before_first_heading, styles=styles, text_width=_text_width_twips(part))
+        markup = _canonical_content_markup(report, prefix, heading_style, break_before_first_heading=break_before_first_heading, styles=styles, text_width=_text_width_twips(part), figure_images=figure_images)
     elif callable(markup):
         markup = markup(prefix)
     if part[end_of_open - 1 : end_of_open] == b"/":
@@ -6874,7 +6990,31 @@ def has_toc_control(content: bytes) -> bool:
     return len(_controls_tagged(root, TOC_CONTROL_TAG)) == 1
 
 
-def _inject_canonical_report(content: bytes, report: ReportSnapshot, toc_pages: tuple[int, ...] | None = None) -> bytes:
+def _xml_attribute(value: str) -> str:
+    return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _add_figure_parts(parts: dict[str, bytes], report: ReportSnapshot, figure_images: dict[str, bytes]) -> None:
+    """The figure derivatives as media parts, related from the document."""
+    rels_name = "word/_rels/document.xml.rels"
+    rels = parts.get(rels_name)
+    types = parts.get("[Content_Types].xml")
+    if rels is None or types is None or b"</Relationships>" not in rels:
+        raise ValueError("bound Word artifact cannot carry figures")
+    entries = []
+    for index, block in enumerate((item for item in professional_report_blocks(report) if item.kind == "FIGURE"), 1):
+        part, relationship = _figure_part(index)
+        if part in parts or f'Id="{relationship}"'.encode("ascii") in rels:
+            raise ValueError("bound Word artifact already uses a figure identity")
+        parts[part] = figure_images[block.figure_id]
+        entries.append(f'<Relationship Id="{relationship}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/plp-figure-{index:03d}.jpeg"/>'.encode("ascii"))
+    parts[rels_name] = rels.replace(b"</Relationships>", b"".join(entries) + b"</Relationships>", 1)
+    if not re.search(rb'<Default\s+Extension="jpeg"', types, re.IGNORECASE):
+        close = types.index(b">", types.index(b"<Types")) + 1
+        parts["[Content_Types].xml"] = types[:close] + b'<Default Extension="jpeg" ContentType="image/jpeg"/>' + types[close:]
+
+
+def _inject_canonical_report(content: bytes, report: ReportSnapshot, toc_pages: tuple[int, ...] | None = None, figure_images: dict[str, bytes] | None = None) -> bytes:
     try:
         with ZipFile(BytesIO(content)) as source:
             parts = {item.filename: source.read(item.filename) for item in source.infolist()}
@@ -6899,8 +7039,12 @@ def _inject_canonical_report(content: bytes, report: ReportSnapshot, toc_pages: 
     toc_controls = _controls_tagged(root, TOC_CONTROL_TAG)
     parts["word/document.xml"] = _replace_canonical_content(
         parts["word/document.xml"], report, _heading_style_id(parts.get("word/styles.xml")),
-        break_before_first_heading=bool(toc_controls), styles=parts.get("word/styles.xml"),
+        break_before_first_heading=bool(toc_controls), styles=parts.get("word/styles.xml"), figure_images=figure_images,
     )
+    if report.figures:
+        if figure_images is None or set(figure_images) != {item.figure_id for item in report.figures}:
+            raise ValueError("report figures require their images")
+        _add_figure_parts(parts, report, figure_images)
     _verify_canonical_binding(parts["word/document.xml"], report)
     if len(toc_controls) > 1:
         raise ValueError("template requires at most one TOC_ENTRIES content control")
