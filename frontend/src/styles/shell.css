@@ -1399,3 +1399,140 @@ button.text-action {
   display: grid;
   gap: var(--space-1);
 }
+
+/* Autoria do laudo: seções como folhas de redação, fonte legível sob cada trecho. */
+.report-authoring {
+  display: grid;
+  gap: var(--space-5);
+}
+
+.report-sections {
+  display: grid;
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.report-section {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-5);
+  background: var(--color-paper);
+  border: 1px solid var(--color-rule);
+}
+
+.report-section > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.report-section h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.report-claim,
+.report-question {
+  display: grid;
+  gap: var(--space-2);
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--color-rule);
+}
+
+.report-claim p,
+.report-question p {
+  max-width: 72ch;
+  margin: 0;
+}
+
+.report-claim textarea,
+.report-question textarea,
+.report-add textarea,
+.report-add select,
+.report-context textarea,
+.report-context select {
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  color: var(--color-graphite);
+  background: white;
+  border: 1px solid var(--color-rule);
+  font: inherit;
+}
+
+.report-claim textarea,
+.report-question textarea {
+  min-height: 5.5rem;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.report-claim-text,
+.report-add label,
+.report-question label {
+  display: grid;
+  gap: var(--space-2);
+  font-weight: 650;
+}
+
+.report-claim-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  color: var(--color-slate);
+  font-size: 0.86rem;
+}
+
+.report-add {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  background: var(--color-mineral);
+  border: 1px solid var(--color-rule);
+}
+
+.report-empty {
+  margin: 0;
+  color: var(--color-slate);
+  font-style: italic;
+}
+
+.report-questions {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.report-question h4 {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.report-answer {
+  padding-left: var(--space-3);
+}
+
+.inline-note {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  background: var(--color-paper);
+  border: 1px solid var(--color-ochre);
+}
+
+.inline-note p {
+  margin: 0;
+}
+
+.report-context .review-checklist li > div {
+  gap: var(--space-2);
+}
+
+.report-next p {
+  max-width: 60ch;
+}

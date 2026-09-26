@@ -43,6 +43,8 @@ export function ReportReviewView({ workspaceId }: { workspaceId: string }) {
     { label: "Quesitos respondidos com vínculo a achado", done: coverage.answers > 0 && coverage.traceable_answers === coverage.answers, detail: `${coverage.traceable_answers} de ${coverage.answers} respostas rastreáveis` },
     { label: "Fontes anteriores atuais", done: !snapshot.upstream_stale, detail: snapshot.upstream_stale ? "Há fontes alteradas depois do laudo" : "Nenhuma fonte alterada" },
   ];
+  // A aprovação só é oferecida com a conferência completa; o servidor confere de novo.
+  const ready = checks.every((check) => check.done);
   const allowed = {
     MARK_REVIEWED: snapshot.state === "DRAFT",
     APPROVE: snapshot.state === "REVIEWED",
@@ -57,14 +59,14 @@ export function ReportReviewView({ workspaceId }: { workspaceId: string }) {
   const person = (id: string) => (expert && id === expert.profile_id ? expert.full_name : id);
 
   return <section className="report-review" aria-labelledby="report-review-title">
-    <header className="planning-overview"><div><h2 id="report-review-title">Revisão do laudo</h2><p>Confira a completude antes de marcar como revisado e aprovar. A aprovação libera a entrega em Word e PDF.</p></div><div className="planning-readiness"><strong>{stateLabel(snapshot.state)}</strong><span>{coverage.complete ? "Conteúdo apto à aprovação" : "Há pendências de conteúdo"}</span></div></header>
+    <header className="planning-overview"><div><h2 id="report-review-title">Revisão do laudo</h2><p>Confira a completude antes de marcar como revisado e aprovar. A aprovação libera a entrega em Word e PDF.</p></div><div className="planning-readiness"><strong>{stateLabel(snapshot.state)}</strong><span>{snapshot.state === "APPROVED" ? "Aprovado para entrega" : ready ? "Conferência completa" : "Há pendências de conteúdo"}</span></div></header>
     <section className="analysis-section" aria-labelledby="review-checklist-title"><h3 id="review-checklist-title">Conferência</h3><ul className="review-checklist">{checks.map((check) => <li key={check.label} data-done={check.done || undefined}><span className="review-check-mark" aria-hidden="true">{check.done ? "✓" : "!"}</span><div><strong>{check.label}</strong><span>{check.done ? "Completo" : "Pendente"} · {check.detail}</span></div></li>)}</ul>{coverage.reasons.length > 0 && <ul className="planning-reasons">{coverage.reasons.map((item) => <li key={item}>{item}</li>)}</ul>}<a className="text-action" href={workspacePath(workspaceId, "laudo")} onClick={navigate}>Corrigir no Laudo</a></section>
     {actionError && <section className="inline-alert" role="alert"><strong>Não foi possível registrar a revisão.</strong><p>O laudo continua no estado anterior. Confira as pendências e tente de novo.</p></section>}
     {snapshot.state !== "SUPERSEDED" && <section className="technical-authority" aria-labelledby="review-decision-title"><h3 id="review-decision-title">Decisão profissional</h3><label>Fundamentação da revisão<textarea value={reason} onChange={(event) => setReason(event.target.value)} disabled={busy || snapshot.upstream_stale}/></label><div className="action-row">
       {allowed.MARK_REVIEWED && <button className="authority-action" type="button" disabled={busy || snapshot.upstream_stale || !reason.trim()} onClick={() => act("MARK_REVIEWED")}>Marcar como revisado</button>}
-      {allowed.APPROVE && <button className="authority-action" type="button" disabled={busy || snapshot.upstream_stale || !reason.trim() || !coverage.complete} onClick={() => act("APPROVE")}>Aprovar laudo</button>}
+      {allowed.APPROVE && <button className="authority-action" type="button" disabled={busy || snapshot.upstream_stale || !reason.trim() || !ready} onClick={() => act("APPROVE")}>Aprovar laudo</button>}
       {allowed.SUPERSEDE && <button className="destructive-action" type="button" disabled={busy || !reason.trim()} onClick={() => act("SUPERSEDE")}>Marcar como substituído</button>}
-    </div>{allowed.APPROVE && !coverage.complete && <p className="field-hint">A aprovação fica disponível quando a conferência estiver completa.</p>}{snapshot.state === "APPROVED" && <a className="primary-action" href={workspacePath(workspaceId, "exportar")} onClick={navigate}>Ir para a entrega</a>}</section>}
+    </div>{allowed.APPROVE && !ready && <p className="field-hint">A aprovação fica disponível quando a conferência estiver completa.</p>}{snapshot.state === "APPROVED" && <a className="primary-action" href={workspacePath(workspaceId, "exportar")} onClick={navigate}>Ir para a entrega</a>}</section>}
     <section className="analysis-section"><h3>Histórico de revisão</h3>{snapshot.review_decisions.length ? <ol className="planning-decisions">{snapshot.review_decisions.map((item) => <li key={item.review_id}><strong>{actionLabel(item.action)}</strong><span>{person(item.professional_id)} · {formatDateTime(item.timestamp)}</span><p>{item.reason}</p><TechnicalDetails><span className="data">{item.review_id}</span></TechnicalDetails></li>)}</ol> : <p className="planning-empty">Nenhuma revisão registrada.</p>}</section>
   </section>;
 }

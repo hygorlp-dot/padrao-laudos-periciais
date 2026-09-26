@@ -167,6 +167,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/construction-defect-analysis/pathology-reviews"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "draft-amendments"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/report-snapshot/draft-amendments"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "report-snapshot" and remainder[2] in {"sources", "audit-trail"} and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/report-snapshot/{remainder[2]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-snapshot" and remainder[2] in {"render", "package-artifacts", "reviews", "finalize", "deliver", "reissue"} and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/delivery-snapshot/{remainder[2]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["delivery-snapshot", "history"] and method == "GET":

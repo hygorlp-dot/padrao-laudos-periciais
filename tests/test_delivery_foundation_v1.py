@@ -1392,7 +1392,12 @@ def test_rendered_word_bytes_contain_and_change_with_entire_approved_report_body
         rendered = package.read("word/document.xml").decode("utf-8")
     assert report.claims[0].text in rendered
     assert report.answers[0].text in rendered
-    assert "REPORT_SNAPSHOT_SHA256" in rendered
+    # Professional presentation: numbered headings and prose, no audit identities.
+    assert "1. IDENTIFICAÇÃO" in rendered
+    assert "REPORT_SNAPSHOT_SHA256" not in rendered
+    assert report.claims[0].claim_id not in rendered
+    assert report.answers[0].answer_id not in rendered
+    assert "PROVENIÊNCIA |" not in rendered
     assert first != second
 
 
@@ -5469,7 +5474,9 @@ def test_canonical_injection_still_replaces_the_control_content() -> None:
     document = _injected_document(_approved_report())
 
     assert "substituir" not in document
-    assert "REPORT_SNAPSHOT_SHA256" in document
+    assert _presentation_mark(_approved_report()) in document
+    # The professional document carries no audit identity in its body.
+    assert "REPORT_SNAPSHOT_SHA256" not in document
     assert document.count("CANONICAL_REPORT") >= 1
 
 
@@ -6590,6 +6597,11 @@ _CANONICAL_CONTROL = (
 )
 
 
+def _presentation_mark(report: object) -> str:
+    """The first heading the professional presentation derives from ``report``."""
+    return delivery_renderer.professional_report_blocks(report)[0].visible_text
+
+
 def _injected_main_part(body: str) -> str:
     injected = delivery_renderer._inject_canonical_report(
         word_package(
@@ -6637,7 +6649,7 @@ def test_canonical_injection_ignores_a_byte_match_outside_the_tag(
 
     assert survivor in rendered, "authored content was overwritten"
     assert "PLACEHOLDER" not in rendered, "the bound control was not filled"
-    assert "REPORT_SNAPSHOT_SHA256" in rendered
+    assert _presentation_mark(_product_path_report()) in rendered
 
 
 def test_canonical_injection_still_fills_the_only_control() -> None:
@@ -6647,7 +6659,7 @@ def test_canonical_injection_still_fills_the_only_control() -> None:
 
     assert "ABERTURA" in rendered
     assert "PLACEHOLDER" not in rendered
-    assert "REPORT_SNAPSHOT_SHA256" in rendered
+    assert _presentation_mark(_product_path_report()) in rendered
 
 
 def test_canonical_injection_fails_closed_on_an_ambiguous_tag_anchor() -> None:
@@ -7391,7 +7403,7 @@ def test_a_single_quoted_tag_value_is_accepted() -> None:
     )
 
     assert "PLACEHOLDER" not in rendered
-    assert "REPORT_SNAPSHOT_SHA256" in rendered
+    assert _presentation_mark(_product_path_report()) in rendered
 
 
 # --- Phase C §27 round 5: fidelity sweeps prune, security sweeps do not --------

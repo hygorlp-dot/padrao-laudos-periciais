@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -6,31 +6,129 @@ import { ReportFoundationView } from "./ReportFoundationView";
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const profile = { profile_id: "EXPERT-PROFILE-001", revision: 1, full_name: "Profissional Sintético", professional_title: "Perito Judicial", registration: "CREA-SYN-001", court_registration: "TRIB-SYN-001", contact_line: "contato sintético" };
-const snapshot = { schema_version: "1.0.0", report_id: "REPORT-001", workspace_id: ID, source_snapshot: { workspace_id: ID, construction_defect_analysis_snapshot_id: "PAT-SNAPSHOT-001", construction_defect_analysis_revision: 5, construction_defect_analysis_digest: "a".repeat(64) }, expert_profile: profile, editorial_profile: { profile_id: "JUSTICA_PLURAL_CHAPTER_4", font_family: "Arial", body_font_pt: 11 }, context_matrix: [{ context_id: "CTX-1", field: "PROCESS_NUMBER", required: true, status: "PRESENT", source_id: "DOC-1", note: "Contexto documentado." }], sections: [{ section_id: "SEC-1", kind: "IDENTIFICATION", title: "Identificação", order: 1, required_by_cpc473: true }], claims: [{ claim_id: "CLAIM-1", section_id: "SEC-1", text: "Afirmação documentada.", authority: "DOCUMENTED", provenance: [{ provenance_id: "PROV-1", source_kind: "CASE_DOCUMENT", source_id: "DOC-1", source_revision: 1 }] }], answers: [{ answer_id: "ANSWER-1", section_id: "SEC-1", question_id: "QUESTION-1", text: "Resposta rastreada.", finding_id: "FINDING-1", evidence_ids: ["EVIDENCE-1"], method_ids: ["METHOD-1"], decision_id: "DECISION-1", claim_ids: ["CLAIM-1"] }], review_decisions: [], state: "DRAFT", coverage: { sections: 14, material_claims: 1, traceable_claims: 1, answers: 1, traceable_answers: 1, cpc473_required_sections: 8, cpc473_present_sections: 1, context_required_fields: 6, context_present_fields: 1, complete: false, reasons: ["Conteúdo incompleto."] }, upstream_stale: false, upstream_stale_reasons: [] };
+const sections = [
+  ["IDENTIFICATION", "Identificação", true], ["PROCEDURAL_CONTEXT", "Contexto Processual", true], ["PURPOSE_OBJECT", "Objeto da Perícia", true], ["SCOPE", "Escopo", false],
+  ["DOCUMENTS_EVIDENCE", "Documentos e Evidências Examinados", true], ["METHODOLOGY", "Metodologia", false], ["INSPECTION", "Vistoria", true], ["TECHNICAL_ANALYSIS", "Análise Técnica", true],
+  ["TECHNICAL_FINDINGS", "Achados Técnicos", true], ["ANSWERS_TO_QUESTIONS", "Respostas aos Quesitos", true], ["CONCLUSIONS", "Conclusões", false], ["LIMITATIONS_RESERVATIONS", "Limitações e Ressalvas", false],
+  ["REFERENCES", "Referências", false], ["ATTACHMENTS", "Anexos", false],
+].map(([kind, title, required], index) => ({ section_id: `SEC-${index + 1}`, kind, title, order: index + 1, required_by_cpc473: required }));
+const context = ["PROCESS_NUMBER", "COURT", "PARTIES", "ADDRESSES", "CLAIM_AND_GROUNDS", "REQUESTS"].map((field, index) => (
+  index === 0
+    ? { context_id: `CTX-${index + 1}`, field, required: true, status: "PRESENT", source_id: "DOC-1", note: "Processo nº 0000001-00.2026." }
+    : { context_id: `CTX-${index + 1}`, field, required: true, status: "MISSING", source_id: null, note: `[INFORMAÇÃO NECESSÁRIA: ${field.toLowerCase()}]` }
+));
+const baseSnapshot = {
+  schema_version: "1.0.0", report_id: "REPORT-001", workspace_id: ID,
+  source_snapshot: { workspace_id: ID, construction_defect_analysis_snapshot_id: null, construction_defect_analysis_revision: null, construction_defect_analysis_digest: null },
+  expert_profile: profile, editorial_profile: { profile_id: "JUSTICA_PLURAL_CHAPTER_4", font_family: "Arial", body_font_pt: 11 },
+  context_matrix: context, sections,
+  claims: [{ claim_id: "CLAIM-1", section_id: "SEC-1", text: "Afirmação documentada.", authority: "DOCUMENTED", provenance: [{ provenance_id: "PROV-1", source_kind: "CASE_DOCUMENT", source_id: "DOC-1", source_revision: 1 }] }],
+  answers: [], review_decisions: [], state: "DRAFT",
+  coverage: { sections: 14, material_claims: 1, traceable_claims: 1, answers: 0, traceable_answers: 0, cpc473_required_sections: 8, cpc473_present_sections: 1, context_required_fields: 6, context_present_fields: 1, complete: false, reasons: ["Conteúdo incompleto."] },
+  upstream_stale: false, upstream_stale_reasons: [],
+};
+const catalog = {
+  sources: [
+    { kind: "CASE_DOCUMENT", id: "DOC-1", label: "01 · Petição inicial · páginas 1-4" },
+    { kind: "FIELD_OBSERVATION", id: "OBS-1", label: "Fissura inclinada na parede leste" },
+    { kind: "TECHNICAL_FINDING", id: "FINDING-1", label: "Há fissura ativa na parede leste." },
+  ],
+  context_sources: { PROCESS_NUMBER: [{ id: "DOC-1", label: "01 · Petição inicial · páginas 1-4" }], COURT: [], PARTIES: [], ADDRESSES: [], CLAIM_AND_GROUNDS: [], REQUESTS: [] },
+  questions: [{ question_id: "QUESTION-1", text: "Existe umidade na parede?", findings: [{ finding_id: "FINDING-1", label: "Há fissura ativa na parede leste." }] }],
+};
 const response = (status: number, value: object) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
+const envelope = (snapshot: object, revision = 3) => ({ revision, updated_at: "2026-08-31T12:00:00Z", snapshot });
+
+function routed(snapshot: object, amendments: (body: Record<string, unknown>) => Response | Promise<Response> = () => response(200, envelope(snapshot, 4))) {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/expert-profile")) return Promise.resolve(response(200, { revision: 1, updated_at: "2026-08-31T12:00:00Z", profile }));
+    if (url.endsWith("/report-snapshot/sources")) return Promise.resolve(response(200, catalog));
+    if (url.endsWith("/report-snapshot/draft-amendments")) return Promise.resolve(amendments(JSON.parse(String(init?.body))));
+    if (url.endsWith("/report-snapshot")) return Promise.resolve(response(200, envelope(snapshot)));
+    return Promise.resolve(response(404, {}));
+  });
+}
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("report foundation workbench", () => {
-  test("shows authority, provenance, article gates and answer trace without delivery", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-31T12:00:00Z", profile })).mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-31T12:00:00Z", snapshot })));
+describe("professional report authoring (Laudo)", () => {
+  test("presents sections, readable sources and the process context without internal identities on the first layer", async () => {
+    vi.stubGlobal("fetch", routed(baseSnapshot));
     render(<ReportFoundationView workspaceId={ID} />);
     expect(await screen.findByRole("heading", { name: "Laudo técnico" })).toBeInTheDocument();
+    expect(screen.getByText("Em elaboração")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "1. Identificação" })).toBeInTheDocument();
+    expect(await screen.findByText(/Fonte: Documento do processo — 01 · Petição inicial · páginas 1-4/)).toBeInTheDocument();
     expect(screen.getByText("Documentado nos autos")).toBeInTheDocument();
-    expect(screen.getByText("Fonte: Documento do processo")).toBeInTheDocument();
-    // A identidade exata da fonte continua auditável, nos detalhes técnicos.
-    expect(screen.getByText(/CASE_DOCUMENT · DOC-1/).closest("details")).not.toBeNull();
-    expect(screen.getByText(/Art. 319/)).toBeInTheDocument();
-    expect(screen.getByText(/Art. 473/)).toBeInTheDocument();
-    expect(screen.getByText(/QUESTION-1 → FINDING-1/)).toBeInTheDocument();
-    expect(screen.getByText(/PAT-SNAPSHOT-001 · revisão 5/)).toBeInTheDocument();
-    expect(screen.getByText(/a{64}/)).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "PATHOLOGY" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /entregar|protocolar|enviar/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/CLAIM-1 · CASE_DOCUMENT · DOC-1/).closest("details")).not.toBeNull();
+    expect(screen.getByRole("heading", { name: "Contexto processual (art. 319)" })).toBeInTheDocument();
+    expect(screen.getByText("Número do processo")).toBeInTheDocument();
+    expect(screen.getByText(/1 de 8 seções obrigatórias/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Conferir em Revisão" })).toHaveAttribute("href", `/pericias/${ID}/revisao`);
+    expect(screen.getByRole("button", { name: "Baixar trilha de auditoria" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /entregar|protocolar|aprovar laudo/i })).not.toBeInTheDocument();
+  });
+
+  test("adds a paragraph by choosing its source by content, never by typing an identity", async () => {
+    let sent: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", routed(baseSnapshot, (body) => { sent = body; return response(200, envelope(baseSnapshot, 4)); }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    const section = within(await screen.findByRole("article", { name: "7. Vistoria" }));
+    fireEvent.click(section.getByRole("button", { name: "Adicionar texto a esta seção" }));
+    expect(section.getByLabelText("Tipo de fonte")).toHaveValue("FIELD_OBSERVATION");
+    fireEvent.change(section.getByLabelText("Fonte"), { target: { value: "OBS-1" } });
+    expect(section.getByLabelText("Texto do laudo")).toHaveValue("Fissura inclinada na parede leste");
+    fireEvent.change(section.getByLabelText("Texto do laudo"), { target: { value: "Durante a vistoria verificou-se fissura inclinada." } });
+    fireEvent.click(section.getByRole("button", { name: "Adicionar ao laudo" }));
+    await waitFor(() => expect(sent).toBeDefined());
+    expect(sent).toEqual({ expected_revision: 3, action: "ADD_CLAIM", values: { section_id: "SEC-7", text: "Durante a vistoria verificou-se fissura inclinada.", source_kind: "FIELD_OBSERVATION", source_id: "OBS-1" } });
+  });
+
+  test("an uncited finding is included first; then the answer is derived from question and finding only", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const cited = { ...baseSnapshot, claims: [...baseSnapshot.claims, { claim_id: "CLAIM-2", section_id: "SEC-9", text: "Há fissura ativa na parede leste.", authority: "TECHNICALLY_FOUND", provenance: [{ provenance_id: "PROV-2", source_kind: "TECHNICAL_FINDING", source_id: "FINDING-1", source_revision: 4 }] }] };
+    vi.stubGlobal("fetch", routed(baseSnapshot, (body) => { bodies.push(body); return response(200, envelope(cited, 4)); }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    const answers = within(await screen.findByRole("article", { name: "10. Respostas aos Quesitos" }));
+    expect(await answers.findByText("Existe umidade na parede?")).toBeInTheDocument();
+    fireEvent.click(answers.getByRole("button", { name: "Incluir o achado em “Achados Técnicos”" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({ action: "ADD_CLAIM", values: { section_id: "SEC-9", source_kind: "TECHNICAL_FINDING", source_id: "FINDING-1" } });
+    fireEvent.change(await answers.findByLabelText("Resposta"), { target: { value: "Sim, há umidade junto ao piso." } });
+    fireEvent.click(answers.getByRole("button", { name: "Registrar resposta" }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toEqual({ expected_revision: 4, action: "ANSWER_QUESTION", values: { question_id: "QUESTION-1", finding_id: "FINDING-1", text: "Sim, há umidade junto ao piso." } });
+  });
+
+  test("an approved report is read-only and points to a new version through Revisão", async () => {
+    const approved = { ...baseSnapshot, state: "APPROVED", review_decisions: [{ review_id: "R-1", action: "MARK_REVIEWED", professional_id: "EXPERT-PROFILE-001", reason: "ok", timestamp: "2026-08-31T10:00:00Z", supersedes_review_id: null }, { review_id: "R-2", action: "APPROVE", professional_id: "EXPERT-PROFILE-001", reason: "ok", timestamp: "2026-08-31T11:00:00Z", supersedes_review_id: "R-1" }] };
+    vi.stubGlobal("fetch", routed(approved));
+    render(<ReportFoundationView workspaceId={ID} />);
+    expect(await screen.findByText("Aprovado")).toBeInTheDocument();
+    expect(screen.getByText(/o texto fica bloqueado para edição/)).toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Adicionar texto a esta seção" })).not.toBeInTheDocument();
+  });
+
+  test("a refused amendment keeps the report on screen with an inline error", async () => {
+    vi.stubGlobal("fetch", routed(baseSnapshot, () => response(409, {})));
+    render(<ReportFoundationView workspaceId={ID} />);
+    const first = within(await screen.findByRole("article", { name: "1. Identificação" }));
+    fireEvent.change(first.getByLabelText("Texto"), { target: { value: "Texto alterado." } });
+    fireEvent.click(first.getByRole("button", { name: "Salvar texto" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível salvar o texto.");
+    expect(screen.getByRole("heading", { name: "Laudo técnico" })).toBeInTheDocument();
   });
 
   test("requires the master expert profile before starting a report", async () => {
-    const fetchMock = vi.fn().mockResolvedValueOnce(response(404, {})).mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-31T12:00:00Z", profile })).mockResolvedValueOnce(response(201, { revision: 1, updated_at: "2026-08-31T12:00:00Z", snapshot }));
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/report-snapshot/sources")) return Promise.resolve(response(200, catalog));
+      if (url.endsWith("/expert-profile")) return Promise.resolve(init?.method === "PUT" ? response(200, { revision: 1, updated_at: "2026-08-31T12:00:00Z", profile }) : response(404, {}));
+      if (url.endsWith("/report-snapshot") && init?.method === "POST") return Promise.resolve(response(201, envelope(baseSnapshot, 1)));
+      return Promise.resolve(response(404, {}));
+    });
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup(); render(<ReportFoundationView workspaceId={ID} />);
     await user.type(await screen.findByLabelText("Nome completo"), "Profissional Sintético");
@@ -40,6 +138,6 @@ describe("report foundation workbench", () => {
     await user.type(screen.getByLabelText("Contato profissional"), "contato sintético");
     await user.click(screen.getByRole("button", { name: "Salvar perfil e iniciar laudo" }));
     expect(await screen.findByRole("heading", { name: "Laudo técnico" })).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.filter(([, init]) => (init as RequestInit | undefined)?.method === "PUT")).toHaveLength(1);
   });
 });

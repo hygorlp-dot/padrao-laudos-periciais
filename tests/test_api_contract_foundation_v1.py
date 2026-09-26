@@ -51,6 +51,8 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
         "/v1/workspaces/{workspace_id}/report-snapshot",
         "/v1/workspaces/{workspace_id}/report-snapshot/reviews",
         "/v1/workspaces/{workspace_id}/report-snapshot/draft-amendments",
+        "/v1/workspaces/{workspace_id}/report-snapshot/sources",
+        "/v1/workspaces/{workspace_id}/report-snapshot/audit-trail",
         "/v1/workspaces/{workspace_id}/delivery-templates",
         "/v1/workspaces/{workspace_id}/delivery-supporting-files",
         "/v1/workspaces/{workspace_id}/delivery-snapshot",
@@ -80,7 +82,10 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
     render = contract["paths"]["/v1/workspaces/{workspace_id}/delivery-snapshot/render"]["post"]
     promise = f"{render.get('summary', '')} {render.get('description', '')}".casefold()
     assert "word" in promise
-    assert "pdf final local indisponível" in promise
+    # Word is the authoritative artifact; the PDF is promised only as derived from it.
+    assert "autoritativo" in promise
+    assert "pdf derivado" in promise
+    assert "pdf final local indisponível" not in promise
     assert "docx/docm e pdf" not in promise
     assert contract["info"]["x-delivery-snapshot-semantic-boundary"] == "scripts.backend_contract.delivery_foundation.delivery_snapshot_from_mapping"
     assert contract["components"]["schemas"]["DeliverySnapshot"] == {"$ref": "../schemas/delivery-snapshot-v1.schema.json"}
