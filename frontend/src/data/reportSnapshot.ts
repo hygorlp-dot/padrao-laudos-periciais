@@ -22,6 +22,7 @@ export type ReportSnapshot = {
   state: string; coverage: { sections: number; material_claims: number; traceable_claims: number; answers: number; traceable_answers: number; cpc473_required_sections: number; cpc473_present_sections: number; context_required_fields: number; context_present_fields: number; complete: boolean; reasons: string[] };
   upstream_stale: boolean; upstream_stale_reasons: string[];
   references?: ReportReference[]; findings_table?: ReportFindingRow[];
+  figures?: Array<{ figure_id: string; content_id: string; original_sha256: string; caption: string; section_kind: string; width: number; height: number }>;
   site_location?: { latitude: number; longitude: number; address_label: string | null; source_revision: number; source_checksum: string };
 };
 export type ProfileEnvelope = { revision: number; updated_at: string; profile: ExpertProfile };
@@ -37,7 +38,17 @@ export async function getReportSnapshot(workspaceId: string, signal?: AbortSigna
 export async function startReportSnapshot(workspaceId: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}" })), workspaceId); }
 export async function saveReportSnapshot(workspaceId: string, envelope: ReportEnvelope, snapshot: ReportSnapshot) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, snapshot }) })), workspaceId); }
 export async function reviewReportSnapshot(workspaceId: string, envelope: ReportEnvelope, action: "MARK_REVIEWED" | "APPROVE" | "SUPERSEDE", reason: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot/reviews`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, action, professional_id: envelope.snapshot.expert_profile.profile_id, reason }) })), workspaceId); }
-export type ReportAmendment = "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE" | "ADD_REFERENCE" | "REMOVE_REFERENCE" | "SET_FINDINGS_TABLE" | "REMOVE_FINDINGS_TABLE" | "SET_SITE_LOCATION" | "REMOVE_SITE_LOCATION";
+export type ReportAmendment = "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE" | "ADD_REFERENCE" | "REMOVE_REFERENCE" | "SET_FINDINGS_TABLE" | "REMOVE_FINDINGS_TABLE" | "SET_SITE_LOCATION" | "REMOVE_SITE_LOCATION" | "SET_FIGURES" | "REMOVE_FIGURES";
+export type AIAssistantStatus = { available: boolean; mode: "LOCAL_ONLY" | null; reasons: Array<"NO_LOCAL_PROVIDER" | "PRIVATE_CASE_EGRESS_NOT_AUTHORIZED">; proposal_only: true };
+// Fail closed: anything but a well-formed "available" answer means unavailable.
+export async function getAIAssistantStatus(signal?: AbortSignal): Promise<AIAssistantStatus> {
+  const unavailable: AIAssistantStatus = { available: false, mode: null, reasons: ["NO_LOCAL_PROVIDER", "PRIVATE_CASE_EGRESS_NOT_AUTHORIZED"], proposal_only: true };
+  try {
+    const response = await fetch("/app-api/v1/ai-assistant/status", { method: "GET", credentials: "same-origin", cache: "no-store", signal });
+    const value = response.ok ? await response.json() as AIAssistantStatus : null;
+    return value && typeof value.available === "boolean" && Array.isArray(value.reasons) && value.proposal_only === true ? value : unavailable;
+  } catch { return unavailable; }
+}
 export type ReportVersionDropped = { claims: number; answers: number; context_fields: string[]; findings_table: boolean; site_location: boolean };
 export async function startReportVersion(workspaceId: string, envelope: ReportEnvelope) {
   const value = await decode(await fetch(`${base(workspaceId)}/report-snapshot/versions`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision }) })) as ReportEnvelope & { dropped: ReportVersionDropped };

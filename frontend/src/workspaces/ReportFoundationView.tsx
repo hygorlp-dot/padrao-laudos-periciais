@@ -13,6 +13,8 @@ import {
   startReportSnapshot,
   startReportVersion,
   referenceCitation,
+  getAIAssistantStatus,
+  type AIAssistantStatus,
   type EditorialProfile,
   type ReportAmendment,
   type ReportReference,
@@ -138,6 +140,10 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
 
     <EditorialPanel profile={snapshot.editorial_profile} editable={editable} busy={busy} onSave={(profile) => amend("SET_EDITORIAL_PROFILE", { editorial_profile: profile }, "Não foi possível salvar o padrão editorial.")} />
 
+    <AssistantPanel />
+
+    <FiguresPanel snapshot={snapshot} editable={editable} busy={busy} amend={amend} workspaceId={workspaceId} />
+
     <ContextPanel snapshot={snapshot} sources={sources} editable={editable} busy={busy} onSave={(field, sourceId, note) => amend("UPDATE_CONTEXT", { field, status: "PRESENT", source_id: sourceId, note }, "Não foi possível atualizar o contexto processual.")} />
 
     <ol className="report-sections" aria-label="Seções do laudo">{snapshot.sections.slice().sort((a, b) => a.order - b.order).map((section) => (
@@ -172,7 +178,7 @@ function SectionEditor({ section, snapshot, sources, editable, busy, amend }: {
     {empty && <p className="report-empty">{section.required_by_cpc473 ? "Seção obrigatória ainda sem conteúdo." : "Sem conteúdo. Seções vazias não aparecem no documento final."}</p>}
     {section.kind === "INSPECTION" && <SiteLocationCitation snapshot={snapshot} editable={editable} busy={busy} amend={amend} />}
     {section.kind === "TECHNICAL_FINDINGS" && <FindingsTablePanel snapshot={snapshot} editable={editable} busy={busy} amend={amend} />}
-    {claims.map((claim) => <ClaimEditor key={`${claim.claim_id}:${claim.text}`} claim={claim} sources={sources} references={snapshot.references ?? []} editable={editable} busy={busy} amend={amend} protectedByAnswer={snapshot.answers.some((answer) => answer.claim_ids.includes(claim.claim_id))} />)}
+    {claims.map((claim) => <ClaimEditor key={`${claim.claim_id}:${claim.text}`} claim={claim} sources={sources} references={snapshot.references ?? []} crossReferences={crossReferences(snapshot)} editable={editable} busy={busy} amend={amend} protectedByAnswer={snapshot.answers.some((answer) => answer.claim_ids.includes(claim.claim_id))} />)}
     {section.kind === "REFERENCES" && <ReferencesPanel references={snapshot.references ?? []} editable={editable} busy={busy} amend={amend} />}
     {section.kind === "ANSWERS_TO_QUESTIONS" && <QuestionsEditor snapshot={snapshot} sources={sources} editable={editable} busy={busy} amend={amend} />}
     {editable && sources && (adding
@@ -181,10 +187,11 @@ function SectionEditor({ section, snapshot, sources, editable, busy, amend }: {
   </article>;
 }
 
-function ClaimEditor({ claim, sources, references, editable, busy, amend, protectedByAnswer }: {
+function ClaimEditor({ claim, sources, references, crossReferences: targets, editable, busy, amend, protectedByAnswer }: {
   claim: ReportSnapshot["claims"][number];
   sources: ReportSourceCatalog | null;
   references: ReportReference[];
+  crossReferences: Array<{ marker: string; label: string }>;
   editable: boolean;
   busy: boolean;
   amend: (action: ReportAmendment, values: Record<string, unknown>, failure: string) => Promise<boolean>;
@@ -198,6 +205,8 @@ function ClaimEditor({ claim, sources, references, editable, busy, amend, protec
     {editable
       ? <label className="report-claim-text">Texto<textarea value={text} onChange={(event) => setText(event.target.value)} disabled={busy} /></label>
       : <p>{claim.text}</p>}
+    {editable && targets.length > 0 && <label className="report-cite">Inserir referência a figura ou tabela<select value="" disabled={busy} onChange={(event) => { if (event.target.value) setText(`${text.trimEnd()} ${event.target.value}`); }}><option value="">Escolha</option>{targets.map((item) => <option key={item.marker} value={item.marker}>{item.label}</option>)}</select></label>}
+    {editable && targets.length > 0 && /\[\[(FIGURA|TABELA):/.test(text) && <p className="field-hint">No documento, cada marcador vira “Figura N” ou “Tabela 1” conforme a ordem final: {presentMarkers(text, targets)}</p>}
     {editable && references.length > 0 && <label className="report-cite">Inserir citação<select value="" disabled={busy} onChange={(event) => { const chosen = references.find((item) => item.reference_id === event.target.value); if (chosen) setText(`${text.trimEnd()} ${referenceCitation(chosen)}`); }}><option value="">Escolha a referência</option>{references.map((item) => <option key={item.reference_id} value={item.reference_id}>{referenceCitation(item)} — {item.title}</option>)}</select></label>}
     <p className="report-claim-source"><span className="status-pill">{authorityLabel(claim.authority)}</span> Fonte: {sourceKindLabel(provenance?.source_kind)}{label ? ` — ${label}` : ""}</p>
     {editable && <div className="action-row">
@@ -206,6 +215,63 @@ function ClaimEditor({ claim, sources, references, editable, busy, amend, protec
     </div>}
     <TechnicalDetails>{claim.provenance.map((item) => <span className="data" key={item.provenance_id}>{claim.claim_id} · {item.source_kind} · {item.source_id} · revisão {item.source_revision}</span>)}</TechnicalDetails>
   </div>;
+}
+
+// Figures are numbered like the document numbers them: section order, then the chosen order.
+const FIGURE_SECTION_ORDER = ["INSPECTION", "TECHNICAL_ANALYSIS", "TECHNICAL_FINDINGS", "ATTACHMENTS"];
+function numberedFigures(snapshot: ReportSnapshot) {
+  const figures = (snapshot.figures ?? []).map((figure, index) => ({ figure, index }));
+  figures.sort((a, b) => FIGURE_SECTION_ORDER.indexOf(a.figure.section_kind) - FIGURE_SECTION_ORDER.indexOf(b.figure.section_kind) || a.index - b.index);
+  return figures.map(({ figure }, position) => ({ figure, number: position + 1 }));
+}
+function crossReferences(snapshot: ReportSnapshot) {
+  const items = numberedFigures(snapshot).map(({ figure, number }) => ({ marker: `[[FIGURA:${figure.figure_id}]]`, label: `Figura ${number} – ${figure.caption}` }));
+  if (snapshot.findings_table?.length) items.push({ marker: "[[TABELA:ACHADOS]]", label: "Tabela 1 – Resumo dos achados técnicos" });
+  return items;
+}
+function presentMarkers(text: string, targets: Array<{ marker: string; label: string }>) {
+  return targets.filter((item) => text.includes(item.marker)).map((item) => item.label.split(" – ")[0]).join(", ") || "nenhuma referência reconhecida";
+}
+
+const ASSISTANT_REASON: Record<string, string> = {
+  NO_LOCAL_PROVIDER: "Não há um modelo de IA aprovado rodando neste computador.",
+  PRIVATE_CASE_EGRESS_NOT_AUTHORIZED: "O envio de dados do caso a um serviço de IA externo não foi autorizado. Por padrão, nada do caso sai desta máquina.",
+};
+
+function AssistantPanel() {
+  const [status, setStatus] = useState<AIAssistantStatus | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    void getAIAssistantStatus(controller.signal).then((value) => { if (!controller.signal.aborted) setStatus(value); });
+    return () => controller.abort();
+  }, []);
+  if (!status) return null;
+  return <details className="analysis-section report-assistant">
+    <summary><strong>Assistente de redação</strong> <span className="status-pill" data-tone={status.available ? "done" : undefined}>{status.available ? "Disponível" : "Indisponível nesta instalação"}</span></summary>
+    <p>O assistente só propõe texto. Nada entra no laudo sem a sua decisão: você aceita, edita ou descarta cada proposta, e a fonte de cada trecho continua sendo a que você escolher.</p>
+    {!status.available && <ul>{status.reasons.map((reason) => <li key={reason}>{ASSISTANT_REASON[reason] ?? reason}</li>)}</ul>}
+  </details>;
+}
+
+function FiguresPanel({ snapshot, editable, busy, amend, workspaceId }: {
+  snapshot: ReportSnapshot;
+  editable: boolean;
+  busy: boolean;
+  amend: (action: ReportAmendment, values: Record<string, unknown>, failure: string) => Promise<boolean>;
+  workspaceId: string;
+}) {
+  const figures = numberedFigures(snapshot);
+  if (!figures.length && !editable) return null;
+  return <section className="analysis-section report-figures" aria-labelledby="report-figures-title">
+    <h3 id="report-figures-title">Figuras do laudo</h3>
+    {figures.length
+      ? <ol className="report-figures__list">{figures.map(({ figure, number }) => <li key={figure.figure_id}><img src={`/app-api/v1/workspaces/${encodeURIComponent(workspaceId)}/photo-library/photos/${encodeURIComponent(figure.figure_id)}/thumbnail`} alt={figure.caption} loading="lazy" width={96} height={72} /><span><strong>Figura {number}</strong> – {figure.caption}</span></li>)}</ol>
+      : <p className="field-hint">Escolha as fotos, com legenda e seção, na biblioteca de fotos da Vistoria e traga a seleção para o laudo.</p>}
+    {editable && <div className="action-row">
+      <button className="secondary-action" type="button" disabled={busy} onClick={() => void amend("SET_FIGURES", {}, "Não foi possível trazer as figuras. Escolha fotos com legenda na biblioteca da Vistoria.")}>{figures.length ? "Atualizar figuras a partir da biblioteca" : "Trazer figuras da biblioteca"}</button>
+      {figures.length > 0 && <button className="text-action" type="button" disabled={busy} onClick={() => void amend("REMOVE_FIGURES", {}, "Não foi possível remover as figuras. Retire antes as referências a elas no texto.")}>Remover figuras</button>}
+    </div>}
+  </section>;
 }
 
 function SiteLocationCitation({ snapshot, editable, busy, amend }: {

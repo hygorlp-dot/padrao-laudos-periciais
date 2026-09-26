@@ -15,6 +15,7 @@ from typing import Any
 from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 from weakref import WeakKeyDictionary
 
+from ..photo_library import photo_library_from_mapping
 from ..site_location import site_location_from_mapping
 from ..application.models import (
     ArtifactRevision,
@@ -319,6 +320,7 @@ _ARTIFACT_VALIDATORS = {
     "EXPERT_MASTER_PROFILE_V1": expert_profile_from_mapping,
     "INSPECTION_SESSION_V1": inspection_session_from_mapping,
     "PERICIAL_PLANNING_SNAPSHOT_V1": pericial_planning_from_mapping,
+    "PHOTO_LIBRARY_V1": photo_library_from_mapping,
     "PJE_INTAKE_V1": validate_pje_intake_payload,
     "PROCESS_CASE": ProcessCaseData.from_mapping,
     "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
@@ -438,6 +440,7 @@ _CANONICAL_PRODUCT_ARTIFACT_IDS = {
     "EXPERT_MASTER_PROFILE_V1": "EXPERT-PROFILE",
     "INSPECTION_SESSION_V1": "INSPECTION-SESSION",
     "PERICIAL_PLANNING_SNAPSHOT_V1": "PERICIAL-PLANNING",
+    "PHOTO_LIBRARY_V1": "PHOTO-LIBRARY",
     "PROCESS_CASE": "PROCESS_CASE",
     "REPORT_SNAPSHOT_V1": "REPORT-SNAPSHOT",
     "SITE_LOCATION_V1": "SITE-LOCATION",

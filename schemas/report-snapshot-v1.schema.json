@@ -17,7 +17,8 @@
     "upstream_stale":{"type":"boolean"},"upstream_stale_reasons":{"$ref":"#/$defs/texts"},
     "references":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/reference"}},
     "findings_table":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/finding_row"}},
-    "site_location":{"$ref":"#/$defs/site_location"}
+    "site_location":{"$ref":"#/$defs/site_location"},
+    "figures":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/figure"}}
   },
   "$defs":{
     "text":{"type":"string","minLength":1,"pattern":".*\\S.*"},
@@ -54,6 +55,10 @@
       "reference_id":{"$ref":"#/$defs/text"},"kind":{"enum":["TECHNICAL_STANDARD","LEGAL_REFERENCE","TECHNICAL_LITERATURE","MANUFACTURER_DOCUMENTATION","OTHER_REFERENCE"]},
       "author":{"type":"string","minLength":1,"maxLength":300},"title":{"type":"string","minLength":1,"maxLength":500},
       "year":{"type":["integer","null"],"minimum":1800,"maximum":2200},"identifier":{"type":["string","null"],"minLength":1,"maxLength":120},"details":{"type":["string","null"],"minLength":1,"maxLength":500}}},
+    "figure":{"type":"object","additionalProperties":false,"required":["figure_id","content_id","original_sha256","caption","section_kind","width","height"],"properties":{
+      "figure_id":{"type":"string","pattern":"^PHOTO-[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$"},"content_id":{"$ref":"#/$defs/text"},"original_sha256":{"$ref":"#/$defs/digest"},
+      "caption":{"type":"string","minLength":1,"maxLength":300},"section_kind":{"enum":["INSPECTION","TECHNICAL_ANALYSIS","TECHNICAL_FINDINGS","ATTACHMENTS"]},
+      "width":{"type":"integer","minimum":1,"maximum":100000},"height":{"type":"integer","minimum":1,"maximum":100000}}},
     "site_location":{"type":"object","additionalProperties":false,"required":["latitude","longitude","address_label","source_revision","source_checksum"],"properties":{
       "latitude":{"type":"number","minimum":-90,"maximum":90},"longitude":{"type":"number","minimum":-180,"maximum":180},
       "address_label":{"type":["string","null"],"minLength":1,"maxLength":300},"source_revision":{"$ref":"#/$defs/positive"},"source_checksum":{"$ref":"#/$defs/digest"}}},

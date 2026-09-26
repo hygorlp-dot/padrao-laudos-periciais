@@ -29,6 +29,7 @@ from ..delivery_foundation import (
     delivery_snapshot_to_mapping,
 )
 from ..delivery_renderer import DELIVERY_RENDERING_VERSION, has_toc_control, locate_heading_pages, render_final_pdf_candidate, render_word_candidate, report_heading_texts, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
+from ..report_figures import figure_presentation_image
 from ..report_default_template import DEFAULT_TEMPLATE_FILENAME, default_report_template, default_template_manifest
 from ..report_template import TemplateBindingManifest, template_binding_manifest_from_mapping
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
@@ -380,8 +381,20 @@ class RenderDeliveryPackage:
     # a number Word did not produce.
     _PAGINATION_PASSES = 3
 
-    def _paginated(self, template: bytes, report, manifest: TemplateBindingManifest):
-        word = render_word_candidate(template_bytes=template, report=report, manifest=manifest).output_bytes
+    def _figure_images(self, workspace_id, report) -> dict[str, bytes] | None:
+        """Each figure's presentation derivative, made from its bound original."""
+        if not report.figures:
+            return None
+        images = {}
+        for figure in report.figures:
+            original = self.get_private_content.execute(workspace_id, PrivateContentId.parse(figure.content_id))
+            if original.metadata.checksum_sha256 != figure.original_sha256:
+                raise ValueError("report figure original diverges from its bound bytes")
+            images[figure.figure_id] = figure_presentation_image(original.content)
+        return images
+
+    def _paginated(self, template: bytes, report, manifest: TemplateBindingManifest, figure_images: dict[str, bytes] | None = None):
+        word = render_word_candidate(template_bytes=template, report=report, manifest=manifest, figure_images=figure_images).output_bytes
         pdf, renderer = self._derive_pdf(word, manifest.output_kind)
         if pdf is None or not has_toc_control(word):
             return word, pdf, renderer
@@ -394,7 +407,7 @@ class RenderDeliveryPackage:
                 return unnumbered
             if located == current_pages:
                 return current
-            candidate = render_word_candidate(template_bytes=template, report=report, manifest=manifest, toc_pages=located).output_bytes
+            candidate = render_word_candidate(template_bytes=template, report=report, manifest=manifest, toc_pages=located, figure_images=figure_images).output_bytes
             candidate_pdf, candidate_renderer = self._derive_pdf(candidate, manifest.output_kind)
             if candidate_pdf is None:
                 return unnumbered
@@ -415,7 +428,7 @@ class RenderDeliveryPackage:
         _, report = self.get_report.execute(workspace_id)
         if type(report) is not ReportSnapshot or _digest(report_snapshot_to_mapping(report)) != snapshot.binding.report_digest:
             raise ValueError("Delivery report bytes diverge from bound authority")
-        word, pdf, pdf_renderer = self._paginated(template.content, report, manifest)
+        word, pdf, pdf_renderer = self._paginated(template.content, report, manifest, self._figure_images(workspace_id, report))
         word_digest, word_size, word_media = validate_final_artifact(word, manifest.output_kind)
         stem = f"laudo-{snapshot.delivery_id.lower()}-r{snapshot.revision + 1}"
         word_name = f"{stem}.{manifest.output_kind.lower()}"

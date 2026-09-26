@@ -12,6 +12,7 @@ import { MaterialIntakeView } from "./MaterialIntakeView";
 import { CaseAnalysisView } from "./CaseAnalysisView";
 import { PericialPlanningView } from "./PericialPlanningView";
 import { InspectionSessionView } from "./InspectionSessionView";
+import { PhotoLibraryPanel } from "./PhotoLibraryPanel";
 import { TechnicalFindingsView } from "./TechnicalFindingsView";
 import { ConstructionDefectAnalysisView } from "./ConstructionDefectAnalysisView";
 import { ReportFoundationView } from "./ReportFoundationView";
@@ -173,7 +174,10 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
           <PericialPlanningView workspaceId={workspaceId} />
         ) : null}
         {state.kind === "ready" && route.path === "/vistoria" ? (
-          <InspectionSessionView key={workspaceId} workspaceId={workspaceId} />
+          <>
+            <InspectionSessionView key={workspaceId} workspaceId={workspaceId} />
+            <PhotoLibraryPanel key={`photos-${workspaceId}`} workspaceId={workspaceId} />
+          </>
         ) : null}
         {state.kind === "ready" && route.path === "/evidencias" ? (
           <TechnicalFindingsView workspaceId={workspaceId} />
