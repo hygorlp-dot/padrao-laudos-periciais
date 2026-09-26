@@ -15,9 +15,11 @@ describe("report foundation workbench", () => {
   test("shows authority, provenance, article gates and answer trace without delivery", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-31T12:00:00Z", profile })).mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-31T12:00:00Z", snapshot })));
     render(<ReportFoundationView workspaceId={ID} />);
-    expect(await screen.findByRole("heading", { name: "Fundação do laudo" })).toBeInTheDocument();
-    expect(screen.getByText("DOCUMENTED")).toBeInTheDocument();
-    expect(screen.getByText(/CASE_DOCUMENT · DOC-1/)).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Laudo técnico" })).toBeInTheDocument();
+    expect(screen.getByText("Documentado nos autos")).toBeInTheDocument();
+    expect(screen.getByText("Fonte: Documento do processo")).toBeInTheDocument();
+    // A identidade exata da fonte continua auditável, nos detalhes técnicos.
+    expect(screen.getByText(/CASE_DOCUMENT · DOC-1/).closest("details")).not.toBeNull();
     expect(screen.getByText(/Art. 319/)).toBeInTheDocument();
     expect(screen.getByText(/Art. 473/)).toBeInTheDocument();
     expect(screen.getByText(/QUESTION-1 → FINDING-1/)).toBeInTheDocument();
@@ -37,7 +39,7 @@ describe("report foundation workbench", () => {
     await user.type(screen.getByLabelText("Cadastro no tribunal"), "TRIB-SYN-001");
     await user.type(screen.getByLabelText("Contato profissional"), "contato sintético");
     await user.click(screen.getByRole("button", { name: "Salvar perfil e iniciar laudo" }));
-    expect(await screen.findByRole("heading", { name: "Fundação do laudo" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Laudo técnico" })).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

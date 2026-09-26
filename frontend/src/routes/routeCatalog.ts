@@ -4,11 +4,15 @@ export type ShellRoute = {
   label: string;
   description: string;
   kind: "home" | "stage" | "missing";
+  group?: WorkflowGroup;
   next?: {
     path: string;
     label: string;
   };
 };
+
+// Agrupamento apenas visual do trilho; as rotas e a sequência não mudam.
+export type WorkflowGroup = "Processo" | "Perícia" | "Laudo" | "Gestão";
 
 export type ResolvedRoute =
   | { kind: "directory"; pathname: "/"; workspaceId?: undefined; route: ShellRoute }
@@ -34,7 +38,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "00",
     label: "Início",
     description:
-      "Um ponto de partida claro para acompanhar o trabalho pericial, etapa por etapa.",
+      "Acompanhe a perícia etapa por etapa e retome o trabalho de onde parou.",
     kind: "home",
   },
   {
@@ -44,6 +48,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     description:
       "Registre a identificação processual básica vinculada a esta perícia.",
     kind: "stage",
+    group: "Processo",
     next: { path: "/materiais", label: "Materiais" },
   },
   {
@@ -53,6 +58,7 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     description:
       "Importe e consulte os documentos recebidos sem expor o armazenamento privado.",
     kind: "stage",
+    group: "Processo",
     next: { path: "/analise", label: "Análise" },
   },
   {
@@ -60,8 +66,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "03",
     label: "Análise",
     description:
-      "A leitura inicial e a organização do material recebido ficarão reunidas aqui.",
+      "Organize partes, alegações, quesitos e documentos a partir dos autos, com a fonte de cada item.",
     kind: "stage",
+    group: "Processo",
     next: { path: "/planejamento", label: "Planejamento" },
   },
   {
@@ -69,8 +76,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "04",
     label: "Planejamento",
     description:
-      "A preparação técnica do trabalho terá uma etapa própria, antes da atividade de campo.",
+      "Defina o objeto, as questões materiais e o que verificar em campo antes da vistoria.",
     kind: "stage",
+    group: "Perícia",
     next: { path: "/vistoria", label: "Vistoria" },
   },
   {
@@ -78,8 +86,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "05",
     label: "Vistoria",
     description:
-      "O registro organizado da atividade de campo será apresentado neste espaço.",
+      "Registre observações, medições, fotografias e declarações da atividade de campo.",
     kind: "stage",
+    group: "Perícia",
     next: { path: "/evidencias", label: "Evidências" },
   },
   {
@@ -87,8 +96,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "06",
     label: "Evidências",
     description:
-      "As fontes e os materiais relacionados ao trabalho terão navegação dedicada nesta etapa.",
+      "Revise as evidências, escolha o método e decida sobre cada proposta técnica.",
     kind: "stage",
+    group: "Perícia",
     next: { path: "/constatacoes", label: "Constatações" },
   },
   {
@@ -96,8 +106,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "07",
     label: "Constatações",
     description:
-      "O que for efetivamente observado será organizado sem antecipar inferências ou conclusões.",
+      "Consulte os achados técnicos efetivos, cada um com sua evidência, método e decisão.",
     kind: "stage",
+    group: "Perícia",
     next: { path: "/analise-tecnica", label: "Análise técnica" },
   },
   {
@@ -105,8 +116,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "08",
     label: "Análise técnica",
     description:
-      "A etapa de raciocínio técnico permanecerá distinta do material observado e das conclusões.",
+      "Analise as manifestações construtivas e registre a decisão profissional sobre cada uma.",
     kind: "stage",
+    group: "Perícia",
     next: { path: "/laudo", label: "Laudo" },
   },
   {
@@ -114,8 +126,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "09",
     label: "Laudo",
     description:
-      "A composição do documento técnico terá seu próprio espaço no fluxo futuro.",
+      "Componha e revise o laudo técnico antes da entrega.",
     kind: "stage",
+    group: "Laudo",
     next: { path: "/revisao", label: "Revisão" },
   },
   {
@@ -123,8 +136,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "10",
     label: "Revisão",
     description:
-      "A conferência final será tratada como etapa explícita antes de qualquer exportação.",
+      "Confira a completude do laudo e registre a revisão profissional antes da entrega.",
     kind: "stage",
+    group: "Laudo",
     next: { path: "/exportar", label: "Exportar" },
   },
   {
@@ -132,8 +146,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "11",
     label: "Exportar",
     description:
-      "A saída do trabalho ficará separada da elaboração e dependerá de um fluxo posterior.",
+      "Gere o Word do laudo, obtenha o PDF derivado e registre a entrega.",
     kind: "stage",
+    group: "Laudo",
     next: { path: "/orcamento", label: "Orçamento" },
   },
   {
@@ -141,8 +156,9 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     index: "12",
     label: "Orçamento",
     description:
-      "Propostas, decisões, despesas e recebimentos terão controle financeiro próprio.",
+      "Controle propostas, decisões judiciais, despesas e recebimentos desta perícia.",
     kind: "stage",
+    group: "Gestão",
     next: { path: "/recuperacao", label: "Recuperação" },
   },
   {
@@ -152,8 +168,12 @@ export const WORKFLOW_ROUTES: readonly ShellRoute[] = [
     description:
       "Gere um backup desta perícia e restaure a partir de um pacote, com promoção explícita.",
     kind: "stage",
+    group: "Gestão",
   },
 ];
+
+// Total derivado da estrutura canônica: nenhuma contagem escrita à mão.
+export const WORKFLOW_STAGE_COUNT = WORKFLOW_ROUTES.filter((route) => route.kind === "stage").length;
 
 export function findRoute(pathname: string) {
   return WORKFLOW_ROUTES.find((route) => route.path === pathname);

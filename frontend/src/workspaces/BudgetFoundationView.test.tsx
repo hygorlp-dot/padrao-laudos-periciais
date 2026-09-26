@@ -74,7 +74,8 @@ test("closes a fully received budget through an explicit terminal command", asyn
   const user = userEvent.setup(); render(<BudgetFoundationView workspaceId={ID} />);
   await user.click(await screen.findByRole("button", { name: "Encerrar orçamento quitado" }));
   expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/budget-snapshot/close"), expect.objectContaining({ method: "POST" }));
-  expect(await screen.findByText("CLOSED")).toBeInTheDocument();
+  expect(await screen.findAllByText("Encerrado")).not.toHaveLength(0);
+  expect(screen.queryByText("CLOSED")).not.toBeInTheDocument();
 });
 
 test("makes every authorized Stage 9 budget operation reachable through explicit forms", async () => {
@@ -106,5 +107,5 @@ test("closed budget removes every mutation action while preserving detailed fina
   expect(screen.getByText("Emissão original")).toBeInTheDocument();
   expect(screen.getByText("Mov. 42, decisão de honorários")).toBeInTheDocument();
   expect(screen.getByText("Depósito")).toBeInTheDocument();
-  expect(screen.getByText("Histórico preservado · 1 revisões")).toBeInTheDocument();
+  expect(screen.getByText("Histórico preservado · 1 revisão")).toBeInTheDocument();
 });

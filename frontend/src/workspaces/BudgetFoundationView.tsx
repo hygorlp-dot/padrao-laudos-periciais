@@ -1,4 +1,5 @@
 import { type ChangeEvent, type FormEvent, useEffect, useState } from "react";
+import { plural, stateLabel } from "../ui/labels";
 
 import {
   addBudgetItem, addFeeProposal, addProfessionalEffortEstimate, addThirdPartyEstimate,
@@ -46,14 +47,14 @@ export function BudgetFoundationView({ workspaceId }: { workspaceId: string }) {
   if (state.kind === "missing") return <section className="budget-empty"><h2>Controle financeiro ainda não iniciado</h2><p>Crie um ledger separado da análise técnica para propostas, decisões, despesas e recebimentos.</p><button className="primary-action" type="button" disabled={busy} onClick={start}>Iniciar controle financeiro</button></section>;
   const value = state.value.snapshot; const latestProposal = value.proposals.at(-1); const latestApproval = value.court_approvals.at(-1); const received = decimal(value.payments.reduce((total, item) => total + cents(item.amount), 0n)); const closed = value.status === "CLOSED";
   return <section className="budget-ledger" aria-labelledby="budget-title">
-    <header className="budget-header"><div><h2 id="budget-title">Orçamento pericial</h2><p>Propostas, decisões, despesas e recebimentos em uma trilha financeira própria.</p></div><strong>{value.status}</strong></header>
+    <header className="budget-header"><div><h2 id="budget-title">Orçamento pericial</h2><p>Propostas, decisões, despesas e recebimentos em uma trilha financeira própria.</p></div><strong className="status-pill">{stateLabel(value.status)}</strong></header>
     {closed && <section className="status-state" aria-label="Estado final do orçamento"><span className="state-mark" aria-hidden="true">✓</span><div><h3>Orçamento encerrado</h3><p>O histórico permanece disponível somente para leitura.</p></div></section>}
     <dl className="budget-balance"><div><dt>Proposta profissional</dt><dd>{latestProposal ? money(latestProposal.amount, latestProposal.currency) : "—"}</dd></div><div><dt>Valor aprovado pelo Juízo</dt><dd>{latestApproval ? money(latestApproval.amount, latestApproval.currency) : "—"}</dd></div><div><dt>Recebido</dt><dd>{money(received)}</dd></div><div><dt>Saldo pendente</dt><dd>{money(value.outstanding.amount, value.outstanding.currency)}</dd></div></dl>
     {!latestProposal && <p className="budget-empty-line">Nenhuma proposta registrada</p>}
     {!closed && <BudgetCommands busy={busy} command={command} field={field}/>}
-    {!closed && value.status === "RECEIVED" ? <button className="primary-action" type="button" disabled={busy} onClick={close}>Encerrar orçamento quitado</button> : null}
+    {!closed && value.status === "RECEIVED" ? <button className="authority-action" type="button" disabled={busy} onClick={close}>Encerrar orçamento quitado</button> : null}
     <BudgetDetail value={value}/>
-    <details className="budget-history"><summary>Histórico preservado · {history.length} revisões</summary><ol>{history.map((item) => <li key={item.revision}><strong>Revisão {item.revision}</strong><span>{item.snapshot.status}</span><time dateTime={item.updated_at}>{new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium" }).format(new Date(item.updated_at))}</time></li>)}</ol></details>
+    <details className="budget-history"><summary>Histórico preservado · {plural(history.length, "revisão", "revisões")}</summary><ol>{history.map((item) => <li key={item.revision}><strong>Revisão {item.revision}</strong><span>{stateLabel(item.snapshot.status)}</span><time dateTime={item.updated_at}>{new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium" }).format(new Date(item.updated_at))}</time></li>)}</ol></details>
   </section>;
 }
 

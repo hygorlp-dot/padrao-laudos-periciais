@@ -96,9 +96,9 @@ describe("pericial planning view", () => {
     await screen.findByRole("heading", { name: "Plano da perícia" });
 
     await user.click(screen.getByRole("button", { name: "Revisar Controvérsia documental" }));
-    expect(screen.getByLabelText("Identificação do perito")).toHaveFocus();
+    expect(screen.getByLabelText("Profissional revisor")).toHaveFocus();
     await user.selectOptions(screen.getByLabelText("Decisão profissional"), "MODIFY");
-    await user.type(screen.getByLabelText("Identificação do perito"), "PERITO-SYNTHETIC");
+    await user.type(screen.getByLabelText("Profissional revisor"), "PERITO-SYNTHETIC");
     await user.type(screen.getByLabelText("Motivo da decisão"), "Ajuste profissional explícito.");
     await user.type(screen.getByLabelText("Texto modificado"), "Controvérsia será verificada documentalmente.");
     await user.click(screen.getByRole("button", { name: "Registrar decisão" }));
