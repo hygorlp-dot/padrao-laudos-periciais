@@ -23,7 +23,7 @@ from pypdf import PdfReader
 from pypdf.generic import BooleanObject
 from pypdf.generic import ContentStream, StreamObject
 
-from .report_foundation import ReportSnapshot
+from .report_foundation import FINDING_SITUATIONS, ReportSnapshot
 from .report_foundation import report_snapshot_to_mapping
 from .report_template import (
     DocumentBindingResult,
@@ -778,6 +778,10 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
                 f"ACHADO | {answer.finding_id}", f"EVIDÊNCIAS | {', '.join(answer.evidence_ids)}",
                 f"MÉTODOS | {', '.join(answer.method_ids)}", f"DECISÃO | {answer.decision_id}",
             ))
+    for row in report.findings_table or ():
+        lines.append(f"TABELA DE ACHADOS | {row.provenance.source_kind} | {row.provenance.source_id} | revisão {row.provenance.source_revision} | {row.manifestation} | {row.environment or 'SEM_AMBIENTE'} | {row.finding} | {row.situation or 'SEM_SITUAÇÃO'}")
+    for reference in report.references or ():
+        lines.append(f"REFERÊNCIA | {reference.reference_id} | {reference.kind} | {reference.entry}")
     for decision in report.review_decisions:
         lines.append(f"REVISÃO PROFISSIONAL | {decision.action.value} | {decision.professional_id} | {decision.reason} | {decision.timestamp}")
     # Every consumer of these lines -- the canonical injection, the binding check
@@ -807,12 +811,37 @@ class ReportPresentationBlock:
     kind: str
     text: str
     lead: str = ""
+    # A TABLE block carries its cells, header row first; its text is empty.
+    rows: tuple[tuple[str, ...], ...] = ()
 
     @property
     def visible_text(self) -> str:
         if self.lead and self.text:
             return f"{self.lead} {self.text}"
         return self.lead or self.text
+
+    @property
+    def paragraph_texts(self) -> tuple[str, ...]:
+        """The Word paragraphs this block becomes, in document order."""
+        if self.kind == "TABLE":
+            return tuple(cell for row in self.rows for cell in row)
+        return (self.visible_text,)
+
+
+FINDINGS_TABLE_HEADER = ("Item", "Manifestação", "Ambiente", "Achado", "Situação")
+
+
+def _findings_table_blocks(report: ReportSnapshot, number: int) -> list[ReportPresentationBlock]:
+    rows = tuple(
+        (str(index), _canonical_text(row.manifestation), _canonical_text(row.environment) if row.environment else "Não informado",
+         _canonical_text(row.finding), FINDING_SITUATIONS[row.situation] if row.situation else "Não informada")
+        for index, row in enumerate(report.findings_table or (), 1)
+    )
+    # ABNT places a table's title above it.
+    return [
+        ReportPresentationBlock("CAPTION", f"Tabela {number} – Resumo dos achados técnicos"),
+        ReportPresentationBlock("TABLE", "", rows=(FINDINGS_TABLE_HEADER, *rows)),
+    ]
 
 
 def _presentation_paragraphs(text: str) -> list[str]:
@@ -837,6 +866,8 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
     number = 0
     for section in sorted(report.sections, key=lambda item: item.order):
         body: list[ReportPresentationBlock] = []
+        if section.kind == "TECHNICAL_FINDINGS" and report.findings_table:
+            body.extend(_findings_table_blocks(report, 1))
         for claim in claims_by_section[section.section_id]:
             body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in _presentation_paragraphs(claim.text))
         for index, answer in enumerate(answers_by_section[section.section_id], 1):
@@ -845,6 +876,11 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
             paragraphs = _presentation_paragraphs(answer.text)
             body.append(ReportPresentationBlock("ANSWER", paragraphs[0] if paragraphs else "", "Resposta:"))
             body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in paragraphs[1:])
+        if section.kind == "REFERENCES" and report.references:
+            # The references section lists the works the expert selected, in
+            # alphabetical order of their entries as ABNT NBR 6023 arranges them.
+            entries = sorted((_canonical_text(item.entry) for item in report.references), key=str.casefold)
+            body.extend(ReportPresentationBlock("REFERENCE", entry) for entry in entries)
         if not body:
             continue
         number += 1
@@ -3902,7 +3938,7 @@ def _text_sizes_match(
     previous_body_fragments: list[_PositionedText] | None = None
     paragraph_wrap_anchor: _ParagraphWrapAnchor | None = None
     for expectation in expectations:
-        match: tuple[int, int] | None = None
+        match: list[int] | None = None
         for start in range(len(positioned)):
             if (
                 expectation.expected_page is not None
@@ -3926,12 +3962,21 @@ def _text_sizes_match(
                     0.0 if expectation.paragraph_continuation else expectation.first_line_offset
                 ),
             )
-            if end is None:
+            if end is not None:
+                indices = list(range(start, end))
+            elif expectation.in_table:
+                indices = _cell_column_match(
+                    expectation.text, positioned, start, barriers,
+                    expected_line_height=expectation.line_height,
+                )
+            else:
+                indices = None
+            if not indices:
                 continue
-            if any(index in used_fragments for index in range(start, end)):
+            if any(index in used_fragments for index in indices):
                 continue
             tolerance = max(1.5, expectation.font_size * 0.12)
-            matched_fragments = positioned[start:end]
+            matched_fragments = [positioned[index] for index in indices]
             style_matches = all(
                 abs(fragment.font_size - expectation.font_size) <= tolerance
                 and (
@@ -4045,13 +4090,13 @@ def _text_sizes_match(
                 and vertical_matches
                 and flow_matches
             ):
-                match = (start, end)
+                match = indices
                 break
         if match is None:
             return False
-        used_fragments.update(range(*match))
+        used_fragments.update(match)
         if not expectation.paragraph_continuation:
-            paragraph_fragments = positioned[match[0] : match[1]]
+            paragraph_fragments = [positioned[index] for index in match]
             first_fragment = paragraph_fragments[0]
             anchor_tolerance = max(3.0, first_fragment.font_size * 0.35)
             first_line = [
@@ -4086,7 +4131,7 @@ def _text_sizes_match(
                 >= paragraph_wrap_anchor.left - horizontal_tolerance
             )
             if same_anchor_line:
-                continuation = positioned[match[0] : match[1]]
+                continuation = [positioned[index] for index in match]
                 wrapped = any(
                     fragment.page != first_fragment.page
                     or max(fragment.bottom, first_fragment.bottom) - min(fragment.top, first_fragment.top) > line_tolerance
@@ -4101,11 +4146,11 @@ def _text_sizes_match(
                     0.0 if wrapped else paragraph_wrap_anchor.first_line_offset,
                 )
         if expectation.body_flow_anchor:
-            previous_body_fragments = positioned[match[0] : match[1]]
+            previous_body_fragments = [positioned[index] for index in match]
         elif expectation.paragraph_continuation and previous_body_fragments is not None:
             # A later run of the same paragraph can carry its last lines; the next
             # paragraph's gap is measured from there, not from the first run.
-            previous_body_fragments = previous_body_fragments + positioned[match[0] : match[1]]
+            previous_body_fragments = previous_body_fragments + [positioned[index] for index in match]
     return True
 
 
@@ -4938,6 +4983,90 @@ def _positioned_reading_order(
     ]
 
 
+def _wrapped_sequence_end(
+    expected: str,
+    fragments: list[_PositionedText],
+    start: int,
+    barriers: list[_VerticalBarrier],
+    **options,
+) -> int | None:
+    """A cell paragraph that wraps inside its cell, under any cell alignment."""
+    for alignment in ("left", "right", "center"):
+        end = _fragment_sequence_end(
+            expected, fragments, start, barriers, allow_line_wrap=True, alignment=alignment, **options
+        )
+        if end is not None:
+            return end
+    return None
+
+
+def _cell_column_match(
+    expected: str,
+    fragments: list[_PositionedText],
+    start: int,
+    barriers: list[_VerticalBarrier],
+    *,
+    strict_identity: bool = False,
+    expected_line_height: float | None = None,
+) -> list[int] | None:
+    """Indices of a wrapped table cell's text, read inside its painted borders.
+
+    Reading order runs across a table row, so the second line of a wrapped
+    cell follows the first line of every other cell and no contiguous run of
+    the page's fragments spells it: a faithful Word 16 table was refused.  A
+    cell with painted vertical borders is read on its own -- only fragments
+    between those borders, from its first line down -- and they must still
+    spell its text exactly, with ordinary line wraps.  Without painted borders
+    there is no cell to read and nothing more is accepted.
+    """
+    anchor = fragments[start]
+
+    def spans_anchor(barrier: _VerticalBarrier) -> bool:
+        return barrier.page == anchor.page and barrier.bottom <= anchor.top and barrier.top >= anchor.bottom
+
+    left_edges = [barrier.right for barrier in barriers if spans_anchor(barrier) and barrier.right <= anchor.x + 0.5]
+    right_edges = [barrier.left for barrier in barriers if spans_anchor(barrier) and barrier.left >= anchor.right - 0.5]
+    if not left_edges or not right_edges:
+        return None
+    left, right = max(left_edges), min(right_edges)
+    line_tolerance = max(3.0, 0.35 * anchor.font_size)
+    column = [
+        index
+        for index, fragment in enumerate(fragments)
+        if fragment.page == anchor.page
+        and fragment.x >= left - 0.5
+        and fragment.right <= right + 0.5
+        and fragment.top <= anchor.top + line_tolerance
+    ]
+    by_identity = {id(fragments[index]): index for index in column}
+    ordered = [by_identity[id(fragment)] for fragment in _positioned_reading_order([fragments[index] for index in column])]
+    begin = ordered.index(start)
+    view = [fragments[index] for index in ordered]
+    end = _wrapped_sequence_end(
+        expected, view, begin, barriers,
+        strict_identity=strict_identity, expected_line_height=expected_line_height,
+    )
+    return None if end is None else ordered[begin:end]
+
+
+def _row_cell_indices(
+    cell: str,
+    ordered: list[_PositionedText],
+    start: int,
+    barriers: list[_VerticalBarrier],
+    *,
+    allow_line_wrap: bool,
+) -> list[int] | None:
+    """The row cell at ``start``: a run of reading order, or its painted cell."""
+    if allow_line_wrap:
+        end = _wrapped_sequence_end(cell, ordered, start, barriers, strict_identity=True)
+    else:
+        end = _fragment_sequence_end(cell, ordered, start, barriers, strict_identity=True)
+    if end is not None:
+        return list(range(start, end))
+    return _cell_column_match(cell, ordered, start, barriers, strict_identity=True)
+
+
 def _row_anchor_positions(
     row: tuple[str, ...], fragments: list[_PositionedText]
 ) -> list[float] | None:
@@ -4948,6 +5077,8 @@ def _row_anchor_positions(
         end = _fragment_sequence_end(
             anchor, fragments, index, [], strict_identity=True
         )
+        if end is None and index < len(fragments):
+            end = _wrapped_sequence_end(anchor, fragments, index, [], strict_identity=True)
         if end is None or index >= len(fragments):
             return None
         positions.append(fragments[index].x)
@@ -5031,6 +5162,18 @@ def _table_cell_paragraphs_match(
     return True
 
 
+def _row_cursor_after(indices: list[int], line: set[int]) -> int:
+    """Where the next cell of the row may start.
+
+    A contiguous run ends where it ends, as before.  A cell read inside its
+    painted borders ends, on the row's line, after its own first-line
+    fragments -- its later lines sit below the row and belong to no other cell.
+    """
+    if indices == list(range(indices[0], indices[-1] + 1)):
+        return indices[-1] + 1
+    return max(index for index in indices if index in line) + 1
+
+
 def _row_line_at_or_after(
     row: tuple[str, ...],
     ordered: list[_PositionedText],
@@ -5053,20 +5196,18 @@ def _row_line_at_or_after(
         cursor = 0
         matched_fragments: list[_PositionedText] = []
         matched = True
+        line_set = set(line_starts)
         for cell in row:
-            end = None
+            indices = None
             for start in line_starts:
                 if start < cursor:
                     continue
-                end = _fragment_sequence_end(
-                    cell, ordered, start, barriers, strict_identity=True
-                )
-                if end is not None:
-                    matched_fragments.extend(ordered[start:end])
-                    cursor = end
+                indices = _row_cell_indices(cell, ordered, start, barriers, allow_line_wrap=False)
+                if indices is not None:
+                    matched_fragments.extend(ordered[index] for index in indices)
+                    cursor = _row_cursor_after(indices, line_set)
                     break
-                end = None
-            if end is None:
+            if indices is None:
                 matched = False
                 break
         if not matched:
@@ -5159,37 +5300,20 @@ def _matched_table_row_fragments(
             cursor = 0
             matched = True
             matched_fragments: list[_PositionedText] = []
+            line_set = set(line_starts)
             for cell in row:
-                end = None
+                indices = None
                 for start in line_starts:
                     if start < cursor:
                         continue
-                    end = next(
-                        (
-                            candidate
-                            for alignment in ("left", "right", "center")
-                            if (
-                                candidate := _fragment_sequence_end(
-                                    cell,
-                                    ordered,
-                                    start,
-                                    barriers,
-                                    allow_line_wrap=True,
-                                    alignment=alignment,
-                                    strict_identity=True,
-                                )
-                            )
-                            is not None
-                        ),
-                        None,
-                    )
-                    if end is not None:
+                    indices = _row_cell_indices(cell, ordered, start, barriers, allow_line_wrap=True)
+                    if indices is not None:
                         break
-                if end is None:
+                if indices is None:
                     matched = False
                     break
-                matched_fragments.extend(ordered[start:end])
-                cursor = end
+                matched_fragments.extend(ordered[index] for index in indices)
+                cursor = _row_cursor_after(indices, line_set)
             if matched:
                 matching_positions[(anchor.page, anchor.y)] = matched_fragments
         ordered_positions = sorted(
@@ -5293,6 +5417,9 @@ def _table_cell_and_fill_match(
         end = _fragment_sequence_end(
             paragraph, cell_fragments, paragraph_cursor, barriers, strict_identity=True
         )
+        if end is None and paragraph_cursor < len(cell_fragments):
+            # The fragments are already confined to the cell's painted bounds.
+            end = _wrapped_sequence_end(paragraph, cell_fragments, paragraph_cursor, barriers, strict_identity=True)
         if end is None:
             return False
         paragraph_cursor = end
@@ -5616,6 +5743,11 @@ def _painted_paths_are_bound_to_tables(
                         barriers,
                         strict_identity=True,
                     )
+                    if end is None and paragraph_cursor < len(cell_fragments):
+                        # Confined to the painted cell, a paragraph may wrap.
+                        end = _wrapped_sequence_end(
+                            paragraph, cell_fragments, paragraph_cursor, barriers, strict_identity=True
+                        )
                     if end is None:
                         return False
                     paragraph_cursor = end
@@ -6500,7 +6632,24 @@ def _wordprocessing_prefix(part: bytes) -> bytes:
     return prefixes.pop()
 
 
-def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_style: str | None = None, *, break_before_first_heading: bool = False) -> bytes:
+def _text_width_twips(document: bytes | None) -> int | None:
+    """The body's text width: the last section's page width less its margins."""
+    try:
+        root = ElementTree.fromstring(document) if document else None
+    except ElementTree.ParseError:
+        return None
+    sections = list(root.iter(f"{_W}sectPr")) if root is not None else []
+    if not sections:
+        return None
+    size, margins = sections[-1].find(f"{_W}pgSz"), sections[-1].find(f"{_W}pgMar")
+    try:
+        width = int(size.attrib[f"{_W}w"]) - int(margins.attrib[f"{_W}left"]) - int(margins.attrib[f"{_W}right"])
+    except (AttributeError, KeyError, ValueError):
+        return None
+    return width if 3000 <= width <= 20000 else None
+
+
+def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_style: str | None = None, *, break_before_first_heading: bool = False, styles: bytes | None = None, text_width: int | None = None) -> bytes:
     """The professional presentation, written in the package's own prefix."""
     def escaped(value: str) -> bytes:
         return (
@@ -6520,10 +6669,53 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
     def value(name: bytes, text: str) -> bytes:
         return b" " + prefix + name + b'="' + escaped(text) + b'"'
 
+    def wrap(name: bytes, content: bytes) -> bytes:
+        return b"<" + prefix + name + b">" + content + b"</" + prefix + name + b">"
+
+    caption_style = _named_style_id(styles, "caption")
+    table_style = _named_style_id(styles, "table text")
+    reference_style = _named_style_id(styles, "bibliography")
+
+    def styled(style: str | None, fallback: bytes) -> bytes:
+        # A template without the named style still gets the ABNT layout.
+        return element(b"pStyle", value(b"val", style)) if style else fallback
+
+    def table(rows: tuple[tuple[str, ...], ...]) -> bytes:
+        # A fixed grid over the body's own text width: Word lays the columns
+        # out exactly as declared, which is what the painted grid is checked
+        # against.  The item column keeps room for its header word.
+        total = text_width or 9000
+        shares = (2200, 1500, 3200, 1300)
+        rest = total - 800
+        widths = (800, *(rest * share // sum(shares) for share in shares[:-1]))
+        widths = (*widths, total - sum(widths))
+        border = b"".join(element(side, value(b"val", "single") + value(b"sz", "4") + value(b"space", "0") + value(b"color", "000000")) for side in (b"top", b"left", b"bottom", b"right", b"insideH", b"insideV"))
+        # "Table Grid" is the painted grid the fidelity oracle binds cell by
+        # cell; the direct borders paint it even where a template lacks the style.
+        properties = wrap(b"tblPr", element(b"tblStyle", value(b"val", "TableGrid")) + element(b"tblW", value(b"w", str(total)) + value(b"type", "dxa")) + wrap(b"tblBorders", border) + element(b"tblLayout", value(b"type", "fixed")))
+        grid = wrap(b"tblGrid", b"".join(element(b"gridCol", value(b"w", str(width))) for width in widths))
+        cell_paragraph = styled(table_style, element(b"spacing", value(b"after", "0")) + element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", "left")))
+        body = []
+        for index, row in enumerate(rows):
+            cells = b"".join(
+                wrap(b"tc", wrap(b"tcPr", element(b"tcW", value(b"w", str(width)) + value(b"type", "dxa"))) + wrap(b"p", wrap(b"pPr", cell_paragraph) + run(text, bold=index == 0)))
+                for width, text in zip(widths, row, strict=True)
+            )
+            body.append(wrap(b"tr", wrap(b"trPr", element(b"cantSplit")) + cells))
+        return wrap(b"tbl", properties + grid + b"".join(body))
+
     paragraphs = []
     heading_index = 0
     for block in professional_report_blocks(report):
-        if block.kind == "HEADING_1":
+        if block.kind == "TABLE":
+            paragraphs.append(table(block.rows))
+        elif block.kind == "CAPTION":
+            properties = wrap(b"pPr", styled(caption_style, element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", "center"))) + element(b"keepNext"))
+            paragraphs.append(wrap(b"p", properties + run(block.text)))
+        elif block.kind == "REFERENCE":
+            properties = wrap(b"pPr", styled(reference_style, element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", "left"))))
+            paragraphs.append(wrap(b"p", properties + run(block.text)))
+        elif block.kind == "HEADING_1":
             heading_index += 1
             style = element(b"pStyle", value(b"val", heading_style)) if heading_style else b""
             # With a table of contents before it, the report body opens a page.
@@ -6598,11 +6790,11 @@ def _verify_canonical_binding(part: bytes, report: ReportSnapshot) -> None:
         "".join(node.text or "" for node in paragraph.iter(f"{_W}t"))
         for paragraph in content.iter(f"{_W}p")
     ]
-    if rendered != [block.visible_text for block in professional_report_blocks(report)]:
+    if rendered != [text for block in professional_report_blocks(report) for text in block.paragraph_texts]:
         raise ValueError("canonical report did not bind to its content control")
 
 
-def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_style: str | None = None, *, tag: str = "CANONICAL_REPORT", markup: bytes | None = None, break_before_first_heading: bool = False) -> bytes:
+def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_style: str | None = None, *, tag: str = "CANONICAL_REPORT", markup: bytes | None = None, break_before_first_heading: bool = False, styles: bytes | None = None) -> bytes:
     """Replace a tagged control's content without touching other bytes."""
     prefix = _wordprocessing_prefix(part)
     anchor = _canonical_tag_anchor(part, prefix, tag)
@@ -6613,7 +6805,7 @@ def _replace_canonical_content(part: bytes, report: ReportSnapshot, heading_styl
     if start < 0 or end_of_open < 0:
         raise ValueError("CANONICAL_REPORT content control is incomplete")
     if markup is None:
-        markup = _canonical_content_markup(report, prefix, heading_style, break_before_first_heading=break_before_first_heading)
+        markup = _canonical_content_markup(report, prefix, heading_style, break_before_first_heading=break_before_first_heading, styles=styles, text_width=_text_width_twips(part))
     elif callable(markup):
         markup = markup(prefix)
     if part[end_of_open - 1 : end_of_open] == b"/":
@@ -6695,7 +6887,7 @@ def _inject_canonical_report(content: bytes, report: ReportSnapshot, toc_pages: 
     toc_controls = _controls_tagged(root, TOC_CONTROL_TAG)
     parts["word/document.xml"] = _replace_canonical_content(
         parts["word/document.xml"], report, _heading_style_id(parts.get("word/styles.xml")),
-        break_before_first_heading=bool(toc_controls),
+        break_before_first_heading=bool(toc_controls), styles=parts.get("word/styles.xml"),
     )
     _verify_canonical_binding(parts["word/document.xml"], report)
     if len(toc_controls) > 1:

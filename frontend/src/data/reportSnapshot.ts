@@ -1,6 +1,11 @@
 export type ExpertProfile = { profile_id: string; revision: number; full_name: string; professional_title: string; registration: string; court_registration: string; contact_line: string };
 export type EditorialTypography = { heading1_pt: number; heading2_pt: number; heading3_pt: number; headings_bold: boolean; heading_space_before_pt: number; heading_space_after_pt: number; paragraph_space_after_pt: number };
 export type EditorialProfile = { profile_id: string; font_family: string; body_font_pt: number; table_font_pt?: number; caption_font_pt?: number; alignment?: string; line_spacing?: number; first_line_indent_cm?: number; page_size?: string; margin_top_cm?: number; margin_bottom_cm?: number; margin_left_cm?: number; margin_right_cm?: number; hyphenation?: boolean; overrides?: string[]; typography?: EditorialTypography };
+export type ReportReferenceKind = "TECHNICAL_STANDARD" | "LEGAL_REFERENCE" | "TECHNICAL_LITERATURE" | "MANUFACTURER_DOCUMENTATION" | "OTHER_REFERENCE";
+export type ReportReference = { reference_id: string; kind: ReportReferenceKind; author: string; title: string; year: number | null; identifier: string | null; details: string | null };
+export type ReportFindingRow = { manifestation: string; environment: string | null; finding: string; situation: string | null; provenance: { provenance_id: string; source_kind: string; source_id: string; source_revision: number } };
+// The author-date citation the report's references section resolves, as the backend states it.
+export function referenceCitation(reference: ReportReference) { const name = reference.identifier ?? reference.author.split(",")[0].toUpperCase(); return reference.year === null ? `(${name})` : `(${name}, ${reference.year})`; }
 export type ReportSnapshot = {
   schema_version: "1.0.0"; report_id: string; workspace_id: string; source_snapshot: {
     workspace_id: string;
@@ -16,6 +21,7 @@ export type ReportSnapshot = {
   review_decisions: Array<{ review_id: string; action: string; professional_id: string; reason: string; timestamp: string; supersedes_review_id: string | null }>;
   state: string; coverage: { sections: number; material_claims: number; traceable_claims: number; answers: number; traceable_answers: number; cpc473_required_sections: number; cpc473_present_sections: number; context_required_fields: number; context_present_fields: number; complete: boolean; reasons: string[] };
   upstream_stale: boolean; upstream_stale_reasons: string[];
+  references?: ReportReference[]; findings_table?: ReportFindingRow[];
 };
 export type ProfileEnvelope = { revision: number; updated_at: string; profile: ExpertProfile };
 export type ReportEnvelope = { revision: number; updated_at: string; snapshot: ReportSnapshot };
@@ -30,7 +36,7 @@ export async function getReportSnapshot(workspaceId: string, signal?: AbortSigna
 export async function startReportSnapshot(workspaceId: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}" })), workspaceId); }
 export async function saveReportSnapshot(workspaceId: string, envelope: ReportEnvelope, snapshot: ReportSnapshot) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, snapshot }) })), workspaceId); }
 export async function reviewReportSnapshot(workspaceId: string, envelope: ReportEnvelope, action: "MARK_REVIEWED" | "APPROVE" | "SUPERSEDE", reason: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot/reviews`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, action, professional_id: envelope.snapshot.expert_profile.profile_id, reason }) })), workspaceId); }
-export type ReportAmendment = "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE";
+export type ReportAmendment = "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE" | "ADD_REFERENCE" | "REMOVE_REFERENCE" | "SET_FINDINGS_TABLE" | "REMOVE_FINDINGS_TABLE";
 export async function amendReportDraft(workspaceId: string, envelope: ReportEnvelope, action: ReportAmendment, values: Record<string, unknown>) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot/draft-amendments`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, action, values }) })), workspaceId); }
 
 export type ReportSourceKind = "ALLEGATION" | "COURT_DECISION" | "CASE_DOCUMENT" | "FIELD_OBSERVATION" | "MEASUREMENT" | "PATHOLOGY" | "TECHNICAL_FINDING" | "PROFESSIONAL_DECISION";

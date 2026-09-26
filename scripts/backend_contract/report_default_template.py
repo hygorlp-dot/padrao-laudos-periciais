@@ -166,9 +166,11 @@ def _styles(profile: EditorialProfile) -> str:
         + _style("TOCHeading", "TOC Heading", paragraph='<w:spacing w:after="240"/><w:ind w:firstLine="0"/><w:jc w:val="center"/>', run=f"<w:b/><w:bCs/>{size(typography.heading1_pt)}")
         + _style("Caption", "caption", next_style="Normal", paragraph='<w:spacing w:before="60" w:after="240"/><w:ind w:firstLine="0"/><w:jc w:val="center"/>', run=size(profile.caption_font_pt))
         + _style("TableText", "Table Text", paragraph='<w:spacing w:after="0"/><w:ind w:firstLine="0"/><w:jc w:val="left"/>', run=size(profile.table_font_pt))
+        + _style("Bibliography", "Bibliography", paragraph='<w:spacing w:after="240" w:line="240" w:lineRule="auto"/><w:ind w:left="0" w:firstLine="0"/><w:jc w:val="left"/>')
         + _style("Signature", "Signature", paragraph='<w:spacing w:after="0"/><w:ind w:firstLine="0"/><w:jc w:val="center"/>')
         + _style("Header", "header", paragraph='<w:ind w:firstLine="0"/><w:jc w:val="right"/>', run=size(max(profile.caption_font_pt, 8)))
         + _style("Footer", "footer", paragraph='<w:ind w:firstLine="0"/><w:jc w:val="center"/>', run=size(max(profile.caption_font_pt, 8)))
+        + '<w:style w:type="table" w:styleId="TableGrid"><w:name w:val="Table Grid"/><w:tblPr><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>'
         + "</w:styles>"
     )
 

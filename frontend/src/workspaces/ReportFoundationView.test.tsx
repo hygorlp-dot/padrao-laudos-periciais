@@ -133,6 +133,41 @@ describe("professional report authoring (Laudo)", () => {
     expect(bodies[0]).toMatchObject({ action: "SET_EDITORIAL_PROFILE", values: { editorial_profile: { profile_id: "CUSTOM", font_family: "Calibri", body_font_pt: 12, first_line_indent_cm: 1.25, typography: { heading1_pt: 14 } } } });
   });
 
+  test("references are added as works apart from case documents and cited in the text author-date", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const nbr = { reference_id: "REFERENCE-1", kind: "TECHNICAL_STANDARD", author: "Associação Brasileira de Normas Técnicas", title: "Desempenho", year: 2021, identifier: "ABNT NBR 15575-1", details: null };
+    const withReference = { ...baseSnapshot, references: [nbr] };
+    vi.stubGlobal("fetch", routed(withReference, (body) => { bodies.push(body); return response(200, envelope(withReference, 4)); }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    const form = await screen.findByRole("form", { name: "Adicionar referência" });
+    expect(screen.getAllByText("(ABNT NBR 15575-1, 2021)").length).toBeGreaterThan(0);
+    fireEvent.change(within(form).getByLabelText("Tipo"), { target: { value: "TECHNICAL_LITERATURE" } });
+    fireEvent.change(within(form).getByLabelText("Autor ou entidade"), { target: { value: "Thomaz, Ercio" } });
+    fireEvent.change(within(form).getByLabelText("Título"), { target: { value: "Trincas em edifícios" } });
+    fireEvent.change(within(form).getByLabelText("Ano (opcional)"), { target: { value: "20" } });
+    expect(within(form).getByRole("button", { name: "Adicionar referência" })).toBeDisabled();
+    fireEvent.change(within(form).getByLabelText("Ano (opcional)"), { target: { value: "2020" } });
+    fireEvent.click(within(form).getByRole("button", { name: "Adicionar referência" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toEqual({ expected_revision: 3, action: "ADD_REFERENCE", values: { kind: "TECHNICAL_LITERATURE", author: "Thomaz, Ercio", title: "Trincas em edifícios", year: 2020, identifier: null, details: null } });
+    fireEvent.change(screen.getByLabelText("Inserir citação"), { target: { value: "REFERENCE-1" } });
+    expect(screen.getByDisplayValue("Afirmação documentada. (ABNT NBR 15575-1, 2021)")).toBeInTheDocument();
+  });
+
+  test("the findings summary is captured from the bound pathology analysis and shown as a table", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const bound = { ...baseSnapshot, source_snapshot: { ...baseSnapshot.source_snapshot, construction_defect_analysis_snapshot_id: "CDA-1", construction_defect_analysis_revision: 2, construction_defect_analysis_digest: "a".repeat(64) } };
+    const tabled = { ...bound, findings_table: [{ manifestation: "Umidade na interface.", environment: null, finding: "Manchas até 40 cm.", situation: "ANOMALIA", provenance: { provenance_id: "P-1", source_kind: "PATHOLOGY", source_id: "PAT-001", source_revision: 2 } }] };
+    vi.stubGlobal("fetch", routed(bound, (body) => { bodies.push(body); return response(200, envelope(tabled, 4)); }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Inserir tabela-resumo dos achados" }));
+    await waitFor(() => expect(bodies).toEqual([{ expected_revision: 3, action: "SET_FINDINGS_TABLE", values: {} }]));
+    const table = await screen.findByRole("table", { name: "Tabela 1 – Resumo dos achados técnicos" });
+    expect(within(table).getByText("Não informado")).toBeInTheDocument();
+    expect(within(table).getByText("Anomalia")).toBeInTheDocument();
+    expect(within(table).queryByText("PAT-001")).not.toBeInTheDocument();
+  });
+
   test("requires the master expert profile before starting a report", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

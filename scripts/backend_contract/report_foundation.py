@@ -342,6 +342,93 @@ class ReportAnswer:
             raise ValueError("report answer traceability is incomplete") from exc
 
 
+REFERENCE_KINDS = (
+    "TECHNICAL_STANDARD", "LEGAL_REFERENCE", "TECHNICAL_LITERATURE",
+    "MANUFACTURER_DOCUMENTATION", "OTHER_REFERENCE",
+)
+_REFERENCE_LIMITS = {"author": 300, "title": 500, "identifier": 120, "details": 500}
+
+
+def _sentence(text: str) -> str:
+    return text.strip().rstrip(".") + "."
+
+
+@dataclass(frozen=True, slots=True)
+class ReportReference:
+    """A standard, law or work the expert relies on -- never a case document.
+
+    Case documents stay evidence under their own authority; a reference is what
+    the expert cites for criteria and method, listed in the references section.
+    """
+    reference_id: str
+    kind: str
+    author: str
+    title: str
+    year: int | None
+    identifier: str | None
+    details: str | None
+
+    def __post_init__(self):
+        _all_text(self, ("reference_id", "kind", "author", "title"))
+        if self.kind not in REFERENCE_KINDS or (self.year is not None and (type(self.year) is not int or not 1800 <= self.year <= 2200)):
+            raise ValueError("report reference is invalid")
+        for name, limit in _REFERENCE_LIMITS.items():
+            value = getattr(self, name)
+            if value is not None and (not _text(value) or value != value.strip() or len(value) > limit):
+                raise ValueError("report reference is invalid")
+
+    @property
+    def citation(self) -> str:
+        """How the text cites it: ``(ABNT NBR 15575-1, 2021)``."""
+        name = self.identifier or self.author.partition(",")[0].upper()
+        return f"({name}, {self.year})" if self.year is not None else f"({name})"
+
+    @property
+    def entry(self) -> str:
+        """The references-section entry: AUTHOR. Identifier: Title. Details, year."""
+        # A person is written "Surname, Given" and only the surname is set in
+        # capitals; an institution has no comma and is capitalised whole.
+        surname, comma, given = self.author.partition(",")
+        author = surname.upper() + comma + given
+        title = f"{self.identifier}: {self.title}" if self.identifier else self.title
+        # Without a year nothing is invented: a law carries its date in the title.
+        closing = ", ".join(item for item in (self.details.strip().rstrip(".") if self.details else "", str(self.year) if self.year is not None else "") if item)
+        return " ".join(_sentence(item) for item in (author, title, closing) if item)
+
+
+FINDING_SITUATIONS = {
+    "CONFORME": "Conforme",
+    "ANOMALIA": "Anomalia",
+    "FALHA": "Falha",
+    "INCONCLUSIVA": "Inconclusiva",
+    "NAO_CONSTATADA": "Não constatada",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ReportFindingRow:
+    """One row of the findings summary, captured from an approved pathology.
+
+    The row repeats what the pathology record states at capture time; it is
+    bound to that record's revision like any claim, so a change upstream makes
+    the report stale instead of silently disagreeing with its table.
+    """
+    manifestation: str
+    environment: str | None
+    finding: str
+    situation: str | None
+    provenance: ReportProvenance
+
+    def __post_init__(self):
+        _all_text(self, ("manifestation", "finding"))
+        if self.environment is not None and not _text(self.environment):
+            raise ValueError("report finding row is invalid")
+        if self.situation is not None and self.situation not in FINDING_SITUATIONS:
+            raise ValueError("report finding row is invalid")
+        if type(self.provenance) is not ReportProvenance or self.provenance.source_kind != "PATHOLOGY":
+            raise ValueError("report finding row requires pathology provenance")
+
+
 @dataclass(frozen=True, slots=True)
 class ReportReviewDecision:
     review_id: str
@@ -396,6 +483,11 @@ class ReportSnapshot:
     coverage: ReportCoverage
     upstream_stale: bool
     upstream_stale_reasons: tuple[str, ...]
+    # Both are optional so a report written before them keeps its exact
+    # persisted mapping and digest: an absent value is omitted, never nulled,
+    # and an empty collection is written as absent.
+    references: tuple[ReportReference, ...] | None = None
+    findings_table: tuple[ReportFindingRow, ...] | None = None
 
     def __post_init__(self):
         _all_text(self, ("schema_version", "report_id", "workspace_id"))
@@ -427,6 +519,16 @@ class ReportSnapshot:
             raise ValueError("report answer traceability is invalid")
         if len({item.answer_id for item in self.answers}) != len(self.answers) or len({item.question_id for item in self.answers}) != len(self.answers):
             raise ValueError("report answers must be unique per canonical question")
+        if self.references is not None:
+            if type(self.references) is not tuple or not self.references or any(type(item) is not ReportReference for item in self.references):
+                raise ValueError("report references are invalid")
+            if len({item.reference_id for item in self.references}) != len(self.references) or len({item.entry.casefold() for item in self.references}) != len(self.references):
+                raise ValueError("report references must be unique")
+        if self.findings_table is not None:
+            if type(self.findings_table) is not tuple or not self.findings_table or any(type(item) is not ReportFindingRow for item in self.findings_table):
+                raise ValueError("report findings table is invalid")
+            if len({item.provenance.source_id for item in self.findings_table}) != len(self.findings_table) or len({item.provenance.provenance_id for item in self.findings_table}) != len(self.findings_table):
+                raise ValueError("report findings table rows must be unique")
         reviews = {item.review_id: item for item in self.review_decisions}
         ordered = sorted(self.review_decisions, key=lambda item: datetime.fromisoformat(item.timestamp))
         if len(reviews) != len(self.review_decisions) or len({item.timestamp for item in ordered}) != len(ordered):
@@ -510,9 +612,20 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     if type(value) is not dict:
         raise ValueError("ReportSnapshot mapping is invalid")
     allowed = {item.name for item in fields(ReportSnapshot)}
-    if set(value) != allowed:
+    optional = {"references", "findings_table"}
+    if not allowed - optional <= set(value) <= allowed:
         raise ValueError("ReportSnapshot fields are invalid")
     data = dict(value)
+    for name in optional:
+        if name not in data:
+            data[name] = None
+        elif type(data[name]) is not list or not data[name]:
+            # Absent is written by omission; null or [] would be a second mapping.
+            raise ValueError(f"ReportSnapshot {name} is invalid")
+    if data["references"] is not None:
+        data["references"] = tuple(_construct(ReportReference, item) for item in data["references"])
+    if data["findings_table"] is not None:
+        data["findings_table"] = tuple(_construct(ReportFindingRow, item, nested={"provenance": ReportProvenance}) for item in data["findings_table"])
     data["source_snapshot"] = _construct(ReportSourceSnapshot, data["source_snapshot"])
     data["expert_profile"] = _construct(ExpertMasterProfile, data["expert_profile"])
     data["editorial_profile"] = editorial_profile_from_mapping(data["editorial_profile"])
@@ -571,4 +684,7 @@ def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     for answer in mapping["answers"]:
         if answer["question_text"] is None:
             del answer["question_text"]
+    for name in ("references", "findings_table"):
+        if mapping[name] is None:
+            del mapping[name]
     return mapping
