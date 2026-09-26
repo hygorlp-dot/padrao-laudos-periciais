@@ -10,7 +10,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from urllib.parse import unquote_to_bytes, urlsplit
 
-from ..site_location import LocationInputError, site_location_to_mapping
+from ..application.site_location import LocationInputError, site_location_to_mapping
 from ..application.content import (
     DOCUMENT_IO_CHUNK_BYTES,
     MAX_DOCUMENT_BYTES,

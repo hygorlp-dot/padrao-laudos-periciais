@@ -89,7 +89,7 @@ export function SiteLocationPanel({ workspaceId }: { workspaceId: string }) {
       {current.location.state === "CONFIRMED" && <p className="field-hint">Para citar no laudo, use "Inserir localização" na seção Vistoria.</p>}
     </div>}
     {showForm && <form className="site-location__form" onSubmit={submit} aria-label="Informar localização">
-      <label>Link do mapa ou coordenadas<textarea required value={input} placeholder="https://www.google.com/maps/place/…  ou  -23.550520, -46.633308" onChange={(event) => setInput(event.target.value)} disabled={busy} /></label>
+      <label>Link do mapa ou coordenadas<textarea required value={input} placeholder="Link do Google Maps ou do OpenStreetMap, ou -23.550520, -46.633308" onChange={(event) => setInput(event.target.value)} disabled={busy} /></label>
       <label>Endereço ou referência (opcional)<input value={address} onChange={(event) => setAddress(event.target.value)} disabled={busy} /></label>
       <label>Observação (opcional)<input value={note} onChange={(event) => setNote(event.target.value)} disabled={busy} /></label>
       <div className="action-row">

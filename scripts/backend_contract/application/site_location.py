@@ -8,6 +8,7 @@ from ..report_foundation import EXPERT_PROFILE_ARTIFACT_ID, EXPERT_PROFILE_ARTIF
 from ..site_location import (
     SITE_LOCATION_ARTIFACT_ID,
     SITE_LOCATION_ARTIFACT_KIND,
+    LocationInputError,
     SiteLocation,
     SiteLocationState,
     parse_location_input,
@@ -16,6 +17,9 @@ from ..site_location import (
 )
 from .models import thaw_payload
 from .ports import RepositoryConflict, RepositoryIntegrityError
+
+# The transport speaks to the application layer only.
+__all__ = ["ConfirmSiteLocation", "GetSiteLocation", "LocationInputError", "ProposeSiteLocation", "site_location_to_mapping"]
 
 
 def _optional_text(value: object) -> str | None:
