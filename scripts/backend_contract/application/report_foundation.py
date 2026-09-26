@@ -185,15 +185,19 @@ def _reconcile(snapshot: ReportSnapshot, current: ReportSourceSnapshot) -> Repor
     )
 
 
-def _site_location_reasons(snapshot: ReportSnapshot, get_site_location) -> tuple[str, ...]:
-    """Why the captured site location no longer matches its confirmed record."""
+def _site_location_reasons(snapshot: ReportSnapshot, get_site_location, workspace_id) -> tuple[str, ...]:
+    """Why the captured site location no longer matches its confirmed record.
+
+    The record is read with the workspace identity the caller was given --
+    the snapshot's own text field is not a workspace identity.
+    """
     captured = snapshot.site_location
     if captured is None:
         return ()
     if get_site_location is None:
         return ("site location authority unavailable",)
     try:
-        record, location = get_site_location.execute(snapshot.workspace_id)
+        record, location = get_site_location.execute(workspace_id)
     except ArtifactRevisionNotFound:
         return ("site location removed",)
     if (
@@ -206,8 +210,8 @@ def _site_location_reasons(snapshot: ReportSnapshot, get_site_location) -> tuple
     return ()
 
 
-def _with_site_location_staleness(snapshot: ReportSnapshot, get_site_location) -> ReportSnapshot:
-    reasons = _site_location_reasons(snapshot, get_site_location)
+def _with_site_location_staleness(snapshot: ReportSnapshot, get_site_location, workspace_id) -> ReportSnapshot:
+    reasons = _site_location_reasons(snapshot, get_site_location, workspace_id)
     if not reasons:
         return snapshot
     return replace(
@@ -381,7 +385,7 @@ class SaveReportSnapshot:
                 ),
                 self.get_construction_defect_analysis,
             )
-            if _reconcile(snapshot, current[-1]).upstream_stale or _site_location_reasons(snapshot, self.get_site_location):
+            if _reconcile(snapshot, current[-1]).upstream_stale or _site_location_reasons(snapshot, self.get_site_location, workspace_id):
                 raise ValueError("Report Snapshot upstream authority is stale")
             _validate_answer_chains(snapshot, current[5])
             _validate_claim_provenance(
@@ -393,7 +397,7 @@ class SaveReportSnapshot:
                 if allow_new_version:
                     # A new version replaces only a report that can no longer
                     # change itself, and starts every professional review again.
-                    stale = _reconcile(predecessor, current[-1]).upstream_stale or bool(_site_location_reasons(predecessor, self.get_site_location))
+                    stale = _reconcile(predecessor, current[-1]).upstream_stale or bool(_site_location_reasons(predecessor, self.get_site_location, workspace_id))
                     if snapshot.state is not ReportState.DRAFT or snapshot.review_decisions or not (predecessor.state is ReportState.SUPERSEDED or stale):
                         raise ValueError("Report new version requires a superseded or stale predecessor")
                 elif not allow_review_transition and snapshot.review_decisions != predecessor.review_decisions:
@@ -441,7 +445,7 @@ class GetReportSnapshot:
             ),
             self.get_construction_defect_analysis,
         )
-        return record, _with_site_location_staleness(_reconcile(snapshot, current[-1]), self.get_site_location)
+        return record, _with_site_location_staleness(_reconcile(snapshot, current[-1]), self.get_site_location, workspace_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -723,7 +727,7 @@ class StartReportVersion:
             self.get_construction_defect_analysis,
         )
         case, inspection, technical, profile, pathology, binding = current[1], current[3], current[5], current[7], current[9], current[-1]
-        stale = _reconcile(stored, binding).upstream_stale or bool(_site_location_reasons(stored, self.get_site_location))
+        stale = _reconcile(stored, binding).upstream_stale or bool(_site_location_reasons(stored, self.get_site_location, workspace_id))
         if stored.state is not ReportState.SUPERSEDED and not stale:
             raise ValueError("a new report version requires a superseded or stale report")
         if case.source_inventory_stale or inspection.upstream_stale or technical.upstream_stale:

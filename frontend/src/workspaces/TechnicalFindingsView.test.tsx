@@ -122,6 +122,29 @@ describe("technical findings workbench", () => {
     expect(screen.getByLabelText("Profissional responsável")).toHaveValue("OUTRO");
   });
 
+  test("a question from the case can be cited as evidence, so a finding can answer it", async () => {
+    const provenance = [{ workspace_id: ID, source_document_id: "DOC-1", source_document_sha256: "a".repeat(64), page_or_span: "p. 5", source_revision: 3, occurrence_id: "OCC-1" }];
+    const caseAnalysis = { revision: 3, updated_at: "2026-08-31T10:00:00Z", snapshot: {
+      schema_version: "1.0.0", workspace_id: ID, judicial_context_workspace_id: ID, stale_document_ids: [], source_inventory_stale: false, unindexed_source_count: 0,
+      judicial_context: { provenance: [], entities: [], participants: [], representation_links: [] },
+      claims: [], counterarguments: [], decisions: [], pericial_objects: [], events: [], technical_document_references: [], gaps: [], conflicts: [], documents: [],
+      questions: [{ item_id: "QUESTION-7", text: "Existem fissuras na sala?", participant_refs: [], technical_subjects: [], provenance }],
+    } };
+    const technical = vi.fn().mockResolvedValueOnce(response(200, envelope)).mockResolvedValueOnce(response(200, envelope));
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/case-analysis") ? Promise.resolve(response(200, caseAnalysis)) : routed(technical)(input, init));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<TechnicalFindingsView workspaceId={ID} />);
+    await screen.findByRole("heading", { name: "Cadeia técnica" });
+    fireEvent.change(screen.getByLabelText("Tipo canônico da fonte"), { target: { value: "CASE_QUESTION" } });
+    await waitFor(() => expect(screen.getByRole("option", { name: "Existem fissuras na sala?" })).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Fonte"), { target: { value: "QUESTION-7" } });
+    fireEvent.change(screen.getByLabelText("Proposição sustentada"), { target: { value: "O quesito pergunta sobre fissuras." } });
+    fireEvent.change(screen.getByLabelText("Por que é relevante"), { target: { value: "Autoridade processual do quesito." } });
+    fireEvent.click(screen.getByRole("button", { name: "Registrar proposta de evidência" }));
+    await waitFor(() => expect(technicalCalls(fetchMock)).toHaveLength(2));
+    expect(JSON.parse(String((technicalCalls(fetchMock)[1][1] as RequestInit).body))).toMatchObject({ source_kind: "CASE_QUESTION", source_id: "QUESTION-7" });
+  });
+
   test("submits only a non-authoritative evidence proposal through its command", async () => {
     const withRejectedEvidence = { ...snapshot,
       evidence_items: [...snapshot.evidence_items, { evidence_id: "EVIDENCE-REJECTED", proposition: "Fonte rejeitada.", assessment_id: "ASSESSMENT-REJECTED" }],

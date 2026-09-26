@@ -137,3 +137,22 @@ export function formatDateTime(value: string | null | undefined) {
   if (Number.isNaN(date.getTime())) return value;
   return new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium", timeStyle: "short" }).format(date);
 }
+
+// Reasons the backend records in its own terms, said to the expert in plain
+// Portuguese.  Several internal reasons share one meaning, so the list is
+// deduplicated; an unknown reason is shown as recorded rather than hidden.
+const REASON_LABELS: Array<[RegExp, string]> = [
+  [/^case analysis (identity|revision|content) changed$/, "A análise do caso mudou depois deste laudo."],
+  [/^inspection (identity|revision|content) changed$/, "A vistoria mudou depois deste laudo."],
+  [/^technical snapshot (identity|revision|content) changed$/, "As evidências e os achados técnicos mudaram depois deste laudo."],
+  [/^pathology snapshot (identity|revision|content) changed$/, "A análise de manifestações construtivas mudou depois deste laudo."],
+  [/^expert profile (identity|revision|content) changed$/, "O perfil do perito mudou depois deste laudo."],
+  [/^site location changed$/, "A localização do imóvel mudou depois de inserida no laudo."],
+  [/^site location removed$/, "A localização do imóvel inserida no laudo não existe mais."],
+  [/^site location authority unavailable$/, "A localização do imóvel não pôde ser conferida."],
+  [/^Report draft requires complete CPC 319, CPC 473 and professional approval\.$/, "Falta concluir o contexto processual (art. 319), o conteúdo pericial (art. 473) ou a aprovação profissional."],
+  [/^Report draft has no material claims\.$/, "O laudo ainda não tem textos com fonte."],
+];
+export function reasonLabels(reasons: readonly string[]) {
+  return [...new Set(reasons.map((reason) => REASON_LABELS.find(([pattern]) => pattern.test(reason))?.[1] ?? reason))];
+}
