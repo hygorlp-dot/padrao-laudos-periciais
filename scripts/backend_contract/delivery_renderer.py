@@ -3984,6 +3984,51 @@ def _text_free_background(pdf_content: bytes, page_number: int, scale: float):
         document.close()
 
 
+# pdfium's text page reports a hyphen it recognises as a line-end hyphenation
+# point as U+0002 instead of the "-" the page actually paints: Word 16 breaking
+# "FINDING-" / "1B38..." across two lines extracts as "FINDING\x02".  That is an
+# extraction marker, not text.  It is restored only where pdfium itself proves
+# it -- the character is flagged as a hyphen and is not a generated one -- and
+# only in the text object that contains the proven glyph.  Every other control
+# character is left as it is and makes the layout unsafe.
+_PDFIUM_LINE_END_HYPHEN = "\x02"
+_UNMODELED_EXTRACTION_CONTROLS = frozenset(
+    chr(code) for code in (*range(0x20), 0x7F) if chr(code) not in "\t\n\r"
+)
+
+
+def _pdfium_proves_line_end_hyphen(text_page, character_index: int) -> bool:
+    return (
+        pdfium.raw.FPDFText_GetUnicode(text_page.raw, character_index)
+        == ord(_PDFIUM_LINE_END_HYPHEN)
+        and pdfium.raw.FPDFText_IsHyphen(text_page.raw, character_index) == 1
+        and pdfium.raw.FPDFText_IsGenerated(text_page.raw, character_index) == 0
+    )
+
+
+def _restore_pdfium_line_end_hyphens(
+    raw_text: str,
+    bounds: tuple[float, ...],
+    proven: list[tuple[float, float, float, float]],
+) -> tuple[str, bool]:
+    """The painted text of one pdfium text object, and whether it is fully modeled."""
+    markers = raw_text.count(_PDFIUM_LINE_END_HYPHEN)
+    if markers:
+        left, bottom, right, top = bounds
+        inside = sum(
+            1
+            for glyph_left, glyph_bottom, glyph_right, glyph_top in proven
+            if left - 0.5 <= (glyph_left + glyph_right) / 2 <= right + 0.5
+            and bottom - 0.5 <= (glyph_bottom + glyph_top) / 2 <= top + 0.5
+        )
+        if inside != markers:
+            return raw_text, False
+        raw_text = raw_text.replace(_PDFIUM_LINE_END_HYPHEN, "-")
+    return raw_text, not any(
+        character in _UNMODELED_EXTRACTION_CONTROLS for character in raw_text
+    )
+
+
 def _pdfium_visible_layout(
     pdf_content: bytes,
 ) -> tuple[
@@ -4024,10 +4069,17 @@ def _pdfium_visible_layout(
                 glyph_regions: list[
                     tuple[tuple[float, float, float, float], str]
                 ] = []
+                line_end_hyphens: list[tuple[float, float, float, float]] = []
                 for character_index in range(text_page.count_chars()):
                     character = text_page.get_text_range(character_index, 1)
                     if not character or character.isspace():
                         continue
+                    # The text-range API spells this character U+0002 or U+FFFE
+                    # depending on context; the per-character attributes decide.
+                    if _pdfium_proves_line_end_hyphen(text_page, character_index):
+                        line_end_hyphens.append(
+                            tuple(float(value) for value in text_page.get_charbox(character_index))
+                        )
                     glyph_bounds = tuple(
                         float(value) for value in text_page.get_charbox(character_index)
                     )
@@ -4059,7 +4111,11 @@ def _pdfium_visible_layout(
                         and top > bottom
                     )
                     if item.type == pdfium.raw.FPDF_PAGEOBJ_TEXT:
-                        raw_text = item.extract()
+                        raw_text, extraction_proven = _restore_pdfium_line_end_hyphens(
+                            item.extract(), bounds, line_end_hyphens
+                        )
+                        if not extraction_proven:
+                            unsafe = True
                         text = _normalized_visible_text(raw_text)
                         matrix = item.get_matrix()
                         horizontal_scale = math.hypot(float(matrix.a), float(matrix.b))
@@ -4477,30 +4533,45 @@ def _ordered_text_blocks_match(
     return True
 
 
+def _vertical_extent(item: _PositionedText) -> tuple[float, float]:
+    """The fragment's vertical interval, whichever way the page axis points."""
+    return min(item.bottom, item.top), max(item.bottom, item.top)
+
+
+def _shares_rendered_line(
+    line: list[_PositionedText], fragment: _PositionedText
+) -> bool:
+    """Whether a fragment sits on the same rendered line as the fragments so far.
+
+    pdfium reports bottom-up coordinates, and the former test --
+    max(bottom) - min(top) within a tolerance -- measured the GAP between two
+    lines in that orientation.  A tall glyph such as "|" narrowed the gap under
+    the tolerance and merged two lines, inverting the reading order of a
+    faithful Word render.  Fragments of one line share most of their vertical
+    extent; fragments of adjacent lines at most touch at the leading.
+    """
+    low, high = _vertical_extent(fragment)
+    line_low = min(_vertical_extent(item)[0] for item in line)
+    line_high = max(_vertical_extent(item)[1] for item in line)
+    overlap = min(high, line_high) - max(low, line_low)
+    shorter = min(high - low, line_high - line_low)
+    return overlap > 0 and overlap >= 0.5 * shorter
+
+
 def _positioned_reading_order(
     fragments: list[_PositionedText],
 ) -> list[_PositionedText]:
     lines: list[list[_PositionedText]] = []
     for fragment in sorted(
-        fragments, key=lambda item: (item.page, -item.top, item.x)
+        fragments,
+        key=lambda item: (item.page, -_vertical_extent(item)[1], item.x),
     ):
         matching_line = next(
             (
                 line
                 for line in lines
                 if line[0].page == fragment.page
-                and max(
-                    max(item.bottom for item in line), fragment.bottom
-                )
-                - min(min(item.top for item in line), fragment.top)
-                <= max(
-                    3.0,
-                    0.35
-                    * max(
-                        fragment.font_size,
-                        *(item.font_size for item in line),
-                    ),
-                )
+                and _shares_rendered_line(line, fragment)
             ),
             None,
         )
@@ -4510,7 +4581,10 @@ def _positioned_reading_order(
             matching_line.append(fragment)
     ordered_lines = sorted(
         lines,
-        key=lambda line: (line[0].page, -max(item.top for item in line)),
+        key=lambda line: (
+            line[0].page,
+            -max(_vertical_extent(item)[1] for item in line),
+        ),
     )
     return [
         fragment

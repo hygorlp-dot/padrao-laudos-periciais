@@ -14,6 +14,8 @@ from uuid import UUID
 DELIVERY_SNAPSHOT_ARTIFACT_KIND = "DELIVERY_SNAPSHOT_V1"
 DELIVERY_SNAPSHOT_ARTIFACT_ID = "DELIVERY-SNAPSHOT"
 _SHA256 = re.compile(r"[0-9a-f]{64}")
+# The exact version grammar the contained Word worker is allowed to report.
+_WORD_RENDERER_VERSION = re.compile(r"16\.\d+(?:\.\d+)*")
 
 
 class DeliveryState(StrEnum):
@@ -36,6 +38,9 @@ class DeliveryAction(StrEnum):
 
 class DeliveryRole(StrEnum):
     MAIN_REPORT = "MAIN_REPORT"
+    # A PDF converted from the MAIN_REPORT bytes by the protected local renderer.
+    # It never carries professional authority; the Word artifact does.
+    DERIVED_PDF = "DERIVED_PDF"
     ANNEX = "ANNEX"
     PHOTO_APPENDIX = "PHOTO_APPENDIX"
     TECHNICAL_APPENDIX = "TECHNICAL_APPENDIX"
@@ -178,6 +183,23 @@ class DeliveryDecision:
             _text(self.supersedes_decision_id, "supersedes_decision_id")
 
 
+@dataclass(frozen=True, slots=True)
+class DerivedPdfRenderer:
+    """Closed provenance of the renderer that derived the PDF from the Word artifact."""
+
+    renderer_type: str
+    renderer_version: str
+    platform: str
+
+    def __post_init__(self) -> None:
+        if self.renderer_type != "MICROSOFT_WORD_DESKTOP_COM":
+            raise ValueError("derived PDF renderer type is invalid")
+        if type(self.renderer_version) is not str or _WORD_RENDERER_VERSION.fullmatch(self.renderer_version) is None:
+            raise ValueError("derived PDF renderer version is invalid")
+        if self.platform != "win32":
+            raise ValueError("derived PDF renderer platform is invalid")
+
+
 _TRANSITIONS = (
     (DeliveryAction.MARK_READY_FOR_REVIEW, DeliveryState.READY_FOR_REVIEW),
     (DeliveryAction.APPROVE, DeliveryState.APPROVED),
@@ -206,6 +228,7 @@ class DeliverySnapshot:
     stale_reasons: tuple[str, ...]
     stale_origin_state: DeliveryState | None
     supersedes_delivery_id: str | None
+    derived_pdf_renderer: DerivedPdfRenderer | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != "1.0.0":
@@ -240,7 +263,22 @@ class DeliverySnapshot:
             raise ValueError("delivery artifact identities must be unique")
         if self.package.artifact_ids != identities[0]:
             raise ValueError("delivery manifest must exactly match artifacts")
+        self._validate_derived_pdf()
         self._validate_state()
+
+    def _validate_derived_pdf(self) -> None:
+        derived = tuple(item for item in self.artifacts if item.role is DeliveryRole.DERIVED_PDF)
+        if self.derived_pdf_renderer is not None and type(self.derived_pdf_renderer) is not DerivedPdfRenderer:
+            raise ValueError("derived PDF renderer provenance is invalid")
+        if bool(derived) != (self.derived_pdf_renderer is not None):
+            raise ValueError("derived PDF and its renderer provenance must appear together")
+        if not derived:
+            return
+        if len(derived) != 1 or derived[0].format is not DeliveryFormat.PDF or derived[0].media_type != "application/pdf":
+            raise ValueError("delivery admits exactly one derived PDF")
+        main_artifacts = tuple(item for item in self.artifacts if item.role is DeliveryRole.MAIN_REPORT)
+        if len(main_artifacts) != 1 or main_artifacts[0].format not in {DeliveryFormat.DOCX, DeliveryFormat.DOCM}:
+            raise ValueError("a derived PDF requires its authoritative Word main artifact")
 
     def _validate_state(self) -> None:
         if self.stale_reasons:
@@ -291,9 +329,15 @@ def _construct(cls: type[T], value: object) -> T:
 
 
 def delivery_snapshot_from_mapping(value: object) -> DeliverySnapshot:
-    if type(value) is not dict or set(value) != {item.name for item in fields(DeliverySnapshot)}:
+    # derived_pdf_renderer is optional so that every snapshot persisted before a
+    # derived PDF existed keeps loading and keeps its exact canonical mapping.
+    names = {item.name for item in fields(DeliverySnapshot)}
+    if type(value) is not dict or set(value) not in (names, names - {"derived_pdf_renderer"}):
         raise ValueError("DeliverySnapshot fields are invalid")
     data: dict[str, Any] = dict(value)
+    renderer = data.pop("derived_pdf_renderer", None)
+    if renderer is not None:
+        data["derived_pdf_renderer"] = _construct(DerivedPdfRenderer, renderer)
     data["binding"] = _construct(DeliveryBinding, data["binding"])
     artifacts = []
     for raw in data["artifacts"]:
@@ -322,4 +366,7 @@ def delivery_snapshot_from_mapping(value: object) -> DeliverySnapshot:
 def delivery_snapshot_to_mapping(value: DeliverySnapshot) -> dict[str, Any]:
     if type(value) is not DeliverySnapshot:
         raise TypeError("expected DeliverySnapshot")
-    return json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    mapping = json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    if mapping["derived_pdf_renderer"] is None:
+        del mapping["derived_pdf_renderer"]
+    return mapping

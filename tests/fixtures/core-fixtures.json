@@ -513,6 +513,132 @@
                          "finalidade":  "Corpus sintético adversarial versionado para avaliação e hard gates de IA Stage 10",
                          "expected":  "DATASET",
                          "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-reading-order-pipe.docx",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_real_word_render_with_a_pipe_on_the_second_line_is_faithful",
+                         "finalidade":  "DOCX sintético do texto canônico com separador | na segunda linha (ordem de leitura)",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-reading-order-pipe.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_real_word_render_with_a_pipe_on_the_second_line_is_faithful",
+                         "finalidade":  "PDF renderizado pelo Microsoft Word 16 a partir do DOCX sintético; a ordem de leitura posicionada deve aceitá-lo como fiel",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen.docx",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_word_16_line_end_hyphens_are_read_as_the_hyphens_word_painted",
+                         "finalidade":  "DOCX sintético do texto canônico com um identificador hifenizado quebrado no fim da linha",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_word_16_line_end_hyphens_are_read_as_the_hyphens_word_painted",
+                         "finalidade":  "PDF renderizado pelo Microsoft Word 16 a partir do DOCX sintético; o hífen de fim de linha provado pelo pdfium deve ser lido como '-'",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphens-multiple.docx",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_word_16_line_end_hyphens_are_read_as_the_hyphens_word_painted",
+                         "finalidade":  "DOCX sintético do texto canônico com três quebras hifenizadas no fim da linha",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphens-multiple.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_word_16_line_end_hyphens_are_read_as_the_hyphens_word_painted",
+                         "finalidade":  "PDF renderizado pelo Microsoft Word 16 a partir do DOCX sintético; três hífens de fim de linha provados",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen-nowrap.docx",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_hyphenated_identifiers_with_and_without_a_wrap_stay_faithful",
+                         "finalidade":  "DOCX sintético do texto canônico com identificador hifenizado sem quebra de linha",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen-nowrap.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_hyphenated_identifiers_with_and_without_a_wrap_stay_faithful",
+                         "finalidade":  "PDF renderizado pelo Microsoft Word 16 a partir do DOCX sintético; hífen no meio da linha permanece fiel",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen-with-tail.docx",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_hyphenated_identifiers_with_and_without_a_wrap_stay_faithful",
+                         "finalidade":  "DOCX sintético do texto canônico com identificador hifenizado quebrado e texto após a quebra",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen-with-tail.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_hyphenated_identifiers_with_and_without_a_wrap_stay_faithful",
+                         "finalidade":  "PDF renderizado pelo Microsoft Word 16 a partir do DOCX sintético; quebra hifenizada seguida de texto permanece fiel",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen-missing.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_a_pdf_that_really_changed_the_hyphenated_text_is_still_refused",
+                         "finalidade":  "PDF derivado do render Word 16 com o identificador hifenizado removido; o oráculo de fidelidade deve recusar",
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen-replaced.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_a_pdf_that_really_changed_the_hyphenated_text_is_still_refused",
+                         "finalidade":  "PDF derivado do render Word 16 com o identificador hifenizado trocado por outro caractere; o oráculo de fidelidade deve recusar",
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen-id-changed.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_a_pdf_that_really_changed_the_hyphenated_text_is_still_refused",
+                         "finalidade":  "PDF derivado do render Word 16 com o identificador hifenizado alterado; o oráculo de fidelidade deve recusar",
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-line-end-hyphen-reordered.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_delivery_derived_pdf_v1.py::test_a_pdf_that_really_changed_the_hyphenated_text_is_still_refused",
+                         "finalidade":  "PDF derivado do render Word 16 com o identificador hifenizado reordenado; o oráculo de fidelidade deve recusar",
+                         "expected":  "INVALID",
+                         "provenance":  "SYNTHETIC"
                      }
                  ]
 }
