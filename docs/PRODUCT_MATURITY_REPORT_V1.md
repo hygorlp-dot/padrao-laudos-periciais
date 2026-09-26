@@ -6,17 +6,20 @@ truth; it is not authorization to begin a later stage.
 
 ## Current-effective result
 
-- Protected main SHA: `27175535933a2ff2185ffbd02819796274cdbeff`.
+- Protected main SHA: `75a9522dfcf80e75e65af9a1462d04daffd87047` (PR #203, Issue #202).
 - PR #196 longitudinal oracle is merged and has an independent post-main proof: `11 passed` using synthetic data only.
   The final report-only/assurance SHA is recorded by the protected CI/review
   package after stable freeze; no moving branch name substitutes for either.
 - Stages 0–9, 11 and 12 have implemented foundations covered by first-party
   boundary tests.
-- Stage 8 supports the authoritative bound Word artifact. Local final PDF
-  fidelity remains deferred by the protected trust boundary and is not claimed.
+- Stage 8 delivers the authoritative bound Word artifact and a derived PDF
+  rendered locally by Microsoft Word 16 in the contained worker (#204, #223),
+  accepted only after structural and visual fidelity checks and bound by
+  SHA-256 (#202, #203). Word stays authoritative; any refusal leaves the Word
+  and no PDF.
 - Roadmap V6 Item 2, full product longitudinal reachability, is complete.
 - Stage 10 is `IMPLEMENTED_PROPOSAL_ONLY`; it is not autonomous authority and does not make Human RC ready.
-- `HUMAN_RC_READY = FALSE` and `PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE` because PDF fidelity and human acceptance remain outstanding.
+- `HUMAN_RC_READY = FALSE` and `PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE` because Stage 10 is proposal-only and human acceptance (Human RC) remains outstanding.
 
 ## Historical status
 
@@ -59,7 +62,8 @@ append-only audit and token/cost ceilings are covered by first-party tests.
 - Financial separation: Budget/court/payment history has no authority edge into
   Technical Findings, Report or Delivery.
 - Word delivery: final DOCX/DOCM bytes are hash-bound and structurally revalidated on
-  backup verification/recovery. Local final PDF remains unavailable fail-closed.
+  backup verification/recovery. The derived PDF is hash-bound to the exact Word
+  bytes it was rendered from and is never carried across a re-render.
 - Workspace oracle: two-workspace/foreign inner identities fail closed.
 - Private egress: `FALSE`; all oracle fixtures and execution are local and
   synthetic.
