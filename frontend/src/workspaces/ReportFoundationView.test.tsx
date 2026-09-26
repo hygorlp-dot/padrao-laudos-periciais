@@ -121,6 +121,18 @@ describe("professional report authoring (Laudo)", () => {
     expect(screen.getByRole("heading", { name: "Laudo técnico" })).toBeInTheDocument();
   });
 
+  test("the editorial profile is configured within the domain ranges and can be restored to the product preset", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    vi.stubGlobal("fetch", routed(baseSnapshot, (body) => { bodies.push(body); return response(200, envelope(baseSnapshot, 4)); }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    fireEvent.click(await screen.findByText("Padrão editorial"));
+    fireEvent.change(screen.getByLabelText("Fonte"), { target: { value: "Calibri" } });
+    fireEvent.change(screen.getByLabelText("Tamanho (pt)"), { target: { value: "12" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar padrão editorial" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({ action: "SET_EDITORIAL_PROFILE", values: { editorial_profile: { profile_id: "CUSTOM", font_family: "Calibri", body_font_pt: 12, first_line_indent_cm: 1.25, typography: { heading1_pt: 14 } } } });
+  });
+
   test("requires the master expert profile before starting a report", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

@@ -50,6 +50,21 @@ describe("delivery foundation workbench", () => {
     expect(screen.getByRole("button", { name: "Usar este modelo e iniciar" })).toBeDisabled();
   });
 
+  test("starts the delivery with the product default template and its binding manifest", async () => {
+    const calls: Array<{ url: string; body?: string }> = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input); calls.push({ url, body: init?.body ? String(init.body) : undefined });
+      if (url.endsWith("/delivery-templates/default")) return Promise.resolve(response(201, { template: { workspace_id: ID, content_id: "55555555-5555-4555-8555-555555555555", original_filename: "modelo-padrao-laudo.docx", byte_size: 4000, checksum_sha256: "e".repeat(64), media_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }, manifest: { schema_version: "1.0.0", template_id: "PRODUCT-DEFAULT-REPORT-V1", output_kind: "DOCX", bindings: [] } }));
+      if (url.endsWith("/delivery-snapshot") && init?.method === "POST") return Promise.resolve(response(201, { revision: 1, updated_at: "2026-08-31T12:00:00Z", snapshot: { ...snapshot, state: "DRAFT", artifacts: [], package: { manifest_version: "1.0.0", artifact_ids: [] } } }));
+      return Promise.resolve(response(404, {}));
+    }));
+    render(<DeliveryFoundationView workspaceId={ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Usar o modelo padrão do produto" }));
+    expect(await screen.findByRole("heading", { name: "Entrega do laudo" })).toBeInTheDocument();
+    const start = calls.find((call) => call.url.endsWith("/delivery-snapshot") && call.body);
+    expect(JSON.parse(start!.body!)).toMatchObject({ template_content_id: "55555555-5555-4555-8555-555555555555", manifest: { template_id: "PRODUCT-DEFAULT-REPORT-V1" } });
+  });
+
   const word = snapshot.artifacts[0];
   const pdf = { artifact_id: "ART-2", role: "DERIVED_PDF", format: "PDF", filename: "laudo.pdf", content_id: "44444444-4444-4444-8444-444444444444", media_type: "application/pdf", byte_size: 654, checksum_sha256: "d".repeat(64) };
   const draftWith = (artifacts: object[]) => ({ ...snapshot, state: "DRAFT", artifacts, package: { manifest_version: "1.0.0", artifact_ids: artifacts.map((item) => (item as { artifact_id: string }).artifact_id) } });

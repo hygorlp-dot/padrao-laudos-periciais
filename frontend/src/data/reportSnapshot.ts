@@ -1,4 +1,6 @@
 export type ExpertProfile = { profile_id: string; revision: number; full_name: string; professional_title: string; registration: string; court_registration: string; contact_line: string };
+export type EditorialTypography = { heading1_pt: number; heading2_pt: number; heading3_pt: number; headings_bold: boolean; heading_space_before_pt: number; heading_space_after_pt: number; paragraph_space_after_pt: number };
+export type EditorialProfile = { profile_id: string; font_family: string; body_font_pt: number; table_font_pt?: number; caption_font_pt?: number; alignment?: string; line_spacing?: number; first_line_indent_cm?: number; page_size?: string; margin_top_cm?: number; margin_bottom_cm?: number; margin_left_cm?: number; margin_right_cm?: number; hyphenation?: boolean; overrides?: string[]; typography?: EditorialTypography };
 export type ReportSnapshot = {
   schema_version: "1.0.0"; report_id: string; workspace_id: string; source_snapshot: {
     workspace_id: string;
@@ -6,7 +8,7 @@ export type ReportSnapshot = {
     construction_defect_analysis_revision: number | null;
     construction_defect_analysis_digest: string | null;
   };
-  expert_profile: ExpertProfile; editorial_profile: { profile_id: string; font_family: string; body_font_pt: number };
+  expert_profile: ExpertProfile; editorial_profile: EditorialProfile;
   context_matrix: Array<{ context_id: string; field: string; required: boolean; status: string; source_id: string | null; note: string }>;
   sections: Array<{ section_id: string; kind: string; title: string; order: number; required_by_cpc473: boolean }>;
   claims: Array<{ claim_id: string; section_id: string; text: string; authority: string; provenance: Array<{ provenance_id: string; source_kind: string; source_id: string; source_revision: number }> }>;
@@ -28,7 +30,7 @@ export async function getReportSnapshot(workspaceId: string, signal?: AbortSigna
 export async function startReportSnapshot(workspaceId: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}" })), workspaceId); }
 export async function saveReportSnapshot(workspaceId: string, envelope: ReportEnvelope, snapshot: ReportSnapshot) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, snapshot }) })), workspaceId); }
 export async function reviewReportSnapshot(workspaceId: string, envelope: ReportEnvelope, action: "MARK_REVIEWED" | "APPROVE" | "SUPERSEDE", reason: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot/reviews`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, action, professional_id: envelope.snapshot.expert_profile.profile_id, reason }) })), workspaceId); }
-export type ReportAmendment = "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM";
+export type ReportAmendment = "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE";
 export async function amendReportDraft(workspaceId: string, envelope: ReportEnvelope, action: ReportAmendment, values: Record<string, unknown>) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot/draft-amendments`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, action, values }) })), workspaceId); }
 
 export type ReportSourceKind = "ALLEGATION" | "COURT_DECISION" | "CASE_DOCUMENT" | "FIELD_OBSERVATION" | "MEASUREMENT" | "PATHOLOGY" | "TECHNICAL_FINDING" | "PROFESSIONAL_DECISION";

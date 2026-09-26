@@ -99,6 +99,7 @@ from ..application.report_foundation import (
     ListReportSources,
 )
 from ..application.delivery_foundation import (
+    StoreDefaultDeliveryTemplate,
     DeliverDeliverySnapshot,
     AttachDeliveryPackageArtifact,
     FinalizeDeliverySnapshot,
@@ -739,6 +740,7 @@ def build_local_api(
         list_report_sources=ListReportSources(get_case_analysis, get_inspection_session, get_technical_snapshot, get_construction_defect_analysis),
         export_report_audit_trail=ExportReportAuditTrail(get_report_snapshot),
         store_delivery_template=generic_store,
+        store_default_delivery_template=StoreDefaultDeliveryTemplate(get_report_snapshot, generic_store),
         get_delivery_artifact=get_private_content,
         get_delivery_snapshot=get_delivery_snapshot,
         get_delivery_history=get_delivery_history,

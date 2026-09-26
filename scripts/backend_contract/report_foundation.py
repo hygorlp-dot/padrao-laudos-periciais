@@ -158,6 +158,47 @@ class ExpertMasterProfile:
             raise ValueError("expert profile revision is invalid")
 
 
+EDITORIAL_PRESET_ID = "JUSTICA_PLURAL_CHAPTER_4"
+EDITORIAL_CUSTOM_ID = "CUSTOM"
+EDITORIAL_FONTS = ("Arial", "Calibri", "Cambria", "Georgia", "Times New Roman", "Verdana")
+EDITORIAL_ALIGNMENTS = ("JUSTIFIED", "LEFT")
+EDITORIAL_LINE_SPACINGS = (1.0, 1.15, 1.5, 2.0)
+
+
+def _number(value: object) -> bool:
+    return type(value) in (int, float) and value == value
+
+
+def _within(value: object, low: float, high: float) -> bool:
+    # Two decimals at most: a profile is a typographic choice, not a measurement.
+    return _number(value) and low <= value <= high and round(value * 100) == value * 100
+
+
+@dataclass(frozen=True, slots=True)
+class EditorialTypography:
+    """Heading sizes and paragraph spacing; absent means the preset's own."""
+    heading1_pt: int
+    heading2_pt: int
+    heading3_pt: int
+    headings_bold: bool
+    heading_space_before_pt: int
+    heading_space_after_pt: int
+    paragraph_space_after_pt: int
+
+    def __post_init__(self):
+        sizes = ((self.heading1_pt, 12, 20), (self.heading2_pt, 11, 16), (self.heading3_pt, 10, 14))
+        spaces = (self.heading_space_before_pt, self.heading_space_after_pt, self.paragraph_space_after_pt)
+        if any(type(value) is not int or not low <= value <= high for value, low, high in sizes):
+            raise ValueError("editorial heading sizes are invalid")
+        if not self.heading1_pt >= self.heading2_pt >= self.heading3_pt:
+            raise ValueError("editorial heading hierarchy is invalid")
+        if type(self.headings_bold) is not bool or any(type(value) is not int or not 0 <= value <= 36 for value in spaces):
+            raise ValueError("editorial spacing is invalid")
+
+
+DEFAULT_EDITORIAL_TYPOGRAPHY = EditorialTypography(14, 12, 11, True, 12, 6, 6)
+
+
 @dataclass(frozen=True, slots=True)
 class EditorialProfile:
     profile_id: str
@@ -175,18 +216,39 @@ class EditorialProfile:
     margin_right_cm: float
     hyphenation: bool
     overrides: tuple[str, ...]
+    # Written only when the expert configured it, so every profile persisted
+    # before keeps its exact mapping and digest.
+    typography: EditorialTypography | None = None
 
     def __post_init__(self):
         _all_text(self, ("profile_id", "font_family", "alignment", "page_size"))
-        if self.profile_id != "JUSTICA_PLURAL_CHAPTER_4" or self.font_family != "Arial" or self.alignment != "JUSTIFIED" or self.page_size != "A4":
+        if self.profile_id not in (EDITORIAL_PRESET_ID, EDITORIAL_CUSTOM_ID) or self.page_size != "A4":
             raise ValueError("editorial profile default is invalid")
-        if (self.body_font_pt, self.table_font_pt, self.caption_font_pt) != (11, 10, 9):
+        if self.font_family not in EDITORIAL_FONTS or self.alignment not in EDITORIAL_ALIGNMENTS:
+            raise ValueError("editorial profile default is invalid")
+        sizes = ((self.body_font_pt, 10, 14), (self.table_font_pt, 8, 12), (self.caption_font_pt, 8, 11))
+        if any(type(value) is not int or not low <= value <= high for value, low, high in sizes):
             raise ValueError("editorial typography is invalid")
-        if (self.line_spacing, self.first_line_indent_cm) != (1.15, 1.25) or (self.margin_top_cm, self.margin_bottom_cm, self.margin_left_cm, self.margin_right_cm) != (2, 2, 3, 2):
+        margins = (self.margin_top_cm, self.margin_bottom_cm, self.margin_left_cm, self.margin_right_cm)
+        if self.line_spacing not in EDITORIAL_LINE_SPACINGS or not _within(self.first_line_indent_cm, 0, 3) or not all(_within(value, 1.5, 4) for value in margins):
             raise ValueError("editorial geometry is invalid")
         if type(self.hyphenation) is not bool or self.hyphenation:
             raise ValueError("automatic hyphenation must be disabled")
+        if self.typography is not None and type(self.typography) is not EditorialTypography:
+            raise ValueError("editorial typography is invalid")
+        # The preset keeps its meaning: its identity names exactly its values.
+        if self.profile_id == EDITORIAL_PRESET_ID and (
+            (self.font_family, self.alignment, self.body_font_pt, self.table_font_pt, self.caption_font_pt) != ("Arial", "JUSTIFIED", 11, 10, 9)
+            or (self.line_spacing, self.first_line_indent_cm) != (1.15, 1.25)
+            or margins != (2, 2, 3, 2)
+            or self.typography not in (None, DEFAULT_EDITORIAL_TYPOGRAPHY)
+        ):
+            raise ValueError("editorial preset values cannot change")
         _texts(self.overrides)
+
+    @property
+    def effective_typography(self) -> EditorialTypography:
+        return self.typography or DEFAULT_EDITORIAL_TYPOGRAPHY
 
 
 @dataclass(frozen=True, slots=True)
@@ -422,6 +484,28 @@ def _construct(cls: type[T], value: object, *, nested: dict[str, type] | None = 
     return cls(**data)
 
 
+def editorial_profile_from_mapping(value: object) -> EditorialProfile:
+    if type(value) is not dict:
+        raise ValueError("EditorialProfile mapping is invalid")
+    editorial = dict(value)
+    if "typography" not in editorial:
+        editorial["typography"] = None
+    elif type(editorial["typography"]) is dict:
+        editorial["typography"] = _construct(EditorialTypography, editorial["typography"])
+    else:
+        # An absent typography is written by omission; an explicit null would
+        # give one profile two mappings and two digests.
+        raise ValueError("EditorialProfile typography is invalid")
+    return _construct(EditorialProfile, editorial, tuples={"overrides": None})
+
+
+def editorial_profile_to_mapping(value: EditorialProfile) -> dict[str, Any]:
+    mapping = json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    if mapping["typography"] is None:
+        del mapping["typography"]
+    return mapping
+
+
 def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     if type(value) is not dict:
         raise ValueError("ReportSnapshot mapping is invalid")
@@ -431,7 +515,7 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     data = dict(value)
     data["source_snapshot"] = _construct(ReportSourceSnapshot, data["source_snapshot"])
     data["expert_profile"] = _construct(ExpertMasterProfile, data["expert_profile"])
-    data["editorial_profile"] = _construct(EditorialProfile, data["editorial_profile"], tuples={"overrides": None})
+    data["editorial_profile"] = editorial_profile_from_mapping(data["editorial_profile"])
     context = []
     for item in data["context_matrix"]:
         record = dict(item)
@@ -482,6 +566,8 @@ def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     if type(value) is not ReportSnapshot:
         raise TypeError("expected ReportSnapshot")
     mapping = json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    if mapping["editorial_profile"]["typography"] is None:
+        del mapping["editorial_profile"]["typography"]
     for answer in mapping["answers"]:
         if answer["question_text"] is None:
             del answer["question_text"]

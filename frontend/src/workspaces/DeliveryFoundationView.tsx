@@ -3,6 +3,7 @@ import { type FormEvent, useEffect, useState } from "react";
 import {
   artifactDownloadUrl,
   attachDeliveryPackageArtifact,
+  createDefaultTemplate,
   deliverDeliverySnapshot,
   DeliveryApiError,
   finalizeDeliverySnapshot,
@@ -85,6 +86,17 @@ export function DeliveryFoundationView({ workspaceId }: { workspaceId: string })
     } catch { setActionError({ action: "template" }); } finally { setBusy(false); }
   };
 
+  const handleDefault = async (reissue: boolean) => {
+    setBusy(true); setActionError(null);
+    try {
+      const { template, manifest } = await createDefaultTemplate(workspaceId);
+      const value = reissue && state.kind === "ready"
+        ? await reissueDeliverySnapshot(workspaceId, state.value, template, manifest)
+        : await startDeliverySnapshot(workspaceId, template, manifest);
+      acceptMutation(value);
+    } catch { setActionError({ action: "template" }); } finally { setBusy(false); }
+  };
+
   const transition = async (action: Action) => {
     if (state.kind !== "ready") return;
     setBusy(true); setRendering(action === "render"); setActionError(null);
@@ -117,7 +129,7 @@ export function DeliveryFoundationView({ workspaceId }: { workspaceId: string })
 
   if (state.kind === "loading") return <section className="status-state status-state--loading" role="status"><span className="state-rule" aria-hidden="true"/><div><h2>Abrindo a entrega</h2><p>Conferindo os arquivos gerados e o vínculo com o laudo aprovado.</p></div></section>;
   if (state.kind === "error") return <section className="status-state status-state--error" role="alert"><span className="state-mark" aria-hidden="true">!</span><div><h2>Não foi possível abrir a entrega</h2><p>A integridade dos arquivos locais não pôde ser confirmada. Nenhum estado foi alterado.</p><button className="text-action" type="button" onClick={() => { setState({ kind: "loading" }); setLoadVersion((value) => value + 1); }}>Tentar novamente</button></div></section>;
-  if (state.kind === "missing") return <>{errorBanner}<TemplateForm title="Iniciar entrega" busy={busy} templateId={templateId} file={templateFile} onId={setTemplateId} onFile={setTemplateFile} onSubmit={() => handleTemplate(false)} /></>;
+  if (state.kind === "missing") return <>{errorBanner}<TemplateForm title="Iniciar entrega" busy={busy} templateId={templateId} file={templateFile} onId={setTemplateId} onFile={setTemplateFile} onSubmit={() => handleTemplate(false)} onDefault={() => handleDefault(false)} /></>;
 
   const { snapshot } = state.value;
   const stale = snapshot.state === "STALE";
@@ -135,7 +147,7 @@ export function DeliveryFoundationView({ workspaceId }: { workspaceId: string })
     {snapshot.state === "DRAFT" && <form className="delivery-supporting" onSubmit={attachSupporting}><h3>Adicionar arquivos ao pacote</h3><label>Função no pacote<select value={supportingRole} onChange={(event) => setSupportingRole(event.target.value as typeof supportingRole)}><option value="ANNEX">Anexo</option><option value="PHOTO_APPENDIX">Apêndice fotográfico</option><option value="TECHNICAL_APPENDIX">Apêndice técnico</option><option value="SUPPORTING_FILE">Arquivo de apoio</option></select></label><label>Arquivo<input type="file" required accept=".pdf,.docx,.docm,.jpg,.jpeg,.png" onChange={(event) => setSupportingFile(event.target.files?.[0] ?? null)}/></label><button className="secondary-action" type="submit" disabled={busy || !supportingFile}>Adicionar ao pacote</button></form>}
     <details className="delivery-history"><summary>Histórico preservado · {plural(history.length, "revisão", "revisões")}</summary><ol>{history.map((item) => <li key={`${item.snapshot.delivery_id}-${item.revision}`}><strong>Revisão {item.revision} · {stateLabel(item.snapshot.state)}</strong>{item.snapshot.artifacts.map((artifact) => <a key={artifact.artifact_id} href={artifactDownloadUrl(workspaceId, artifact.content_id)} download={artifact.filename}>Baixar {ROLE_LABELS[artifact.role] ?? artifact.filename}</a>)}<TechnicalDetails><span className="data">{item.snapshot.delivery_id}</span></TechnicalDetails></li>)}</ol></details>
     {!stale && snapshot.state !== "SUPERSEDED" && <section className="delivery-actions"><h3>Próximo passo</h3>{snapshot.state === "DRAFT" && <><button className="primary-action" type="button" disabled={busy} aria-busy={rendering} onClick={() => transition("render")}>{rendering ? "Gerando Word e PDF…" : rendered ? "Gerar novamente Word e PDF" : "Gerar Word e PDF"}</button><p>O Word é gerado a partir do laudo aprovado e é o documento oficial. O PDF é derivado dele pelo Microsoft Word desta máquina e só aparece depois de conferido; se a conversão falhar, nenhum PDF é oferecido.</p></>}<label>Fundamentação da decisão<textarea value={reason} onChange={(event) => setReason(event.target.value)} disabled={busy}/></label><div className="action-row">{snapshot.state === "DRAFT" && snapshot.artifacts.length > 0 && <button className="authority-action" type="button" disabled={busy || !reason.trim()} onClick={() => transition("ready")}>Enviar para revisão</button>}{snapshot.state === "READY_FOR_REVIEW" && <button className="authority-action" type="button" disabled={busy || !reason.trim()} onClick={() => transition("approve")}>Aprovar entrega</button>}{snapshot.state === "APPROVED" && <button className="authority-action" type="button" disabled={busy || !reason.trim()} onClick={() => transition("finalize")}>Finalizar arquivos</button>}{snapshot.state === "FINALIZED" && <button className="authority-action" type="button" disabled={busy || !reason.trim()} onClick={() => transition("deliver")}>Registrar como entregue</button>}{snapshot.state === "DELIVERED" && <button className="destructive-action" type="button" disabled={busy || !reason.trim()} onClick={() => transition("supersede")}>Marcar como substituída</button>}</div></section>}
-    {(snapshot.state === "SUPERSEDED" || (stale && snapshot.stale_origin_state === "DELIVERED")) && <TemplateForm title="Emitir nova revisão" busy={busy} templateId={templateId} file={templateFile} onId={setTemplateId} onFile={setTemplateFile} onSubmit={() => handleTemplate(true)} />}
+    {(snapshot.state === "SUPERSEDED" || (stale && snapshot.stale_origin_state === "DELIVERED")) && <TemplateForm title="Emitir nova revisão" busy={busy} templateId={templateId} file={templateFile} onId={setTemplateId} onFile={setTemplateFile} onSubmit={() => handleTemplate(true)} onDefault={() => handleDefault(true)} />}
   </section>;
 }
 
@@ -145,7 +157,14 @@ function formatBytes(value: number) {
   return `${(value / (1024 * 1024)).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} MB`;
 }
 
-function TemplateForm({ title, busy, templateId, file, onId, onFile, onSubmit }: { title: string; busy: boolean; templateId: string; file: File | null; onId: (value: string) => void; onFile: (value: File | null) => void; onSubmit: () => void }) {
+function TemplateForm({ title, busy, templateId, file, onId, onFile, onSubmit, onDefault }: { title: string; busy: boolean; templateId: string; file: File | null; onId: (value: string) => void; onFile: (value: File | null) => void; onSubmit: () => void; onDefault: () => void }) {
   const submit = (event: FormEvent) => { event.preventDefault(); onSubmit(); };
-  return <section className="delivery-template"><h2>{title}</h2><p>Escolha o modelo Word do laudo. O arquivo fica guardado só nesta máquina. O identificador precisa ser o mesmo gravado no modelo (propriedade TEMPLATE_ID).</p><form onSubmit={submit}><label>Identificador do modelo<input required value={templateId} onChange={(event) => onId(event.target.value)}/></label><label>Modelo Word (.docx ou .docm)<input required type="file" accept=".docx,.docm,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-word.document.macroEnabled.12" onChange={(event) => onFile(event.target.files?.[0] ?? null)}/></label><button className="primary-action" type="submit" disabled={busy || !file || !templateId.trim()}>{busy ? "Guardando modelo…" : "Usar este modelo e iniciar"}</button></form></section>;
+  return <section className="delivery-template"><h2>{title}</h2>
+    <p>O modelo padrão do produto traz capa, sumário com as páginas reais, cabeçalho, rodapé numerado e o padrão editorial definido no laudo.</p>
+    <button className="primary-action" type="button" disabled={busy} onClick={onDefault}>{busy ? "Preparando modelo…" : "Usar o modelo padrão do produto"}</button>
+    <details className="delivery-template-custom"><summary>Usar meu próprio modelo Word</summary>
+      <p>O arquivo fica guardado só nesta máquina. O identificador precisa ser o mesmo gravado no modelo (propriedade TEMPLATE_ID). Com um modelo próprio, a formatação é a do seu arquivo.</p>
+      <form onSubmit={submit}><label>Identificador do modelo<input required value={templateId} onChange={(event) => onId(event.target.value)}/></label><label>Modelo Word (.docx ou .docm)<input required type="file" accept=".docx,.docm,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-word.document.macroEnabled.12" onChange={(event) => onFile(event.target.files?.[0] ?? null)}/></label><button className="secondary-action" type="submit" disabled={busy || !file || !templateId.trim()}>{busy ? "Guardando modelo…" : "Usar este modelo e iniciar"}</button></form>
+    </details>
+  </section>;
 }
