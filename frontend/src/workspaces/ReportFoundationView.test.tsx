@@ -168,6 +168,32 @@ describe("professional report authoring (Laudo)", () => {
     expect(within(table).queryByText("PAT-001")).not.toBeInTheDocument();
   });
 
+  test("a superseded report opens its next version and says what did not carry over", async () => {
+    const superseded = { ...baseSnapshot, state: "SUPERSEDED", review_decisions: [{ review_id: "R-1", action: "SUPERSEDE", professional_id: profile.profile_id, reason: "Correção.", timestamp: "2026-09-01T10:00:00Z", supersedes_review_id: null }] };
+    const calls: Array<{ url: string; body?: string }> = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      calls.push({ url, body: init?.body ? String(init.body) : undefined });
+      if (url.endsWith("/report-snapshot/versions")) return Promise.resolve(response(201, { ...envelope(baseSnapshot, 4), dropped: { claims: 2, answers: 0, context_fields: ["COURT"], findings_table: false, site_location: true } }));
+      return routed(superseded)(input, init);
+    }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Iniciar nova versão do laudo" }));
+    expect(await screen.findByText(/Saíram desta versão: 2 textos sem fonte atual; contexto processual a confirmar: .+; localização do imóvel\./)).toBeInTheDocument();
+    expect(JSON.parse(calls.find((call) => call.url.endsWith("/versions"))!.body!)).toEqual({ expected_revision: 3 });
+    expect(screen.queryByRole("button", { name: "Iniciar nova versão do laudo" })).not.toBeInTheDocument();
+  });
+
+  test("the confirmed site location is inserted in the inspection section", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const located = { ...baseSnapshot, site_location: { latitude: -23.55052, longitude: -46.633308, address_label: "Rua Sintética, 100", source_revision: 2, source_checksum: "a".repeat(64) } };
+    vi.stubGlobal("fetch", routed(baseSnapshot, (body) => { bodies.push(body); return response(200, envelope(located, 4)); }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Inserir localização" }));
+    await waitFor(() => expect(bodies).toEqual([{ expected_revision: 3, action: "SET_SITE_LOCATION", values: {} }]));
+    expect(await screen.findByText("23,550520° S, 46,633308° O")).toBeInTheDocument();
+  });
+
   test("requires the master expert profile before starting a report", async () => {
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);

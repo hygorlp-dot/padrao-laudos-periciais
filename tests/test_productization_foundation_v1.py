@@ -239,6 +239,7 @@ def test_every_portable_material_artifact_has_an_explicit_finite_strategy() -> N
         "PJE_INTAKE_V1",
         "PROCESS_CASE",
         "REPORT_SNAPSHOT_V1",
+        "SITE_LOCATION_V1",
         "TECHNICAL_SNAPSHOT_V1",
         "AI_RUN",
         "AI_PROPOSAL",

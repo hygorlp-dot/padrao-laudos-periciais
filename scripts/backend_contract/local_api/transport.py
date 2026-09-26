@@ -10,6 +10,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from urllib.parse import unquote_to_bytes, urlsplit
 
+from ..site_location import LocationInputError, site_location_to_mapping
 from ..application.content import (
     DOCUMENT_IO_CHUNK_BYTES,
     MAX_DOCUMENT_BYTES,
@@ -167,10 +168,14 @@ class LocalApiServices:
     start_report_snapshot: object | None = None
     review_report_snapshot: object | None = None
     amend_report_draft: object | None = None
+    start_report_version: object | None = None
     list_report_sources: object | None = None
     export_report_audit_trail: object | None = None
     store_delivery_template: object | None = None
     store_default_delivery_template: object | None = None
+    get_site_location: object | None = None
+    propose_site_location: object | None = None
+    confirm_site_location: object | None = None
     get_delivery_artifact: object | None = None
     get_delivery_snapshot: object | None = None
     get_delivery_history: object | None = None
@@ -677,7 +682,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -704,6 +709,38 @@ class LocalApi:
                         raise ValueError("name inválido")
                     record = self._services.create_workspace.execute(dto["name"])
                     return _json_response(201, _workspace_dto(record))
+                return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "site-location":
+                workspace_id = self._workspace_id(raw_segments[2])
+                if self._services.get_site_location is None or self._services.propose_site_location is None or self._services.confirm_site_location is None:
+                    return _error(503, "SITE_LOCATION_UNAVAILABLE")
+                if len(raw_segments) == 5:
+                    if raw_segments[4] != "confirmation":
+                        return _error(404, "NOT_FOUND")
+                    if normalized_method != "POST":
+                        return _error(405, "METHOD_NOT_ALLOWED")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"expected_revision"} or type(dto["expected_revision"]) is not int or dto["expected_revision"] < 1:
+                        raise ValueError("Site Location confirmation is invalid")
+                    record, location = self._services.confirm_site_location.execute(workspace_id, expected_revision=dto["expected_revision"])
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "location": site_location_to_mapping(location)})
+                if normalized_method == "GET":
+                    record, location = self._services.get_site_location.execute(workspace_id)
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "location": site_location_to_mapping(location)})
+                if normalized_method == "PUT":
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"expected_revision", "input", "address_label", "note"}:
+                        raise ValueError("Site Location request is invalid")
+                    try:
+                        record, location = self._services.propose_site_location.execute(
+                            workspace_id, location_input=dto["input"], address_label=dto["address_label"], note=dto["note"],
+                            expected_revision=dto["expected_revision"],
+                        )
+                    except LocationInputError as exc:
+                        # The reason guides the expert: a short link, or text naming no coordinates.
+                        return _error(422, f"LOCATION_{exc.reason}", "localização não reconhecida")
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "location": site_location_to_mapping(location)})
                 return _error(405, "METHOD_NOT_ALLOWED")
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "expert-profile":
@@ -842,6 +879,18 @@ class LocalApi:
                 if self._services.export_report_audit_trail is None:
                     return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
                 return _json_response(200, self._services.export_report_audit_trail.execute(workspace_id))
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "versions"):
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.start_report_version is None:
+                    return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_revision"} or type(dto["expected_revision"]) is not int or dto["expected_revision"] < 1:
+                    raise ValueError("Report version request is invalid")
+                record, snapshot, dropped = self._services.start_report_version.execute(workspace_id, expected_revision=dto["expected_revision"])
+                return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot), "dropped": dropped})
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "draft-amendments"):
                 workspace_id = self._workspace_id(raw_segments[2])

@@ -778,6 +778,9 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
                 f"ACHADO | {answer.finding_id}", f"EVIDÊNCIAS | {', '.join(answer.evidence_ids)}",
                 f"MÉTODOS | {', '.join(answer.method_ids)}", f"DECISÃO | {answer.decision_id}",
             ))
+    if report.site_location is not None:
+        site = report.site_location
+        lines.append(f"LOCALIZAÇÃO | SITE_LOCATION_V1 | revisão {site.source_revision} | {site.source_checksum} | {site.latitude}, {site.longitude} | {site.address_label or 'SEM_ENDEREÇO'}")
     for row in report.findings_table or ():
         lines.append(f"TABELA DE ACHADOS | {row.provenance.source_kind} | {row.provenance.source_id} | revisão {row.provenance.source_revision} | {row.manifestation} | {row.environment or 'SEM_AMBIENTE'} | {row.finding} | {row.situation or 'SEM_SITUAÇÃO'}")
     for reference in report.references or ():
@@ -828,6 +831,13 @@ class ReportPresentationBlock:
         return (self.visible_text,)
 
 
+def _site_location_sentence(site) -> str:
+    coordinates = f"coordenadas geográficas {site.coordinates_text} (WGS 84), conferidas pelo perito"
+    if site.address_label:
+        return _canonical_text(f"Local vistoriado: {site.address_label.rstrip('.')}; {coordinates}.")
+    return _canonical_text(f"Local vistoriado nas {coordinates}.")
+
+
 FINDINGS_TABLE_HEADER = ("Item", "Manifestação", "Ambiente", "Achado", "Situação")
 
 
@@ -866,6 +876,8 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
     number = 0
     for section in sorted(report.sections, key=lambda item: item.order):
         body: list[ReportPresentationBlock] = []
+        if section.kind == "INSPECTION" and report.site_location is not None:
+            body.append(ReportPresentationBlock("PARAGRAPH", _site_location_sentence(report.site_location)))
         if section.kind == "TECHNICAL_FINDINGS" and report.findings_table:
             body.extend(_findings_table_blocks(report, 1))
         for claim in claims_by_section[section.section_id]:

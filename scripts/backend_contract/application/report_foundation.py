@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, replace
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
@@ -28,6 +29,7 @@ from ..report_foundation import (
     ReportProvenance,
     ReportReference,
     ReportReviewDecision,
+    ReportSiteLocation,
     ReportSection,
     ReportSnapshot,
     ReportSourceSnapshot,
@@ -40,6 +42,7 @@ from ..report_foundation import (
     report_claim_for_source,
     editorial_profile_from_mapping,
 )
+from ..site_location import SiteLocationState
 from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mapping
 from ..vistoria import InspectionSession, inspection_session_to_mapping
 from .models import thaw_payload
@@ -181,6 +184,38 @@ def _reconcile(snapshot: ReportSnapshot, current: ReportSourceSnapshot) -> Repor
     )
 
 
+def _site_location_reasons(snapshot: ReportSnapshot, get_site_location) -> tuple[str, ...]:
+    """Why the captured site location no longer matches its confirmed record."""
+    captured = snapshot.site_location
+    if captured is None:
+        return ()
+    if get_site_location is None:
+        return ("site location authority unavailable",)
+    try:
+        record, location = get_site_location.execute(snapshot.workspace_id)
+    except ArtifactRevisionNotFound:
+        return ("site location removed",)
+    if (
+        record.revision != captured.source_revision
+        or record.checksum_sha256 != captured.source_checksum
+        or location.state is not SiteLocationState.CONFIRMED
+        or (location.latitude, location.longitude, location.address_label) != (captured.latitude, captured.longitude, captured.address_label)
+    ):
+        return ("site location changed",)
+    return ()
+
+
+def _with_site_location_staleness(snapshot: ReportSnapshot, get_site_location) -> ReportSnapshot:
+    reasons = _site_location_reasons(snapshot, get_site_location)
+    if not reasons:
+        return snapshot
+    return replace(
+        snapshot, state=ReportState.DRAFT, review_decisions=(),
+        coverage=replace(snapshot.coverage, complete=False), upstream_stale=True,
+        upstream_stale_reasons=(*snapshot.upstream_stale_reasons, *reasons),
+    )
+
+
 def _validate_answer_chains(snapshot: ReportSnapshot, technical: TechnicalSnapshot) -> None:
     findings = {item.finding_id: item for item in technical.findings}
     proposals = {item.proposal_id: item for item in technical.finding_proposals}
@@ -217,32 +252,42 @@ def _validate_claim_provenance(
     technical: TechnicalSnapshot,
     pathology: ConstructionDefectAnalysisSnapshot | None,
 ) -> None:
-    pathology_ids = set(pathology.effective_pat_ids) if pathology is not None else set()
-    sources = {
-        "ALLEGATION": ({item.item_id for item in case.claims}, snapshot.source_snapshot.case_analysis_revision),
-        "COURT_DECISION": ({item.item_id for item in case.decisions}, snapshot.source_snapshot.case_analysis_revision),
-        "CASE_DOCUMENT": ({item.document_id for item in case.documents}, snapshot.source_snapshot.case_analysis_revision),
-        "FIELD_OBSERVATION": ({item.observation_id for item in inspection.observations}, snapshot.source_snapshot.inspection_session_revision),
-        "MEASUREMENT": ({item.measurement_id for item in inspection.measurements}, snapshot.source_snapshot.inspection_session_revision),
-        "PATHOLOGY": (
-            pathology_ids,
-            snapshot.source_snapshot.construction_defect_analysis_revision,
-        ),
-        "TECHNICAL_FINDING": ({item.finding_id for item in technical.findings}, snapshot.source_snapshot.technical_snapshot_revision),
-        "PROFESSIONAL_DECISION": ({item.decision_id for item in technical.decisions}, snapshot.source_snapshot.technical_snapshot_revision),
-    }
+    sources = _claim_sources(snapshot.source_snapshot, case, inspection, technical, pathology)
     bound = [provenance for claim in snapshot.claims for provenance in claim.provenance]
     bound.extend(row.provenance for row in snapshot.findings_table or ())
     for provenance in bound:
         identities, revision = sources[provenance.source_kind]
         if provenance.source_id not in identities or provenance.source_revision != revision:
             raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
+    context_sources = _context_sources(case, technical)
+    for item in snapshot.context_matrix:
+        if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field]:
+            raise ValueError("Report Snapshot context provenance is not present in bound upstream authority")
+    if snapshot.state is ReportState.APPROVED and {item.question_id for item in snapshot.answers} != {item.question_id for item in technical.question_links}:
+        raise ValueError("approved Report Snapshot must answer every bound technical question")
+
+
+def _claim_sources(binding: ReportSourceSnapshot, case, inspection, technical, pathology) -> dict[str, tuple[set[str], int | None]]:
+    """Every citable identity per source kind, with the revision the binding names."""
+    return {
+        "ALLEGATION": ({item.item_id for item in case.claims}, binding.case_analysis_revision),
+        "COURT_DECISION": ({item.item_id for item in case.decisions}, binding.case_analysis_revision),
+        "CASE_DOCUMENT": ({item.document_id for item in case.documents}, binding.case_analysis_revision),
+        "FIELD_OBSERVATION": ({item.observation_id for item in inspection.observations}, binding.inspection_session_revision),
+        "MEASUREMENT": ({item.measurement_id for item in inspection.measurements}, binding.inspection_session_revision),
+        "PATHOLOGY": (set(pathology.effective_pat_ids) if pathology is not None else set(), binding.construction_defect_analysis_revision),
+        "TECHNICAL_FINDING": ({item.finding_id for item in technical.findings}, binding.technical_snapshot_revision),
+        "PROFESSIONAL_DECISION": ({item.decision_id for item in technical.decisions}, binding.technical_snapshot_revision),
+    }
+
+
+def _context_sources(case, technical) -> dict[str, set[str]]:
     documents = {item.document_id for item in case.documents}
     claims = {item.item_id for item in case.claims}
     decisions = {item.item_id for item in case.decisions}
     participants = {item.participant_id for item in case.judicial_context.participants}
     questions = {item.item_id for item in case.questions} | {item.question_id for item in technical.question_links}
-    context_sources = {
+    return {
         "PROCESS_NUMBER": documents | decisions,
         "COURT": documents | decisions,
         "PARTIES": participants | documents,
@@ -250,11 +295,6 @@ def _validate_claim_provenance(
         "CLAIM_AND_GROUNDS": claims | documents,
         "REQUESTS": questions | decisions | documents,
     }
-    for item in snapshot.context_matrix:
-        if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field]:
-            raise ValueError("Report Snapshot context provenance is not present in bound upstream authority")
-    if snapshot.state is ReportState.APPROVED and {item.question_id for item in snapshot.answers} != {item.question_id for item in technical.question_links}:
-        raise ValueError("approved Report Snapshot must answer every bound technical question")
 
 
 def _optional_pathology(workspace_id, service):
@@ -318,8 +358,9 @@ class SaveReportSnapshot:
     clock: object
     ids: object
     get_construction_defect_analysis: object | None = None
+    get_site_location: object | None = None
 
-    def execute(self, workspace_id, snapshot: ReportSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False, allow_initial_create: bool = False):
+    def execute(self, workspace_id, snapshot: ReportSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False, allow_initial_create: bool = False, allow_new_version: bool = False):
         if type(snapshot) is not ReportSnapshot or snapshot.workspace_id != str(workspace_id) or snapshot.upstream_stale:
             raise ValueError("Report Snapshot workspace or stale state is invalid")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
@@ -339,7 +380,7 @@ class SaveReportSnapshot:
                 ),
                 self.get_construction_defect_analysis,
             )
-            if _reconcile(snapshot, current[-1]).upstream_stale:
+            if _reconcile(snapshot, current[-1]).upstream_stale or _site_location_reasons(snapshot, self.get_site_location):
                 raise ValueError("Report Snapshot upstream authority is stale")
             _validate_answer_chains(snapshot, current[5])
             _validate_claim_provenance(
@@ -348,10 +389,16 @@ class SaveReportSnapshot:
             if expected_revision is not None:
                 predecessor_record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
                 predecessor = validated_report_snapshot_from_mapping(thaw_payload(predecessor_record.payload))
-                if not allow_review_transition and snapshot.review_decisions != predecessor.review_decisions:
+                if allow_new_version:
+                    # A new version replaces only a report that can no longer
+                    # change itself, and starts every professional review again.
+                    stale = _reconcile(predecessor, current[-1]).upstream_stale or bool(_site_location_reasons(predecessor, self.get_site_location))
+                    if snapshot.state is not ReportState.DRAFT or snapshot.review_decisions or not (predecessor.state is ReportState.SUPERSEDED or stale):
+                        raise ValueError("Report new version requires a superseded or stale predecessor")
+                elif not allow_review_transition and snapshot.review_decisions != predecessor.review_decisions:
                     raise ValueError("Report Snapshot review decisions require the professional review command")
-                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table")
-                if predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
+                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table", "site_location")
+                if not allow_new_version and predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
                     raise ValueError("Report Snapshot material change requires a new draft before professional review")
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:
@@ -378,6 +425,7 @@ class GetReportSnapshot:
     get_technical_snapshot: object
     get_expert_profile: object
     get_construction_defect_analysis: object | None = None
+    get_site_location: object | None = None
 
     def execute(self, workspace_id):
         record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
@@ -392,7 +440,7 @@ class GetReportSnapshot:
             ),
             self.get_construction_defect_analysis,
         )
-        return record, _reconcile(snapshot, current[-1])
+        return record, _with_site_location_staleness(_reconcile(snapshot, current[-1]), self.get_site_location)
 
 
 @dataclass(frozen=True, slots=True)
@@ -439,6 +487,7 @@ class AmendReportDraft:
     get_case_analysis: object | None = None
     get_technical_snapshot: object | None = None
     get_construction_defect_analysis: object | None = None
+    get_site_location: object | None = None
 
     def execute(self, workspace_id, *, expected_revision: int, action: str, values: dict):
         record, snapshot = self.get_snapshot.execute(workspace_id)
@@ -496,6 +545,24 @@ class AmendReportDraft:
             if values != {} or snapshot.findings_table is None:
                 raise ValueError("Report findings table amendment is invalid")
             amended = replace(snapshot, findings_table=None)
+        elif action == "SET_SITE_LOCATION":
+            if values != {} or self.get_site_location is None:
+                raise ValueError("Report site location amendment is invalid")
+            try:
+                location_record, location = self.get_site_location.execute(workspace_id)
+            except ArtifactRevisionNotFound as exc:
+                raise ValueError("Report site location requires a confirmed location") from exc
+            if location.state is not SiteLocationState.CONFIRMED:
+                raise ValueError("Report site location requires a confirmed location")
+            captured = ReportSiteLocation(
+                float(location.latitude), float(location.longitude), location.address_label,
+                location_record.revision, location_record.checksum_sha256,
+            )
+            amended = replace(snapshot, site_location=captured)
+        elif action == "REMOVE_SITE_LOCATION":
+            if values != {} or snapshot.site_location is None:
+                raise ValueError("Report site location amendment is invalid")
+            amended = replace(snapshot, site_location=None)
         elif action == "SET_EDITORIAL_PROFILE":
             if set(values) != {"editorial_profile"}:
                 raise ValueError("Report editorial amendment is invalid")
@@ -566,37 +633,136 @@ class AmendReportDraft:
         return saved, amended
 
     def _findings_rows(self, workspace_id, snapshot: ReportSnapshot) -> tuple[ReportFindingRow, ...]:
-        """One row per approved pathology, in the analysis order, as recorded.
-
-        Nothing is inferred: a pathology without a described manifestation or
-        an observed (or concluded) finding refuses the table instead of filling
-        a cell the record does not support.  The save re-checks the bound
-        revision, so a table captured from stale authority is refused there.
-        """
         revision = snapshot.source_snapshot.construction_defect_analysis_revision
         if revision is None or self.get_construction_defect_analysis is None:
             raise ValueError("Report findings table has no bound pathology authority")
         _, pathology = _optional_pathology(workspace_id, self.get_construction_defect_analysis)
-        effective = set(pathology.effective_pat_ids) if pathology is not None else set()
-        rows = []
-        for item in (pathology.analysis_final.get("patologias", ()) if pathology is not None else ()):
-            if not isinstance(item, Mapping) or item.get("id") not in effective:
+        return _findings_rows_from(pathology, revision, self.ids)
+
+
+def _findings_rows_from(pathology, revision: int, ids) -> tuple[ReportFindingRow, ...]:
+    """One row per approved pathology, in the analysis order, as recorded.
+
+    Nothing is inferred: a pathology without a described manifestation or
+    an observed (or concluded) finding refuses the table instead of filling
+    a cell the record does not support.  The save re-checks the bound
+    revision, so a table captured from stale authority is refused there.
+    """
+    effective = set(pathology.effective_pat_ids) if pathology is not None else set()
+    rows = []
+    for item in (pathology.analysis_final.get("patologias", ()) if pathology is not None else ()):
+        if not isinstance(item, Mapping) or item.get("id") not in effective:
+            continue
+        observed = item.get("constatacao") if isinstance(item.get("constatacao"), Mapping) else {}
+        finding = observed.get("descricao") or item.get("conclusao_tecnica")
+        manifestation = item.get("manifestacao")
+        if not isinstance(manifestation, str) or not manifestation.strip() or not isinstance(finding, str) or not finding.strip():
+            raise ValueError("Report findings table requires described pathologies")
+        environment = item.get("ambiente")
+        situation = observed.get("situacao")
+        rows.append(ReportFindingRow(
+            manifestation.strip(), environment.strip() if isinstance(environment, str) and environment.strip() else None,
+            finding.strip(), situation if isinstance(situation, str) else None,
+            ReportProvenance(f"PROVENANCE-{str(ids.new_uuid()).upper()}", "PATHOLOGY", item["id"], revision),
+        ))
+    if not rows:
+        raise ValueError("Report findings table requires approved pathologies")
+    return tuple(rows)
+
+
+@dataclass(frozen=True, slots=True)
+class StartReportVersion:
+    """The expert opens the next version of a superseded or stale report.
+
+    A report superseded by its reviewer, or bound to authorities that changed
+    after it was written, can no longer change itself -- and nothing else let
+    the expert continue.  The next version is a draft bound to the current
+    authorities: what they still support is carried over, everything they no
+    longer support is dropped and reported back, and every professional review
+    starts again.  The earlier versions stay in the append-only history.
+    """
+    get_latest_revision: object
+    get_case_analysis: object
+    get_inspection_session: object
+    get_technical_snapshot: object
+    get_expert_profile: object
+    save_snapshot: object
+    ids: object
+    get_construction_defect_analysis: object | None = None
+    get_site_location: object | None = None
+
+    def execute(self, workspace_id, *, expected_revision: int):
+        record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
+        if type(expected_revision) is not int or record.revision != expected_revision:
+            raise RepositoryConflict("expected report revision is not latest")
+        stored = validated_report_snapshot_from_mapping(thaw_payload(record.payload))
+        current = _current(
+            workspace_id,
+            (self.get_case_analysis, self.get_inspection_session, self.get_technical_snapshot, self.get_expert_profile),
+            self.get_construction_defect_analysis,
+        )
+        case, inspection, technical, profile, pathology, binding = current[1], current[3], current[5], current[7], current[9], current[-1]
+        stale = _reconcile(stored, binding).upstream_stale or bool(_site_location_reasons(stored, self.get_site_location))
+        if stored.state is not ReportState.SUPERSEDED and not stale:
+            raise ValueError("a new report version requires a superseded or stale report")
+        if case.source_inventory_stale or inspection.upstream_stale or technical.upstream_stale:
+            raise ValueError("stale upstream cannot start a new report version")
+
+        sources = _claim_sources(binding, case, inspection, technical, pathology)
+        claims, dropped_claims = [], 0
+        for claim in stored.claims:
+            if all(item.source_id in sources[item.source_kind][0] and sources[item.source_kind][1] is not None for item in claim.provenance):
+                claims.append(replace(claim, provenance=tuple(replace(item, source_revision=sources[item.source_kind][1]) for item in claim.provenance)))
+            else:
+                dropped_claims += 1
+        kept_claims = tuple(claims)
+        answers, dropped_answers = [], 0
+        for answer in stored.answers:
+            try:
+                if not set(answer.claim_ids) <= {item.claim_id for item in kept_claims}:
+                    raise ValueError("answer lost its cited claims")
+                # The chain check reads only the claims and the answer.
+                _validate_answer_chains(SimpleNamespace(claims=kept_claims, answers=(answer,)), technical)
+            except ValueError:
+                dropped_answers += 1
                 continue
-            observed = item.get("constatacao") if isinstance(item.get("constatacao"), Mapping) else {}
-            finding = observed.get("descricao") or item.get("conclusao_tecnica")
-            manifestation = item.get("manifestacao")
-            if not isinstance(manifestation, str) or not manifestation.strip() or not isinstance(finding, str) or not finding.strip():
-                raise ValueError("Report findings table requires described pathologies")
-            environment = item.get("ambiente")
-            situation = observed.get("situacao")
-            rows.append(ReportFindingRow(
-                manifestation.strip(), environment.strip() if isinstance(environment, str) and environment.strip() else None,
-                finding.strip(), situation if isinstance(situation, str) else None,
-                ReportProvenance(f"PROVENANCE-{str(self.ids.new_uuid()).upper()}", "PATHOLOGY", item["id"], revision),
-            ))
-        if not rows:
-            raise ValueError("Report findings table requires approved pathologies")
-        return tuple(rows)
+            answers.append(answer)
+        context_sources = _context_sources(case, technical)
+        context, cleared_context = [], []
+        for item in stored.context_matrix:
+            if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field]:
+                cleared_context.append(item.field)
+                context.append(replace(item, status=ContextStatus.MISSING, source_id=None, note=f"[INFORMAÇÃO NECESSÁRIA: {item.field.lower()}]"))
+            else:
+                context.append(item)
+        findings_table = None
+        if stored.findings_table and binding.construction_defect_analysis_revision is not None:
+            try:
+                findings_table = _findings_rows_from(pathology, binding.construction_defect_analysis_revision, self.ids)
+            except ValueError:
+                findings_table = None
+        site_location = None
+        if stored.site_location is not None and self.get_site_location is not None:
+            try:
+                location_record, location = self.get_site_location.execute(workspace_id)
+            except ArtifactRevisionNotFound:
+                location = None
+            if location is not None and location.state is SiteLocationState.CONFIRMED:
+                site_location = ReportSiteLocation(float(location.latitude), float(location.longitude), location.address_label, location_record.revision, location_record.checksum_sha256)
+        answers_tuple, context_tuple = tuple(answers), tuple(context)
+        draft = replace(
+            stored, source_snapshot=binding, expert_profile=profile, context_matrix=context_tuple, claims=kept_claims,
+            answers=answers_tuple, review_decisions=(), state=ReportState.DRAFT, upstream_stale=False, upstream_stale_reasons=(),
+            findings_table=findings_table, site_location=site_location,
+            coverage=_draft_coverage(stored, claims=kept_claims, answers=answers_tuple, context=context_tuple),
+        )
+        saved = self.save_snapshot.execute(workspace_id, draft, expected_revision, allow_new_version=True)
+        dropped = {
+            "claims": dropped_claims, "answers": dropped_answers, "context_fields": cleared_context,
+            "findings_table": bool(stored.findings_table) and findings_table is None,
+            "site_location": stored.site_location is not None and site_location is None,
+        }
+        return saved, draft, dropped
 
 
 def _answer_for_question(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, technical: TechnicalSnapshot, *, answer_id: str, question_id: str, finding_id: str, text: str) -> ReportAnswer:

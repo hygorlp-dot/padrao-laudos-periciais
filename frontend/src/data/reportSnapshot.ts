@@ -22,6 +22,7 @@ export type ReportSnapshot = {
   state: string; coverage: { sections: number; material_claims: number; traceable_claims: number; answers: number; traceable_answers: number; cpc473_required_sections: number; cpc473_present_sections: number; context_required_fields: number; context_present_fields: number; complete: boolean; reasons: string[] };
   upstream_stale: boolean; upstream_stale_reasons: string[];
   references?: ReportReference[]; findings_table?: ReportFindingRow[];
+  site_location?: { latitude: number; longitude: number; address_label: string | null; source_revision: number; source_checksum: string };
 };
 export type ProfileEnvelope = { revision: number; updated_at: string; profile: ExpertProfile };
 export type ReportEnvelope = { revision: number; updated_at: string; snapshot: ReportSnapshot };
@@ -36,7 +37,12 @@ export async function getReportSnapshot(workspaceId: string, signal?: AbortSigna
 export async function startReportSnapshot(workspaceId: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}" })), workspaceId); }
 export async function saveReportSnapshot(workspaceId: string, envelope: ReportEnvelope, snapshot: ReportSnapshot) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, snapshot }) })), workspaceId); }
 export async function reviewReportSnapshot(workspaceId: string, envelope: ReportEnvelope, action: "MARK_REVIEWED" | "APPROVE" | "SUPERSEDE", reason: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot/reviews`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, action, professional_id: envelope.snapshot.expert_profile.profile_id, reason }) })), workspaceId); }
-export type ReportAmendment = "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE" | "ADD_REFERENCE" | "REMOVE_REFERENCE" | "SET_FINDINGS_TABLE" | "REMOVE_FINDINGS_TABLE";
+export type ReportAmendment = "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE" | "ADD_REFERENCE" | "REMOVE_REFERENCE" | "SET_FINDINGS_TABLE" | "REMOVE_FINDINGS_TABLE" | "SET_SITE_LOCATION" | "REMOVE_SITE_LOCATION";
+export type ReportVersionDropped = { claims: number; answers: number; context_fields: string[]; findings_table: boolean; site_location: boolean };
+export async function startReportVersion(workspaceId: string, envelope: ReportEnvelope) {
+  const value = await decode(await fetch(`${base(workspaceId)}/report-snapshot/versions`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision }) })) as ReportEnvelope & { dropped: ReportVersionDropped };
+  return { envelope: reportEnvelope(value, workspaceId), dropped: value.dropped };
+}
 export async function amendReportDraft(workspaceId: string, envelope: ReportEnvelope, action: ReportAmendment, values: Record<string, unknown>) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot/draft-amendments`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, action, values }) })), workspaceId); }
 
 export type ReportSourceKind = "ALLEGATION" | "COURT_DECISION" | "CASE_DOCUMENT" | "FIELD_OBSERVATION" | "MEASUREMENT" | "PATHOLOGY" | "TECHNICAL_FINDING" | "PROFESSIONAL_DECISION";
