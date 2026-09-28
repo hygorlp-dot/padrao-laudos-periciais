@@ -761,6 +761,9 @@ def _canonical_report_lines(report: ReportSnapshot) -> tuple[str, ...]:
     mapping = report_snapshot_to_mapping(report)
     digest = sha256(json.dumps(mapping, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
     lines = [f"LAUDO CANÔNICO | {report.report_id}", f"REPORT_SNAPSHOT_SHA256 | {digest}"]
+    for name, owner in (("process_record", "PROCESS_CASE"), ("property_record", "PROPERTY_RECORD_V1")):
+        if name in mapping:
+            lines.append(f"CAPTURA | {owner} | " + json.dumps(mapping[name], ensure_ascii=False, sort_keys=True))
     for item in report.context_matrix:
         lines.append(f"CONTEXTO | {item.field} | {item.status.value} | {item.source_id or 'SEM_FONTE'} | {item.note}")
     claims_by_section = {section.section_id: [] for section in report.sections}

@@ -548,6 +548,10 @@ class ReportProcess:
     parte_requerente: str
     parte_requerida: str
 
+    @property
+    def has_identity(self) -> bool:
+        return bool(self.numero_processo.strip() and (self.vara.strip() or self.tribunal.strip()))
+
     def __post_init__(self):
         if not _text(self.workspace_id):
             raise ValueError("report process workspace is invalid")
@@ -641,6 +645,8 @@ class ReportSnapshot:
             raise ValueError("report site location is invalid")
         if self.process_record is not None and (type(self.process_record) is not ReportProcess or self.process_record.workspace_id != self.workspace_id):
             raise ValueError("report process workspace mismatch")
+        if self.state is ReportState.APPROVED and self.process_record is not None and not self.process_record.has_identity:
+            raise ValueError("approved report requires complete captured process identity")
         if self.property_record is not None and (type(self.property_record) is not ReportProperty or self.property_record.record.workspace_id != self.workspace_id):
             raise ValueError("report property workspace is invalid")
         if self.figures is not None:

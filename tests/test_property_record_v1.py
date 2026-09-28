@@ -132,6 +132,21 @@ def test_local_product_saves_property_and_backup_requires_its_professional(tmp_p
         assert status == 200
         restored = VerifyWorkspaceBackup().execute(backup)
         assert any(r["artifact_kind"] == "PROPERTY_RECORD_V1" for r in restored.artifact_revisions)
+        from tests.test_product_integration_oracle_v1 import _reseal
+        from scripts.backend_contract.application.ports import RepositoryIntegrityError
+        for tamper in ("page", "excerpt", "method"):
+            altered = json.loads(backup)
+            property_revision = next(r for r in altered["artifact_revisions"] if r["artifact_kind"] == "PROPERTY_RECORD_V1" and r["revision"] == 2)
+            value = next(v for v in property_revision["payload"]["values"] if v["field"] == "owner")
+            if tamper == "page":
+                value["evidence"]["page"] = 2
+            elif tamper == "excerpt":
+                value["value"] = value["evidence"]["source_value"] = "Pessoa inventada"
+                value["evidence"]["excerpt"] = "Proprietário do imóvel: Pessoa inventada"
+            else:
+                value["evidence"]["method"] = "LABEL_OCR_V1"
+            with pytest.raises(RepositoryIntegrityError, match="property source evidence"):
+                VerifyWorkspaceBackup().execute(_reseal(altered))
     finally:
         runtime.close()
 
@@ -214,6 +229,56 @@ def test_report_presentation_reuses_confirmed_property_and_process_not_context_t
     assert "Logradouro: Rua Sintética" in [block.text for block in professional_report_blocks(report)]
     assert _FIELD_VALUES["PROCESS_NUMBER"](report) == "Número confirmado"
     assert _FIELD_VALUES["COURT"](report) == "Vara confirmada · Tribunal confirmado"
+    from scripts.backend_contract.delivery_renderer import canonical_report_audit_lines
+    audit = "\n".join(canonical_report_audit_lines(report))
+    assert "PROPERTY_RECORD_V1" in audit and "Rua Sintética" in audit
+    assert "PROCESS_CASE" in audit and "Número confirmado" in audit
+
+
+def test_process_change_between_validation_and_commit_conflicts_without_appending_report():
+    from scripts.backend_contract.application.models import ProcessCaseData
+    from scripts.backend_contract.application.ports import RepositoryConflict
+    from scripts.backend_contract.report_foundation import ReportProcess
+    from tests.test_report_version_v1 import _service, _superseded
+    stored = _superseded()
+    captured = ReportProcess(stored.workspace_id, 1, "a" * 64, **ProcessCaseData.empty().as_dict())
+    current_revision = 1
+    calls = 0
+    def captured_then_advance(_workspace):
+        nonlocal current_revision, calls
+        calls += 1
+        if calls == 2:
+            current_revision = 2  # Another ProcessCase request commits after validation's read.
+        return captured
+    service, appended = _service(stored)
+    previous_latest = service.get_latest_revision.execute
+    latest = SimpleNamespace(execute=lambda workspace, kind, identity: SimpleNamespace(artifact_kind=kind, artifact_id=identity, revision=current_revision, checksum_sha256=("a" if current_revision == 1 else "b") * 64) if kind == "PROCESS_CASE" else previous_latest(workspace, kind, identity))
+    previous_append = service.save_snapshot.revisions.append_if_latest
+    def commit(**kwargs):
+        dependency = next(item for item in kwargs["expected_dependencies"] if item["artifact_kind"] == "PROCESS_CASE")
+        if dependency["revision"] != current_revision:
+            raise RepositoryConflict("dependency advanced")
+        return previous_append(**kwargs)
+    reader = SimpleNamespace(execute=captured_then_advance)
+    save = replace(service.save_snapshot, get_latest_revision=latest, get_process_record=reader, revisions=SimpleNamespace(append_if_latest=commit))
+    service = replace(service, get_latest_revision=latest, get_process_record=reader, save_snapshot=save)
+    with pytest.raises(RepositoryConflict, match="dependency advanced"):
+        service.execute(stored.workspace_id, expected_revision=4)
+    assert appended == []
+
+
+@pytest.mark.parametrize("missing", ["number", "court"])
+def test_partial_captured_process_cannot_be_presented_as_approved(missing):
+    from scripts.backend_contract.application.models import ProcessCaseData
+    from scripts.backend_contract.report_foundation import ReportProcess
+    from tests.test_report_foundation_v1 import bound_report
+    report = bound_report()
+    data = ProcessCaseData.empty().as_dict()
+    data.update(numero_processo="Processo confirmado", vara="Vara confirmada")
+    data["numero_processo" if missing == "number" else "vara"] = ""
+    captured = ReportProcess(report.workspace_id, 1, "a" * 64, **data)
+    with pytest.raises(ValueError, match="captured process identity"):
+        replace(report, process_record=captured)
 
 
 @pytest.mark.parametrize("capture_kind", ["property_record", "process_record"])
@@ -238,7 +303,7 @@ def test_backup_captures_are_checked_against_exact_source(capture_kind, tamper):
     else:
         from scripts.backend_contract.application.models import ProcessCaseData
         data = ProcessCaseData.empty().as_dict()
-        data["parte_requerente"] = "Parte sintética"
+        data.update(parte_requerente="Parte sintética", numero_processo="Número sintético", vara="Vara sintética")
         source = _revision("PROCESS_CASE", "PROCESS_CASE", data, 1, 992)
         revisions.append(source)
         captured = {**ProcessCaseData.from_mapping(source["payload"]).as_dict(), "workspace_id": workspace, "source_revision": source["revision"], "source_checksum": source["checksum_sha256"]}
@@ -260,3 +325,29 @@ def test_backup_captures_are_checked_against_exact_source(capture_kind, tamper):
             _verify_dependency_closure(records)
     else:
         _verify_dependency_closure(records)
+
+
+def test_real_local_ocr_property_evidence_survives_backup_replay():
+    import json
+    from hashlib import sha256
+    from io import BytesIO
+    from scripts.backend_contract.infrastructure.productization import VerifyWorkspaceBackup
+    from scripts.backend_contract.infrastructure.pdf_text import LocalPdfTextExtractor
+    from scripts.backend_contract.infrastructure.rapid_ocr import RapidOcrLatinEngine
+    from tests.test_local_ocr_v1 import scanned_pdf
+    from tests.test_product_integration_oracle_v1 import _longitudinal_backup, _private, _revision, _reseal
+    backup = json.loads(_longitudinal_backup()[0])
+    workspace = backup["workspace"]["workspace_id"]
+    source = scanned_pdf("CEP: 40000-000")
+    document_id = "81000000-0000-4000-8000-000000000001"
+    checksum = sha256(source).hexdigest()
+    result = LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()).extract(BytesIO(source), document_sha256=checksum)
+    proposals = property_proposals(workspace, document_id, checksum, "imovel-digitalizado.pdf", result.pages)
+    proposal = next(p for p in proposals if p.field == "postal_code")
+    assert proposal.value == "40000-000" and proposal.evidence.method == "LABEL_OCR_V1"
+    profile = next(r["payload"] for r in backup["artifact_revisions"] if r["artifact_kind"] == "EXPERT_MASTER_PROFILE_V1")
+    record = PropertyRecord("1.0.0", workspace, (PropertyValue(proposal.field, proposal.value, proposal.evidence, profile["profile_id"], "2026-09-28T12:00:00+00:00"),))
+    backup["artifact_revisions"].append(_revision("PROPERTY_RECORD_V1", "PROPERTY-RECORD", property_record_to_mapping(record), 1, 995))
+    backup["artifact_revisions"].sort(key=lambda r: (r["artifact_kind"], r["artifact_id"], r["revision"]))
+    backup["private_contents"].append(_private(document_id, source, "imovel-digitalizado.pdf", "application/pdf"))
+    assert VerifyWorkspaceBackup().execute(_reseal(backup)).workspace.workspace_id == workspace

@@ -255,6 +255,8 @@ def _process_reasons(snapshot, get_process_record, workspace_id):
 
 
 def _with_process_staleness(snapshot, get_process_record, workspace_id):
+    if snapshot.process_record is not None and not snapshot.process_record.has_identity and "captured process identity incomplete" not in snapshot.coverage.reasons:
+        snapshot = replace(snapshot, coverage=replace(snapshot.coverage, reasons=(*snapshot.coverage.reasons, "captured process identity incomplete")))
     reasons = _process_reasons(snapshot, get_process_record, workspace_id)
     if not reasons:
         return snapshot
@@ -496,16 +498,20 @@ class SaveReportSnapshot:
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("Report Snapshot clock requires timezone")
             records = [current[0], current[2], current[4], current[6]]
-            if snapshot.property_record is not None:
-                records.append(self.get_property_record.execute(workspace_id)[0])
             if (
                 current[-1].construction_defect_analysis_snapshot_id is not None
                 and current[8] is not None
             ):
                 records.append(current[8])
-            if snapshot.process_record is not None:
-                records.append(self.get_latest_revision.execute(workspace_id, "PROCESS_CASE", "PROCESS_CASE"))
             dependencies = tuple({"artifact_kind": item.artifact_kind, "artifact_id": item.artifact_id, "revision": item.revision, "checksum_sha256": item.checksum_sha256} for item in records)
+            # Guard the exact captures that were validated, not a newer source
+            # observed by a second read between validation and atomic commit.
+            for capture, kind, identity in (
+                (snapshot.property_record, "PROPERTY_RECORD_V1", "PROPERTY-RECORD"),
+                (snapshot.process_record, "PROCESS_CASE", "PROCESS_CASE"),
+            ):
+                if capture is not None:
+                    dependencies += ({"artifact_kind": kind, "artifact_id": identity, "revision": capture.source_revision, "checksum_sha256": capture.source_checksum},)
             return self.revisions.append_if_latest(
                 workspace_id=workspace_id, artifact_kind=REPORT_SNAPSHOT_ARTIFACT_KIND, artifact_id=REPORT_SNAPSHOT_ARTIFACT_ID,
                 revision_id=str(self.ids.new_uuid()), created_at=created_at.isoformat(), payload=report_snapshot_to_mapping(snapshot),

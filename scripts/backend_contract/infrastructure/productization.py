@@ -7,6 +7,7 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -17,7 +18,7 @@ from weakref import WeakKeyDictionary
 
 from ..photo_library import photo_library_from_mapping
 from ..site_location import site_location_from_mapping
-from ..property_record import property_record_from_mapping
+from ..property_record import property_record_from_mapping, property_proposals
 from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
@@ -892,6 +893,7 @@ class VerifyWorkspaceBackup:
             for item in private_contents
         }
         private_by_id = {str(item.metadata.content_id): item for item in private_contents}
+        property_source_proposals = {}
         for record in revisions:
             if record.artifact_kind == "CASE_ANALYSIS_SNAPSHOT_V1":
                 case = case_analysis_from_mapping(thaw_payload(record.payload))
@@ -904,6 +906,22 @@ class VerifyWorkspaceBackup:
                 property_record = property_record_from_mapping(thaw_payload(record.payload))
                 if any(item.evidence is not None and private_authority.get(item.evidence.document_id) != item.evidence.document_sha256 for item in property_record.values):
                     raise RepositoryIntegrityError("backup property source authority is incomplete")
+                for item in property_record.values:
+                    if item.evidence is None:
+                        continue
+                    evidence = item.evidence
+                    if evidence.document_id not in property_source_proposals:
+                        from .pdf_text import LocalPdfTextExtractor
+                        from .rapid_ocr import RapidOcrLatinEngine
+                        source = private_by_id[evidence.document_id]
+                        try:
+                            extracted = LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()).extract(BytesIO(source.content), document_sha256=source.metadata.checksum_sha256)
+                            proposals = property_proposals(workspace_id, evidence.document_id, source.metadata.checksum_sha256, source.metadata.original_filename, extracted.pages)
+                        except Exception as exc:
+                            raise RepositoryIntegrityError("backup property source evidence cannot be verified locally") from exc
+                        property_source_proposals[evidence.document_id] = proposals
+                    if not any((proposal.field, proposal.value, proposal.evidence) == (item.field, item.value, evidence) for proposal in property_source_proposals[evidence.document_id]):
+                        raise RepositoryIntegrityError("backup property source evidence diverges from document bytes")
             elif record.artifact_kind == "PJE_INTAKE_V1":
                 # O inventario nomeia a fonte privada de que foi derivado. Sem
                 # este fecho, um backup podia ser certificado intacto e restaurar

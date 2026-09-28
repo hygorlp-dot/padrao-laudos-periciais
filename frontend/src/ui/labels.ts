@@ -150,6 +150,7 @@ const REASON_LABELS: Array<[RegExp, string]> = [
   [/^site location changed$/, "A localização do imóvel mudou depois de inserida no laudo."],
   [/^property record changed$/, "O cadastro do imóvel mudou depois de inserido no laudo."],
   [/^process record changed$/, "Os dados do processo mudaram depois de inseridos no laudo."],
+  [/^captured process identity incomplete$/, "Complete o número do processo e o juízo na etapa Processo; depois abra uma nova versão do laudo."],
   [/^site location removed$/, "A localização do imóvel inserida no laudo não existe mais."],
   [/^site location authority unavailable$/, "A localização do imóvel não pôde ser conferida."],
   [/^Report draft requires complete CPC 319, CPC 473 and professional approval\.$/, "Falta concluir o contexto processual (art. 319), o conteúdo pericial (art. 473) ou a aprovação profissional."],

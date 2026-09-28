@@ -58,3 +58,27 @@ qualification or truth from an allegation.
   these product paths. Full gate and final independent review remain mandatory.
 - No private reports, reference PDF text/images, provider, geocoder, protected
   Word/PDF runtime file or trust-plane change is included.
+
+## Independent review corrections
+
+The independent reviewer and systemic auditor inspected candidate `980bd11`.
+The material findings were reproduced before correction:
+
+- Save validated process revision N but could guard N+1 after a second read.
+  Dependencies now bind the exact captured process/property revision and digest;
+  an intervening commit conflicts without appending the report.
+- A resealed backup could claim an invented page/excerpt/extraction method while
+  retaining genuine document bytes. Recovery now replays the existing local PDF
+  reader and explicit-label extraction and requires the exact evidence match.
+  This also passed with a synthetic scanned PDF and the real local OCR engine.
+  If the pinned reader/model cannot reproduce evidence, verification fails
+  explicitly; it does not certify unverified provenance.
+- Partial process captures cannot be approved when process number or court is
+  missing. The review screen explains the captured identity deficiency.
+- Canonical audit export includes process/property captures and their evidence.
+
+After these fixes: 228 affected backend tests passed; 207 frontend tests passed
+with one worker; TypeScript/build, ESLint and affected Ruff checks passed.
+Earlier frontend runs concurrent with the heavy core gate timed out on long
+typing tests. The isolated full run passed without increasing timeouts.
+Final exact-commit independent closure and the fresh full core gate are pending.
