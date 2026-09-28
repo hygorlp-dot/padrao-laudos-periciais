@@ -154,18 +154,19 @@ describe("professional report authoring (Laudo)", () => {
     expect(screen.getByDisplayValue("Afirmação documentada. (ABNT NBR 15575-1, 2021)")).toBeInTheDocument();
   });
 
-  test("the findings summary is captured from the bound pathology analysis and shown as a table", async () => {
+  test("the findings summary is available without pathology and presents effective technical findings", async () => {
     const bodies: Record<string, unknown>[] = [];
-    const bound = { ...baseSnapshot, source_snapshot: { ...baseSnapshot.source_snapshot, construction_defect_analysis_snapshot_id: "CDA-1", construction_defect_analysis_revision: 2, construction_defect_analysis_digest: "a".repeat(64) } };
-    const tabled = { ...bound, findings_table: [{ manifestation: "Umidade na interface.", environment: null, finding: "Manchas até 40 cm.", situation: "ANOMALIA", provenance: { provenance_id: "P-1", source_kind: "PATHOLOGY", source_id: "PAT-001", source_revision: 2 } }] };
-    vi.stubGlobal("fetch", routed(bound, (body) => { bodies.push(body); return response(200, envelope(tabled, 4)); }));
+    const tabled = { ...baseSnapshot, findings_table: [{ manifestation: "Interface inspecionada.", environment: null, finding: "Manchas até 40 cm.", situation: null, provenance: { provenance_id: "P-1", source_kind: "TECHNICAL_FINDING", source_id: "FINDING-001", source_revision: 2 } }] };
+    vi.stubGlobal("fetch", routed(baseSnapshot, (body) => { bodies.push(body); return response(200, envelope(tabled, 4)); }));
     render(<ReportFoundationView workspaceId={ID} />);
     fireEvent.click(await screen.findByRole("button", { name: "Inserir tabela-resumo dos achados" }));
     await waitFor(() => expect(bodies).toEqual([{ expected_revision: 3, action: "SET_FINDINGS_TABLE", values: {} }]));
     const table = await screen.findByRole("table", { name: "Tabela 1 – Resumo dos achados técnicos" });
-    expect(within(table).getByText("Não informado")).toBeInTheDocument();
-    expect(within(table).getByText("Anomalia")).toBeInTheDocument();
-    expect(within(table).queryByText("PAT-001")).not.toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Escopo" })).toBeInTheDocument();
+    expect(within(table).getByText("Interface inspecionada.")).toBeInTheDocument();
+    expect(within(table).getByText("Manchas até 40 cm.")).toBeInTheDocument();
+    expect(within(table).queryByText("FINDING-001")).not.toBeInTheDocument();
+    expect(within(table).queryByText("Anomalia")).not.toBeInTheDocument();
   });
 
   test("a superseded report opens its next version and says what did not carry over", async () => {

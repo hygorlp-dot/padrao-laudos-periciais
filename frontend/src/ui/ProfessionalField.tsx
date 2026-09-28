@@ -20,7 +20,7 @@ export function ProfessionalField({ label, value, onChange, profile, disabled, r
     <div className="professional-field">
       <label>
         {label}
-        <input value={value} onChange={(event) => onChange(event.target.value)} required={required} disabled={disabled} autoFocus={autoFocus} aria-describedby={hintId} />
+        <input value={usingProfile ? profile.full_name : value} readOnly={usingProfile} onChange={(event) => { if (!usingProfile) onChange(event.target.value); }} required={required} disabled={disabled} autoFocus={autoFocus} aria-describedby={hintId} />
       </label>
       <small className="field-hint" id={hintId}>
         {usingProfile
@@ -29,6 +29,7 @@ export function ProfessionalField({ label, value, onChange, profile, disabled, r
             ? "Identificação diferente do seu perfil de perito."
             : "Cadastre seu perfil na etapa Laudo para preencher este campo automaticamente."}
       </small>
+      {profile && <button className="text-action" type="button" disabled={disabled} onClick={() => onChange(usingProfile ? "" : profile.profile_id)}>{usingProfile ? "Usar outra identificação" : "Usar meu perfil"}</button>}
     </div>
   );
 }

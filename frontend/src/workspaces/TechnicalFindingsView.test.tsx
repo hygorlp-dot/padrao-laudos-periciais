@@ -115,9 +115,10 @@ describe("technical findings workbench", () => {
   test("prefills the deciding professional from the expert profile, still editable, never approving", async () => {
     vi.stubGlobal("fetch", routed(vi.fn(() => Promise.resolve(response(200, envelope))), { profile: true }));
     render(<ExpertIdentityProvider workspaceId={ID}><TechnicalFindingsView workspaceId={ID} /></ExpertIdentityProvider>);
-    await waitFor(() => expect(screen.getByLabelText("Profissional responsável")).toHaveValue("EXPERT-PROFILE-001"));
+    await waitFor(() => expect(screen.getByLabelText("Profissional responsável")).toHaveValue("Perita Sintética"));
     expect(screen.getAllByText(/Perita Sintética · CREA-XX 000000/).length).toBeGreaterThan(0);
     expect(screen.getByLabelText("Ação profissional")).toHaveValue("REJECT");
+    fireEvent.click(screen.getAllByRole("button", { name: "Usar outra identificação" })[0]);
     fireEvent.change(screen.getByLabelText("Profissional responsável"), { target: { value: "OUTRO" } });
     expect(screen.getByLabelText("Profissional responsável")).toHaveValue("OUTRO");
   });

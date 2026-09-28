@@ -905,6 +905,11 @@ button.text-action {
 .coverage::before { width: 3.5rem; height: 0.18rem; content: ""; background: var(--color-ochre); }
 .coverage span { color: var(--color-slate); font-size: 0.88rem; font-variant-numeric: tabular-nums; }
 
+.analysis-form { display: grid; gap: var(--space-4); min-width: 0; max-width: 46rem; }
+.analysis-form label { display: grid; gap: var(--space-2); min-width: 0; font-weight: 680; }
+.analysis-form :is(input, select, textarea) { width: 100%; min-width: 0; box-sizing: border-box; padding: 0.72rem; color: var(--color-graphite); background: var(--color-paper); border: 1px solid var(--color-rule-strong); border-radius: 0.32rem; font: inherit; }
+.analysis-form textarea { min-height: 6rem; resize: vertical; }
+.analysis-form > button { justify-self: start; }
 .analysis-section { padding: var(--space-6) 0; border-bottom: 1px solid var(--color-rule); }
 .analysis-section h3 { margin-bottom: var(--space-4); font-size: 1.2rem; }
 .analysis-list, .document-index, .participant-index, .relation-index { padding: 0; margin: 0; list-style: none; }

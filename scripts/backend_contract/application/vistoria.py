@@ -141,6 +141,10 @@ class SaveInspectionSession:
                 immutable = ("session_id", "workspace_id", "plan_snapshot", "started_at", "responsible_professional", "source_revision")
                 if any(getattr(session, name) != getattr(predecessor, name) for name in immutable):
                     raise ValueError("Inspection Session immutable authority changed")
+                if {(item.item_id, item.planning_item_id): item.title for item in session.items} != {
+                    (item.item_id, item.planning_item_id): item.title for item in predecessor.items
+                }:
+                    raise ValueError("Inspection Session planned item identity or title changed")
                 if session.reviews != predecessor.reviews:
                     raise ValueError("Inspection Session reviews require a dedicated professional command")
                 append_only = (
@@ -228,12 +232,16 @@ class StartInspectionSession:
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("Inspection Session clock requires timezone")
         item_by_id = {item.item_id: item for item in planning.material_items}
+        # Capture the approved context now, in this bound planning revision.
+        # Reopening an old session must never borrow text from a newer plan.
+        decisions = {item_id: max((decision for decision in planning.decisions if decision.target_item_id == item_id), key=lambda decision: decision.revision) for item_id in approved_ids}
+        contexts = {item_id: decision.decided_value or decision.proposal_value for item_id, decision in decisions.items()}
         location_id = f"LOCATION-{self.ids.new_uuid().hex.upper()}"
         items = tuple(
             InspectionItem(
                 item_id=f"INSPECTION-ITEM-{self.ids.new_uuid().hex.upper()}",
                 planning_item_id=item_id,
-                title=item_by_id[item_id].title,
+                title=f"{item_by_id[item_id].title} — {contexts[item_id]}" if contexts[item_id] != item_by_id[item_id].title else contexts[item_id],
                 state=ExecutionState.PENDING,
                 observation_ids=(), measurement_ids=(), photo_ids=(), limitation_ids=(), note=None,
             )

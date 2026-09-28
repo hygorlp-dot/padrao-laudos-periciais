@@ -36,6 +36,7 @@ from ..report_foundation import (
     ReportSourceSnapshot,
     ReportState,
     ReviewAction,
+    TABLE_TOKEN,
     report_snapshot_from_mapping,
     report_snapshot_to_mapping,
     expert_profile_from_mapping,
@@ -44,7 +45,7 @@ from ..report_foundation import (
     editorial_profile_from_mapping,
 )
 from ..site_location import SiteLocationState
-from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mapping
+from ..technical_findings import DecisionAction, TechnicalSnapshot, technical_snapshot_to_mapping
 from ..vistoria import InspectionSession, inspection_session_to_mapping
 from .models import thaw_payload
 from .ports import ArtifactRevisionNotFound, RepositoryConflict, RepositoryIntegrityError
@@ -264,12 +265,31 @@ def _validate_claim_provenance(
         identities, revision = sources[provenance.source_kind]
         if provenance.source_id not in identities or provenance.source_revision != revision:
             raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
+    validate_technical_findings_table(snapshot, technical)
     context_sources = _context_sources(case, technical)
     for item in snapshot.context_matrix:
         if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field]:
             raise ValueError("Report Snapshot context provenance is not present in bound upstream authority")
     if snapshot.state is ReportState.APPROVED and {item.question_id for item in snapshot.answers} != {item.question_id for item in technical.question_links}:
         raise ValueError("approved Report Snapshot must answer every bound technical question")
+
+
+def validate_technical_findings_table(snapshot: ReportSnapshot, technical: TechnicalSnapshot) -> None:
+    """The same presentation check at canonical save and portable recovery."""
+    rows = tuple(row for row in snapshot.findings_table or () if row.provenance.source_kind == "TECHNICAL_FINDING")
+    if not rows:
+        return  # Preserve legacy reports without changing their authority model.
+    source = snapshot.source_snapshot
+    if (snapshot.workspace_id != technical.workspace_id or source.technical_snapshot_id != technical.snapshot_id
+            or source.technical_snapshot_digest != report_upstream_digest(technical)):
+        raise ValueError("Report finding table has mismatched technical authority")
+    effective = {item.finding_id: item for item in _effective_findings(technical)}
+    for row in rows:
+        finding = effective.get(row.provenance.source_id)
+        if finding is None or row.provenance.source_revision != source.technical_snapshot_revision or (
+            row.manifestation, row.finding, row.environment, row.situation
+        ) != (finding.scope, finding.technical_proposition, None, None):
+            raise ValueError("Report finding row diverges from effective technical authority")
 
 
 def _claim_sources(binding: ReportSourceSnapshot, case, inspection, technical, pathology) -> dict[str, tuple[set[str], int | None]]:
@@ -658,41 +678,44 @@ class AmendReportDraft:
         return saved, amended
 
     def _findings_rows(self, workspace_id, snapshot: ReportSnapshot) -> tuple[ReportFindingRow, ...]:
-        revision = snapshot.source_snapshot.construction_defect_analysis_revision
-        if revision is None or self.get_construction_defect_analysis is None:
-            raise ValueError("Report findings table has no bound pathology authority")
-        _, pathology = _optional_pathology(workspace_id, self.get_construction_defect_analysis)
-        return _findings_rows_from(pathology, revision, self.ids)
+        if self.get_technical_snapshot is None:
+            raise ValueError("Report findings table has no technical authority")
+        record, technical = self.get_technical_snapshot.execute(workspace_id)
+        source = snapshot.source_snapshot
+        if (
+            type(technical) is not TechnicalSnapshot
+            or technical.workspace_id != str(workspace_id)
+            or snapshot.workspace_id != str(workspace_id)
+            or technical.snapshot_id != source.technical_snapshot_id
+            or record.revision != source.technical_snapshot_revision
+            or report_upstream_digest(technical) != source.technical_snapshot_digest
+        ):
+            raise ValueError("Report findings table technical authority mismatch")
+        return _findings_rows_from(technical, record.revision, self.ids)
 
 
-def _findings_rows_from(pathology, revision: int, ids) -> tuple[ReportFindingRow, ...]:
-    """One row per approved pathology, in the analysis order, as recorded.
+def _effective_findings(technical: TechnicalSnapshot):
+    """Read the validated decision chain; never promote an unreviewed proposal."""
+    if technical.upstream_stale:
+        raise ValueError("Report finding authority is stale")
+    superseded = {item.supersedes_decision_id for item in technical.decisions}
+    current = {item.decision_id for item in technical.decisions if item.decision_id not in superseded and item.action is not DecisionAction.REJECT}
+    return tuple(item for item in technical.findings if item.decision_id in current)
 
-    Nothing is inferred: a pathology without a described manifestation or
-    an observed (or concluded) finding refuses the table instead of filling
-    a cell the record does not support.  The save re-checks the bound
-    revision, so a table captured from stale authority is refused there.
+
+def _findings_rows_from(technical: TechnicalSnapshot, revision: int, ids) -> tuple[ReportFindingRow, ...]:
+    """Presentation of effective findings, bound to the entire decision snapshot.
+
+    Scope is not a pathology manifestation. No room, cause or classification is
+    inferred; the professional display uses the technical source's own labels.
     """
-    effective = set(pathology.effective_pat_ids) if pathology is not None else set()
-    rows = []
-    for item in (pathology.analysis_final.get("patologias", ()) if pathology is not None else ()):
-        if not isinstance(item, Mapping) or item.get("id") not in effective:
-            continue
-        observed = item.get("constatacao") if isinstance(item.get("constatacao"), Mapping) else {}
-        finding = observed.get("descricao") or item.get("conclusao_tecnica")
-        manifestation = item.get("manifestacao")
-        if not isinstance(manifestation, str) or not manifestation.strip() or not isinstance(finding, str) or not finding.strip():
-            raise ValueError("Report findings table requires described pathologies")
-        environment = item.get("ambiente")
-        situation = observed.get("situacao")
-        rows.append(ReportFindingRow(
-            manifestation.strip(), environment.strip() if isinstance(environment, str) and environment.strip() else None,
-            finding.strip(), situation if isinstance(situation, str) else None,
-            ReportProvenance(f"PROVENANCE-{str(ids.new_uuid()).upper()}", "PATHOLOGY", item["id"], revision),
-        ))
+    rows = tuple(ReportFindingRow(
+        item.scope, None, item.technical_proposition, None,
+        ReportProvenance(f"PROVENANCE-{str(ids.new_uuid()).upper()}", "TECHNICAL_FINDING", item.finding_id, revision),
+    ) for item in _effective_findings(technical))
     if not rows:
-        raise ValueError("Report findings table requires approved pathologies")
-    return tuple(rows)
+        raise ValueError("Report findings table requires effective technical findings")
+    return rows
 
 
 @dataclass(frozen=True, slots=True)
@@ -733,9 +756,19 @@ class StartReportVersion:
         if case.source_inventory_stale or inspection.upstream_stale or technical.upstream_stale:
             raise ValueError("stale upstream cannot start a new report version")
 
+        findings_table = None
+        if stored.findings_table:
+            try:
+                findings_table = _findings_rows_from(technical, binding.technical_snapshot_revision, self.ids)
+            except ValueError:
+                findings_table = None
+        lost_table = bool(stored.findings_table) and findings_table is None
         sources = _claim_sources(binding, case, inspection, technical, pathology)
         claims, dropped_claims = [], 0
         for claim in stored.claims:
+            if lost_table and TABLE_TOKEN.search(claim.text):
+                dropped_claims += 1
+                continue
             if all(item.source_id in sources[item.source_kind][0] and sources[item.source_kind][1] is not None for item in claim.provenance):
                 claims.append(replace(claim, provenance=tuple(replace(item, source_revision=sources[item.source_kind][1]) for item in claim.provenance)))
             else:
@@ -744,6 +777,8 @@ class StartReportVersion:
         answers, dropped_answers = [], 0
         for answer in stored.answers:
             try:
+                if lost_table and TABLE_TOKEN.search(answer.text):
+                    raise ValueError("answer lost its cited table")
                 if not set(answer.claim_ids) <= {item.claim_id for item in kept_claims}:
                     raise ValueError("answer lost its cited claims")
                 # The chain check reads only the claims and the answer.
@@ -760,12 +795,6 @@ class StartReportVersion:
                 context.append(replace(item, status=ContextStatus.MISSING, source_id=None, note=f"[INFORMAÇÃO NECESSÁRIA: {item.field.lower()}]"))
             else:
                 context.append(item)
-        findings_table = None
-        if stored.findings_table and binding.construction_defect_analysis_revision is not None:
-            try:
-                findings_table = _findings_rows_from(pathology, binding.construction_defect_analysis_revision, self.ids)
-            except ValueError:
-                findings_table = None
         site_location = None
         if stored.site_location is not None and self.get_site_location is not None:
             try:
