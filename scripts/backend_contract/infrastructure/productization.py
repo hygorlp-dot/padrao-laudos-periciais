@@ -648,18 +648,19 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                 else None
             )
             effective_pat_ids = set(pathology.effective_pat_ids) if pathology else set()
-            for claim in payload["claims"]:
-                for provenance in claim["provenance"]:
-                    if provenance["source_kind"] != "PATHOLOGY":
-                        continue
-                    if (
-                        pathology is None
-                        or provenance["source_id"] not in effective_pat_ids
-                        or provenance["source_revision"] != pathology_record.revision
-                    ):
-                        raise RepositoryIntegrityError(
-                            "backup report pathology authority diverges"
-                        )
+            provenances = [item for claim in payload["claims"] for item in claim["provenance"]]
+            provenances.extend(row["provenance"] for row in payload.get("findings_table", ()))
+            for provenance in provenances:
+                if provenance["source_kind"] != "PATHOLOGY":
+                    continue
+                if (
+                    pathology is None
+                    or provenance["source_id"] not in effective_pat_ids
+                    or provenance["source_revision"] != pathology_record.revision
+                ):
+                    raise RepositoryIntegrityError(
+                        "backup report pathology authority diverges"
+                    )
         elif record.artifact_kind == "DELIVERY_SNAPSHOT_V1":
             binding = payload["binding"]
             require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])

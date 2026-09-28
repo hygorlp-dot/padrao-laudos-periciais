@@ -202,6 +202,69 @@ def test_backup_validates_captured_technical_rows_against_the_bound_authority(ta
         _verify_dependency_closure(records)
 
 
+@pytest.mark.parametrize("tamper", [None, "missing_binding", "source_id", "source_revision"])
+def test_backup_preserves_valid_legacy_rows_but_rejects_invented_pathology_provenance(tamper) -> None:
+    import json
+    from pathlib import Path
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+    from scripts.backend_contract.construction_defect_analysis import construction_defect_analysis_from_mapping, construction_defect_analysis_to_mapping
+    from scripts.backend_contract.infrastructure.productization import _revision_from_mapping, _verify_dependency_closure
+    from scripts.planejamento_pericial.construction_defect_analysis_adapter import ConstructionDefectAnalysisAdapter
+    from tests.test_construction_defect_product_integration_v1 import _canonical_inputs, _application_context
+    from tests.test_product_integration_oracle_v1 import _longitudinal_backup, _digest, _revision
+
+    backup = json.loads(_longitudinal_backup()[0])
+    revisions = backup["artifact_revisions"]
+    report = next(r for r in revisions if r["artifact_kind"] == "REPORT_SNAPSHOT_V1")
+    pathology = json.loads((Path(__file__).parent / "fixtures/construction-defect-analysis-v1.json").read_text(encoding="utf-8"))
+    process_case, case, planning, inspection = _canonical_inputs()
+    proposal = ConstructionDefectAnalysisAdapter().execute(
+        process_case=process_case, case_analysis=case, planning=planning, inspection=inspection,
+        observation_contexts=(_application_context(),),
+    )
+    pathology = construction_defect_analysis_to_mapping(replace(construction_defect_analysis_from_mapping(pathology),
+        observation_contexts=proposal.observation_contexts, identity_links=proposal.identity_links,
+        analysis_final=proposal.analysis_final, gate=proposal.gate,
+    ))
+    process = process_case.as_dict()
+    revisions.append(_revision("PROCESS_CASE", "PROCESS_CASE", process, 1, 90))
+    binding = pathology["source_snapshot"]
+    binding.update(process_case_revision=1, process_case_digest=_digest(process))
+    for kind, prefix, identity in (
+        ("CASE_ANALYSIS_SNAPSHOT_V1", "case_analysis", "snapshot_id"),
+        ("PERICIAL_PLANNING_SNAPSHOT_V1", "planning", "snapshot_id"),
+        ("INSPECTION_SESSION_V1", "inspection", "session_id"),
+    ):
+        source = max((r for r in revisions if r["artifact_kind"] == kind), key=lambda r: r["revision"])
+        identity_key = "inspection_session_id" if prefix == "inspection" else prefix + "_snapshot_id"
+        binding.update({identity_key: source["payload"][identity], prefix + "_revision": source["revision"], prefix + "_digest": source["checksum_sha256"]})
+    pat_id = construction_defect_analysis_from_mapping(pathology).effective_pat_ids[0]
+    revisions.append(_revision("CONSTRUCTION_DEFECT_ANALYSIS_V1", "CONSTRUCTION-DEFECT-ANALYSIS", pathology, 1, 91))
+    if tamper != "missing_binding":
+        report["payload"]["source_snapshot"].update(
+            construction_defect_analysis_snapshot_id=pathology["snapshot_id"],
+            construction_defect_analysis_revision=1, construction_defect_analysis_digest=_digest(pathology),
+        )
+    report["payload"]["findings_table"] = [{
+        "manifestation": "Manifestation from a synthetic legacy report.", "environment": None,
+        "finding": "Captured legacy wording.", "situation": None,
+        "provenance": {"provenance_id": "P-LEGACY", "source_kind": "PATHOLOGY",
+            "source_id": "PAT-INVENTED" if tamper == "source_id" else pat_id,
+            "source_revision": 99 if tamper == "source_revision" else 1},
+    }]
+    report["checksum_sha256"] = _digest(report["payload"])
+    for record in revisions:
+        if record["artifact_kind"] == "DELIVERY_SNAPSHOT_V1":
+            record["payload"]["binding"]["report_digest"] = report["checksum_sha256"]
+            record["checksum_sha256"] = _digest(record["payload"])
+    records = tuple(_revision_from_mapping(r, backup["workspace"]["workspace_id"]) for r in revisions)
+    if tamper:
+        with pytest.raises(RepositoryIntegrityError, match="pathology authority"):
+            _verify_dependency_closure(records)
+    else:
+        _verify_dependency_closure(records)
+
+
 @pytest.mark.skipif("not __import__('tests.test_report_references_findings_v1', fromlist=['_native'])._native()", reason="Microsoft Word 16 unavailable")
 def test_word_16_renders_effective_findings_table_with_faithful_derived_pdf() -> None:
     from scripts.backend_contract.infrastructure.office_pdf import LocalOfficePdfConverter
