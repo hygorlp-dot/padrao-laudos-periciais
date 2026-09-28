@@ -409,8 +409,9 @@ FINDING_SITUATIONS = {
 class ReportFindingRow:
     """One row of the findings summary, captured from an approved pathology.
 
-    The row repeats what the pathology record states at capture time; it is
-    bound to that record's revision like any claim, so a change upstream makes
+    New rows repeat effective technical findings (scope in the legacy
+    ``manifestation`` field). PATHOLOGY rows remain readable for old reports.
+    The row is bound to its source revision, so a change upstream makes
     the report stale instead of silently disagreeing with its table.
     """
     manifestation: str
@@ -425,8 +426,8 @@ class ReportFindingRow:
             raise ValueError("report finding row is invalid")
         if self.situation is not None and self.situation not in FINDING_SITUATIONS:
             raise ValueError("report finding row is invalid")
-        if type(self.provenance) is not ReportProvenance or self.provenance.source_kind != "PATHOLOGY":
-            raise ValueError("report finding row requires pathology provenance")
+        if type(self.provenance) is not ReportProvenance or self.provenance.source_kind not in {"PATHOLOGY", "TECHNICAL_FINDING"}:
+            raise ValueError("report finding row requires finding authority provenance")
 
 
 @dataclass(frozen=True, slots=True)
@@ -609,6 +610,8 @@ class ReportSnapshot:
                 raise ValueError("report findings table is invalid")
             if len({item.provenance.source_id for item in self.findings_table}) != len(self.findings_table) or len({item.provenance.provenance_id for item in self.findings_table}) != len(self.findings_table):
                 raise ValueError("report findings table rows must be unique")
+            if len({item.provenance.source_kind for item in self.findings_table}) != 1:
+                raise ValueError("report findings table cannot mix technical and legacy pathology presentations")
         reviews = {item.review_id: item for item in self.review_decisions}
         ordered = sorted(self.review_decisions, key=lambda item: datetime.fromisoformat(item.timestamp))
         if len(reviews) != len(self.review_decisions) or len({item.timestamp for item in ordered}) != len(ordered):

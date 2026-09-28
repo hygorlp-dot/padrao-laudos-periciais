@@ -67,6 +67,9 @@ describe("pericial planning view", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(404, { error: { code: "ARTIFACT_REVISION_NOT_FOUND" } })));
     render(<PericialPlanningView workspaceId={WORKSPACE_ID} />);
     expect(await screen.findByRole("heading", { name: "Planejamento ainda não disponível" })).toBeInTheDocument();
+    const location = await screen.findByRole("button", { name: "Ler localização" });
+    expect(location.closest(".status-state")).toBeNull();
+    expect(location.closest(".planning-workspace")).not.toBeNull();
   });
 
   test("starts proposal-only planning from reviewed analysis", async () => {

@@ -122,13 +122,17 @@ describe("construction defect analysis workbench", () => {
     render(<ConstructionDefectAnalysisView workspaceId={ID} />);
 
     await user.selectOptions(await screen.findByLabelText("Observação direta"), "OBS-001");
+    expect(screen.getByRole("option", { name: "Observação 1 · Umidade observada na parede." })).toHaveValue("OBS-001");
+    expect(screen.getByRole("option", { name: "Método 1 · Medição direta" })).toHaveValue("METHOD-001");
+    expect(screen.getByRole("option", { name: "Registro 1 · Alegação sintética." })).toHaveValue("CLAIM-001");
+    expect(screen.getByRole("option", { name: "Registro 1 · Qual a origem da manifestação?" })).toHaveValue("QUESTION-001");
     await user.selectOptions(screen.getByLabelText("Método registrado"), "METHOD-001");
     await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
     expect(fetchMock).toHaveBeenCalledTimes(3);
     await user.type(screen.getByLabelText("Manifestação classificada"), "Mancha de umidade aparente.");
-    await user.click(screen.getByLabelText("MED-001 — 1250 mm"));
-    await user.click(screen.getByLabelText("PHOTO-001 — Parede inspecionada."));
+    await user.click(screen.getByLabelText("Comprimento: 1250 mm"));
+    await user.click(screen.getByLabelText("Parede inspecionada."));
     await user.selectOptions(screen.getByLabelText("Alegação relacionada"), "CLAIM-001");
     await user.selectOptions(screen.getByLabelText("Quesito relacionado"), "QUESTION-001");
     await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));

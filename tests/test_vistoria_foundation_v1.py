@@ -403,8 +403,18 @@ def test_reopen_preserves_state_and_marks_changed_plan_stale():
     assert "planning artifact revision changed" in stale.upstream_stale_reasons
 
 
-def test_start_builds_and_persists_pending_session_from_latest_approved_plan():
+@pytest.mark.parametrize("modified", (False, True))
+def test_start_builds_and_persists_pending_session_from_latest_approved_plan(modified):
     upstream = planning()
+    if modified:
+        planned = upstream.inspection_requirements[0]
+        upstream = append_professional_decision(upstream, PlanningDecision(
+            decision_id="INSPECTION-AUTH-MODIFIED", target_item_id=planned.item_id,
+            action=ReviewAction.MODIFY, proposal_value=planned.description,
+            decided_value="Verificar somente a interface sintética indicada pelo perito.",
+            reviewer="PROFESSIONAL-001", reason="Delimitação sintética explícita.",
+            revision=2, timestamp="2026-08-30T11:30:00+00:00",
+        ))
     planning_record = SimpleNamespace(revision=2)
     saved = []
     generated = iter(UUID(f"88888888-8888-4888-8888-{index:012d}") for index in range(1, 6))
@@ -424,6 +434,11 @@ def test_start_builds_and_persists_pending_session_from_latest_approved_plan():
     assert session.coverage.pending_items == 3
     assert session.source_revision == upstream.plan.case_analysis_source_revision
     assert saved[0][1] is None
+    planned = upstream.inspection_requirements[0]
+    created = next(item for item in session.items if item.planning_item_id == planned.item_id)
+    context = "Verificar somente a interface sintética indicada pelo perito." if modified else planned.description
+    assert context in created.title
+    assert session.plan_snapshot.planning_digest == inspection_planning_digest(upstream)
 
 
 def test_inspection_photo_import_accepts_only_matching_original_image_bytes():

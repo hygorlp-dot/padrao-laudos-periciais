@@ -306,18 +306,18 @@ function FindingsTablePanel({ snapshot, editable, busy, amend }: {
   amend: (action: ReportAmendment, values: Record<string, unknown>, failure: string) => Promise<boolean>;
 }) {
   const rows = snapshot.findings_table ?? [];
-  const bound = snapshot.source_snapshot.construction_defect_analysis_snapshot_id !== null;
-  if (!rows.length && !(editable && bound)) return null;
+  const technical = rows.every((row) => row.provenance.source_kind === "TECHNICAL_FINDING");
+  if (!rows.length && !editable) return null;
   return <div className="report-findings-table">
     {rows.length > 0 && <table>
       <caption>Tabela 1 – Resumo dos achados técnicos</caption>
-      <thead><tr><th scope="col">Item</th><th scope="col">Manifestação</th><th scope="col">Ambiente</th><th scope="col">Achado</th><th scope="col">Situação</th></tr></thead>
-      <tbody>{rows.map((row, index) => <tr key={row.provenance.provenance_id}><td>{index + 1}</td><td>{row.manifestation}</td><td>{row.environment ?? "Não informado"}</td><td>{row.finding}</td><td>{row.situation ? SITUATION_LABEL[row.situation] ?? row.situation : "Não informada"}</td></tr>)}</tbody>
+      <thead><tr><th scope="col">Item</th><th scope="col">{technical ? "Escopo" : "Manifestação"}</th>{!technical && <th scope="col">Ambiente</th>}<th scope="col">Achado técnico</th>{!technical && <th scope="col">Situação</th>}</tr></thead>
+      <tbody>{rows.map((row, index) => <tr key={row.provenance.provenance_id}><td>{index + 1}</td><td>{row.manifestation}</td>{!technical && <td>{row.environment ?? "Não informado"}</td>}<td>{row.finding}</td>{!technical && <td>{row.situation ? SITUATION_LABEL[row.situation] ?? row.situation : "Não informada"}</td>}</tr>)}</tbody>
     </table>}
     {editable && <>
-      <p className="field-hint">{rows.length ? "A tabela repete o que as patologias aprovadas registram; se a análise mudar, atualize-a." : "Monte a tabela-resumo a partir das patologias aprovadas na análise de vícios. Nada é inferido: cada linha repete o registro."}</p>
+      <p className="field-hint">A tabela reúne os achados técnicos com decisão profissional vigente. Cada linha preserva o escopo e o texto registrado, sem inferir causas ou classificações.</p>
       <div className="action-row">
-        <button className="secondary-action" type="button" disabled={busy || !bound} onClick={() => void amend("SET_FINDINGS_TABLE", {}, "Não foi possível montar a tabela-resumo. Confira se há patologias aprovadas com manifestação e achado descritos.")}>{rows.length ? "Atualizar tabela-resumo" : "Inserir tabela-resumo dos achados"}</button>
+        <button className="secondary-action" type="button" disabled={busy} onClick={() => void amend("SET_FINDINGS_TABLE", {}, "Não foi possível montar a tabela-resumo. É necessário haver achados técnicos com decisão profissional vigente e fontes atualizadas.")}>{rows.length ? "Atualizar tabela-resumo" : "Inserir tabela-resumo dos achados"}</button>
         {rows.length > 0 && <button className="text-action" type="button" disabled={busy} onClick={() => void amend("REMOVE_FINDINGS_TABLE", {}, "Não foi possível remover a tabela-resumo.")}>Remover tabela</button>}
       </div>
     </>}

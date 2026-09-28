@@ -2,8 +2,8 @@
 
 A reference is a standard, law or work the expert relies on -- never a case
 document.  The references section is generated from the selected references;
-the findings summary is captured from approved pathologies and bound to their
-revision like any claim.  Word 16 renders both through the fidelity oracle,
+legacy summaries retain their pathology provenance; new summaries capture
+effective technical findings. Word 16 renders both through the fidelity oracle,
 whose table reading needed one repair: a cell whose text wraps is read inside
 its painted borders (RED_THIS_REPAIR below).
 """
@@ -92,8 +92,8 @@ def test_new_collections_round_trip_and_legacy_mapping_stays_exact() -> None:
     duplicated = replace(_nbr(), reference_id="REFERENCE-2")
     with pytest.raises(ValueError, match="unique"):
         replace(report, references=(_nbr(), duplicated))
-    with pytest.raises(ValueError, match="pathology provenance"):
-        ReportFindingRow("m", None, "f", None, ReportProvenance("P", "TECHNICAL_FINDING", "F", 1))
+    with pytest.raises(ValueError, match="finding authority provenance"):
+        ReportFindingRow("m", None, "f", None, ReportProvenance("P", "ALLEGATION", "F", 1))
 
 
 # --- the amendments -----------------------------------------------------------
@@ -133,24 +133,16 @@ def test_references_are_added_and_removed_on_a_draft() -> None:
     assert removed.references is None and "references" not in report_snapshot_to_mapping(removed)
 
 
-def test_the_findings_table_is_captured_from_approved_pathologies_only() -> None:
+def test_the_findings_table_does_not_depend_on_pathology_approval() -> None:
     pathology = construction_defect_analysis_from_mapping(_fixture("construction-defect-analysis-v1.json"))
-    source = replace(_draft().source_snapshot, construction_defect_analysis_snapshot_id="S", construction_defect_analysis_revision=3, construction_defect_analysis_digest="0" * 64)
-    report = replace(_draft(), source_snapshot=source)
+    report = _draft()
     service, _ = _service(report, pathology)
-    _, tabled = service.execute("w", expected_revision=7, action="SET_FINDINGS_TABLE", values={})
-    (row,) = tabled.findings_table
-    item = pathology.analysis_final["patologias"][0]
-    assert (row.manifestation, row.environment, row.finding, row.situation) == (item["manifestacao"], None, item["conclusao_tecnica"], None)
-    assert (row.provenance.source_kind, row.provenance.source_id, row.provenance.source_revision) == ("PATHOLOGY", "PAT-001", 3)
-    # Nothing is captured from a pathology the expert has not approved, and a
-    # report bound to no pathology analysis has no table to capture.
+    _, tabled = service.execute(report.workspace_id, expected_revision=7, action="SET_FINDINGS_TABLE", values={})
+    assert all(row.provenance.source_kind == "TECHNICAL_FINDING" for row in tabled.findings_table)
     unapproved = replace(pathology, reviews=())
-    with pytest.raises(ValueError, match="approved pathologies"):
-        _service(report, unapproved)[0].execute("w", expected_revision=7, action="SET_FINDINGS_TABLE", values={})
-    with pytest.raises(ValueError, match="no bound pathology"):
-        _service(_draft(), pathology)[0].execute("w", expected_revision=7, action="SET_FINDINGS_TABLE", values={})
-    _, untabled = _service(tabled)[0].execute("w", expected_revision=7, action="REMOVE_FINDINGS_TABLE", values={})
+    _, blocked = _service(report, unapproved)[0].execute(report.workspace_id, expected_revision=7, action="SET_FINDINGS_TABLE", values={})
+    assert blocked.findings_table == tabled.findings_table and unapproved.reviews == ()
+    _, untabled = _service(tabled)[0].execute(report.workspace_id, expected_revision=7, action="REMOVE_FINDINGS_TABLE", values={})
     assert untabled.findings_table is None
 
 

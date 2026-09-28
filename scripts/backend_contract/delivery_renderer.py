@@ -848,6 +848,12 @@ FINDINGS_TABLE_HEADER = ("Item", "Manifestação", "Ambiente", "Achado", "Situa�
 
 
 def _findings_table_blocks(report: ReportSnapshot, number: int) -> list[ReportPresentationBlock]:
+    if all(row.provenance.source_kind == "TECHNICAL_FINDING" for row in report.findings_table or ()):
+        rows = tuple((str(index), _canonical_text(row.manifestation), _canonical_text(row.finding)) for index, row in enumerate(report.findings_table or (), 1))
+        return [
+            ReportPresentationBlock("CAPTION", f"Tabela {number} – Resumo dos achados técnicos"),
+            ReportPresentationBlock("TABLE", "", rows=(("Item", "Escopo", "Achado técnico"), *rows)),
+        ]
     rows = tuple(
         (str(index), _canonical_text(row.manifestation), _canonical_text(row.environment) if row.environment else "Não informado",
          _canonical_text(row.finding), FINDING_SITUATIONS[row.situation] if row.situation else "Não informada")
@@ -6794,7 +6800,7 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
         # out exactly as declared, which is what the painted grid is checked
         # against.  The item column keeps room for its header word.
         total = text_width or 9000
-        shares = (2200, 1500, 3200, 1300)
+        shares = (3, 5) if len(rows[0]) == 3 else (2200, 1500, 3200, 1300)
         rest = total - 800
         widths = (800, *(rest * share // sum(shares) for share in shares[:-1]))
         widths = (*widths, total - sum(widths))
