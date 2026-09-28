@@ -84,6 +84,7 @@ def test_frontend_network_access_is_narrow_and_never_contains_local_api_token():
             "frontend/src/data/pjeIntake.ts",
             "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",
+        "frontend/src/data/propertyRecord.ts",
             "frontend/src/data/reportSnapshot.ts",
             "frontend/src/data/siteLocation.ts",
             "frontend/src/data/technicalSnapshot.ts",
@@ -105,6 +106,10 @@ def test_process_case_domain_fields_stay_out_of_bridge_and_in_exact_frontend_mod
         if forbidden.search(path.read_text(encoding="utf-8"))
     }
     assert frontend_domain_sources == {
+        # Property UF and professional court labels are presentation text;
+        # ProcessCase remains the only writer of the ten process fields.
+        "frontend/src/data/propertyRecord.ts",
+        "frontend/src/workspaces/ExpertProfileSetup.tsx",
         "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",
             "frontend/src/workspaces/ProcessCaseView.tsx",

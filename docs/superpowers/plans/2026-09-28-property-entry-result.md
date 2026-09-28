@@ -82,3 +82,11 @@ with one worker; TypeScript/build, ESLint and affected Ruff checks passed.
 Earlier frontend runs concurrent with the heavy core gate timed out on long
 typing tests. The isolated full run passed without increasing timeouts.
 Final exact-commit independent closure and the fresh full core gate are pending.
+
+The reviewer and systemic auditor closed all four findings on `7ba6f18` with
+no new material findings. Its full core run then exposed four stale enumerations
+in frontend/API boundary tests: the two property routes, its data adapter and
+two modules containing UF/court labels. The precise enumerations are updated;
+the forbidden-network/token/storage assertions remain unchanged. No protected
+analyzer or trust policy is changed. A fresh full run is required. The first
+run's timing was separately FAIL (767.172 s against 60 s); #192 is unchanged.
