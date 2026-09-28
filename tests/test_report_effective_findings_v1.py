@@ -145,11 +145,61 @@ def test_a_changed_upstream_makes_the_captured_report_stale_and_refuses_save() -
     assert appended == []
 
 
+def test_next_version_drops_table_citations_when_no_effective_findings_remain() -> None:
+    from tests.test_report_foundation_v1 import upstreams
+    records, _, _, technical, _ = upstreams()
+    stored = _superseded()
+    stored = replace(stored, findings_table=_rows(stored, technical), claims=(
+        replace(stored.claims[0], text=stored.claims[0].text + " [[TABELA:ACHADOS]]"), *stored.claims[1:],
+    ))
+    rejected = tuple(replace(d, decision_id=d.decision_id + "-REJECTED", action=DecisionAction.REJECT,
+        supersedes_decision_id=d.decision_id, timestamp="2026-09-01T12:00:00+00:00") for d in technical.decisions)
+    technical = replace(technical, decisions=(*technical.decisions, *rejected), question_links=(), coverage=replace(technical.coverage, effective_findings=0, complete=False))
+    getter = SimpleNamespace(execute=lambda _w: (SimpleNamespace(**{**vars(records[2]), "revision": 5}), technical))
+    service, appended = version_service(stored)
+    service = replace(service, get_technical_snapshot=getter, save_snapshot=replace(service.save_snapshot, get_technical_snapshot=getter))
+    _, draft, dropped = service.execute(stored.workspace_id, expected_revision=4)
+    assert draft.findings_table is None and dropped["findings_table"]
+    assert dropped["claims"] >= 1 and stored.claims[0].claim_id not in {c.claim_id for c in draft.claims}
+    assert len(appended) == 1 and not draft.review_decisions
+
+
 def test_legacy_pathology_and_technical_rows_cannot_be_mislabelled_in_one_table() -> None:
     from tests.test_report_references_findings_v1 import _rows as legacy_rows
     report = _draft()
     with pytest.raises(ValueError, match="cannot mix"):
         replace(report, findings_table=(*legacy_rows(), *_rows(report, _upstream()[1])))
+
+
+@pytest.mark.parametrize("tamper", [None, "finding", "source_id", "source_revision"])
+def test_backup_validates_captured_technical_rows_against_the_bound_authority(tamper) -> None:
+    import json
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+    from scripts.backend_contract.infrastructure.productization import _revision_from_mapping, _verify_dependency_closure
+    from tests.test_product_integration_oracle_v1 import _longitudinal_backup, _digest
+
+    backup = json.loads(_longitudinal_backup()[0])
+    report = next(r for r in backup["artifact_revisions"] if r["artifact_kind"] == "REPORT_SNAPSHOT_V1")
+    technical = next(r["payload"] for r in backup["artifact_revisions"] if r["artifact_kind"] == "TECHNICAL_SNAPSHOT_V1")
+    finding = technical["findings"][0]
+    row = {"manifestation": finding["scope"], "environment": None, "finding": finding["technical_proposition"], "situation": None,
+           "provenance": {"provenance_id": "P-SUMMARY", "source_kind": "TECHNICAL_FINDING", "source_id": finding["finding_id"], "source_revision": 1}}
+    if tamper == "finding":
+        row["finding"] = "Invented conclusion."
+    elif tamper:
+        row["provenance"][tamper] = "FINDING-OTHER" if tamper == "source_id" else 99
+    report["payload"]["findings_table"] = [row]
+    report["checksum_sha256"] = _digest(report["payload"])
+    for record in backup["artifact_revisions"]:
+        if record["artifact_kind"] == "DELIVERY_SNAPSHOT_V1":
+            record["payload"]["binding"]["report_digest"] = report["checksum_sha256"]
+            record["checksum_sha256"] = _digest(record["payload"])
+    records = tuple(_revision_from_mapping(r, backup["workspace"]["workspace_id"]) for r in backup["artifact_revisions"])
+    if tamper:
+        with pytest.raises(RepositoryIntegrityError, match="finding.*authority"):
+            _verify_dependency_closure(records)
+    else:
+        _verify_dependency_closure(records)
 
 
 @pytest.mark.skipif("not __import__('tests.test_report_references_findings_v1', fromlist=['_native'])._native()", reason="Microsoft Word 16 unavailable")

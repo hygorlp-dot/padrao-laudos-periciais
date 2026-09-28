@@ -36,6 +36,7 @@ from ..report_foundation import (
     ReportSourceSnapshot,
     ReportState,
     ReviewAction,
+    TABLE_TOKEN,
     report_snapshot_from_mapping,
     report_snapshot_to_mapping,
     expert_profile_from_mapping,
@@ -264,21 +265,31 @@ def _validate_claim_provenance(
         identities, revision = sources[provenance.source_kind]
         if provenance.source_id not in identities or provenance.source_revision != revision:
             raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
-    effective = {item.finding_id: item for item in _effective_findings(technical)}
-    for row in snapshot.findings_table or ():
-        if row.provenance.source_kind != "TECHNICAL_FINDING":
-            continue  # Preserve the legacy pathology presentation contract.
-        finding = effective.get(row.provenance.source_id)
-        if finding is None or (row.manifestation, row.finding, row.environment, row.situation) != (
-            finding.scope, finding.technical_proposition, None, None,
-        ):
-            raise ValueError("Report finding row diverges from effective technical authority")
+    validate_technical_findings_table(snapshot, technical)
     context_sources = _context_sources(case, technical)
     for item in snapshot.context_matrix:
         if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field]:
             raise ValueError("Report Snapshot context provenance is not present in bound upstream authority")
     if snapshot.state is ReportState.APPROVED and {item.question_id for item in snapshot.answers} != {item.question_id for item in technical.question_links}:
         raise ValueError("approved Report Snapshot must answer every bound technical question")
+
+
+def validate_technical_findings_table(snapshot: ReportSnapshot, technical: TechnicalSnapshot) -> None:
+    """The same presentation check at canonical save and portable recovery."""
+    rows = tuple(row for row in snapshot.findings_table or () if row.provenance.source_kind == "TECHNICAL_FINDING")
+    if not rows:
+        return  # Preserve legacy reports without changing their authority model.
+    source = snapshot.source_snapshot
+    if (snapshot.workspace_id != technical.workspace_id or source.technical_snapshot_id != technical.snapshot_id
+            or source.technical_snapshot_digest != report_upstream_digest(technical)):
+        raise ValueError("Report finding table has mismatched technical authority")
+    effective = {item.finding_id: item for item in _effective_findings(technical)}
+    for row in rows:
+        finding = effective.get(row.provenance.source_id)
+        if finding is None or row.provenance.source_revision != source.technical_snapshot_revision or (
+            row.manifestation, row.finding, row.environment, row.situation
+        ) != (finding.scope, finding.technical_proposition, None, None):
+            raise ValueError("Report finding row diverges from effective technical authority")
 
 
 def _claim_sources(binding: ReportSourceSnapshot, case, inspection, technical, pathology) -> dict[str, tuple[set[str], int | None]]:
@@ -745,9 +756,19 @@ class StartReportVersion:
         if case.source_inventory_stale or inspection.upstream_stale or technical.upstream_stale:
             raise ValueError("stale upstream cannot start a new report version")
 
+        findings_table = None
+        if stored.findings_table:
+            try:
+                findings_table = _findings_rows_from(technical, binding.technical_snapshot_revision, self.ids)
+            except ValueError:
+                findings_table = None
+        lost_table = bool(stored.findings_table) and findings_table is None
         sources = _claim_sources(binding, case, inspection, technical, pathology)
         claims, dropped_claims = [], 0
         for claim in stored.claims:
+            if lost_table and TABLE_TOKEN.search(claim.text):
+                dropped_claims += 1
+                continue
             if all(item.source_id in sources[item.source_kind][0] and sources[item.source_kind][1] is not None for item in claim.provenance):
                 claims.append(replace(claim, provenance=tuple(replace(item, source_revision=sources[item.source_kind][1]) for item in claim.provenance)))
             else:
@@ -756,6 +777,8 @@ class StartReportVersion:
         answers, dropped_answers = [], 0
         for answer in stored.answers:
             try:
+                if lost_table and TABLE_TOKEN.search(answer.text):
+                    raise ValueError("answer lost its cited table")
                 if not set(answer.claim_ids) <= {item.claim_id for item in kept_claims}:
                     raise ValueError("answer lost its cited claims")
                 # The chain check reads only the claims and the answer.
@@ -772,12 +795,6 @@ class StartReportVersion:
                 context.append(replace(item, status=ContextStatus.MISSING, source_id=None, note=f"[INFORMAÇÃO NECESSÁRIA: {item.field.lower()}]"))
             else:
                 context.append(item)
-        findings_table = None
-        if stored.findings_table:
-            try:
-                findings_table = _findings_rows_from(technical, binding.technical_snapshot_revision, self.ids)
-            except ValueError:
-                findings_table = None
         site_location = None
         if stored.site_location is not None and self.get_site_location is not None:
             try:

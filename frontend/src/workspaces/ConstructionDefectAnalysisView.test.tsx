@@ -84,6 +84,20 @@ function fetchByUrl(pathologyResponse = response(200, envelope)) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("construction defect analysis workbench", () => {
+  test("same-caption photos and equal readings remain distinguishable without internal IDs", async () => {
+    const duplicated = { ...inspectEnvelope, snapshot: { ...inspection,
+      measurements: [...inspection.measurements, { ...inspection.measurements[0], measurement_id: "MED-002" }],
+      photos: [...inspection.photos, { ...inspection.photos[0], photo_id: "PHOTO-002" }],
+    } };
+    const routed = fetchByUrl(response(404, {}));
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/inspection-session") ? Promise.resolve(response(200, duplicated)) : routed(input, init));
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+    fireEvent.change(await screen.findByLabelText("Observação direta"), { target: { value: "OBS-001" } });
+    for (const index of [1, 2]) {
+      expect(screen.getByRole("checkbox", { name: `Medição ${index} · Comprimento: 1250 mm` })).not.toBeChecked();
+      expect(screen.getByRole("checkbox", { name: `Fotografia ${index} · Parede inspecionada.` })).not.toBeChecked();
+    }
+  });
   test("renders PAT, exact provenance and effective professional state without flattening", async () => {
     vi.stubGlobal("fetch", fetchByUrl());
     render(<ConstructionDefectAnalysisView workspaceId={ID} />);
@@ -131,8 +145,8 @@ describe("construction defect analysis workbench", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
     expect(fetchMock).toHaveBeenCalledTimes(3);
     await user.type(screen.getByLabelText("Manifestação classificada"), "Mancha de umidade aparente.");
-    await user.click(screen.getByLabelText("Comprimento: 1250 mm"));
-    await user.click(screen.getByLabelText("Parede inspecionada."));
+    await user.click(screen.getByLabelText("Medição 1 · Comprimento: 1250 mm"));
+    await user.click(screen.getByLabelText("Fotografia 1 · Parede inspecionada."));
     await user.selectOptions(screen.getByLabelText("Alegação relacionada"), "CLAIM-001");
     await user.selectOptions(screen.getByLabelText("Quesito relacionado"), "QUESTION-001");
     await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));

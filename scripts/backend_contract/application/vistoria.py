@@ -141,6 +141,10 @@ class SaveInspectionSession:
                 immutable = ("session_id", "workspace_id", "plan_snapshot", "started_at", "responsible_professional", "source_revision")
                 if any(getattr(session, name) != getattr(predecessor, name) for name in immutable):
                     raise ValueError("Inspection Session immutable authority changed")
+                if {(item.item_id, item.planning_item_id): item.title for item in session.items} != {
+                    (item.item_id, item.planning_item_id): item.title for item in predecessor.items
+                }:
+                    raise ValueError("Inspection Session planned item identity or title changed")
                 if session.reviews != predecessor.reviews:
                     raise ValueError("Inspection Session reviews require a dedicated professional command")
                 append_only = (

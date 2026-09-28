@@ -387,6 +387,9 @@ def test_full_inspection_save_cannot_create_initial_or_rewrite_professional_hist
     forged = replace(bound, reviews=(replace(bound.reviews[0], notes="Forged professional review."),))
     with pytest.raises(ValueError, match="dedicated professional command"):
         service.execute(WorkspaceId.parse(bound.workspace_id), forged, predecessor.revision)
+    rewritten = replace(bound, items=(replace(bound.items[0], title="Unapproved replacement instruction."), *bound.items[1:]))
+    with pytest.raises(ValueError, match="planned item"):
+        service.execute(WorkspaceId.parse(bound.workspace_id), rewritten, predecessor.revision)
 
 
 def test_reopen_preserves_state_and_marks_changed_plan_stale():

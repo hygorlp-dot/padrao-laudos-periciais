@@ -41,6 +41,7 @@ from ..application.construction_defect_analysis import (
     validated_construction_defect_analysis_from_mapping,
 )
 from ..application.services import validate_pje_intake_payload
+from ..application.report_foundation import validate_technical_findings_table
 from ..application.workspace_recovery import (
     RecoveryFilesystemCustody,
     _require_recovery_mutation_supported,
@@ -621,7 +622,14 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
             binding = payload["source_snapshot"]
             require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
             require("INSPECTION_SESSION_V1", binding["inspection_session_revision"], binding["inspection_session_digest"], "session_id", binding["inspection_session_id"])
-            require("TECHNICAL_SNAPSHOT_V1", binding["technical_snapshot_revision"], binding["technical_snapshot_digest"], "snapshot_id", binding["technical_snapshot_id"])
+            technical_record = require("TECHNICAL_SNAPSHOT_V1", binding["technical_snapshot_revision"], binding["technical_snapshot_digest"], "snapshot_id", binding["technical_snapshot_id"])
+            try:
+                validate_technical_findings_table(
+                    report_snapshot_from_mapping(payload),
+                    technical_snapshot_from_mapping(thaw_payload(technical_record.payload)),
+                )
+            except ValueError as exc:
+                raise RepositoryIntegrityError("backup report finding authority diverges") from exc
             require("EXPERT_MASTER_PROFILE_V1", binding["expert_profile_revision"], binding["expert_profile_digest"], "profile_id", binding["expert_profile_id"])
             pathology_record = None
             if binding["construction_defect_analysis_snapshot_id"] is not None:
