@@ -1,7 +1,7 @@
 import { type FormEvent, useEffect, useMemo, useState } from "react";
 
 import { navigate } from "../app/router";
-import { useRefreshExpertIdentity } from "../data/expertIdentity";
+import { ExpertProfileSetup } from "./ExpertProfileSetup";
 import {
   amendReportDraft,
   getExpertProfile,
@@ -9,7 +9,6 @@ import {
   getReportSnapshot,
   getReportSources,
   ReportApiError,
-  saveExpertProfile,
   startReportSnapshot,
   startReportVersion,
   referenceCitation,
@@ -27,6 +26,7 @@ import {
 import { workspacePath } from "../routes/routeCatalog";
 import { authorityLabel, reasonLabels, sourceKindLabel, stateLabel } from "../ui/labels";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
+import { propertyFieldLabel } from "../data/propertyRecord";
 import { coordinatesText } from "../data/siteLocation";
 
 type State = { kind: "loading" } | { kind: "profile-missing" } | { kind: "report-missing" } | { kind: "ready"; value: ReportEnvelope } | { kind: "error" };
@@ -66,9 +66,7 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
   const [versionNotice, setVersionNotice] = useState<string | null>(null);
   const [startError, setStartError] = useState(false);
   const [version, setVersion] = useState(0);
-  const refreshExpert = useRefreshExpertIdentity();
-  const [profile, setProfile] = useState({ full_name: "", professional_title: "", registration: "", court_registration: "", contact_line: "" });
-  const [formError, setFormError] = useState(false);
+
 
   useEffect(() => {
     const controller = new AbortController();
@@ -83,15 +81,8 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
     return () => controller.abort();
   }, [workspaceId, version]);
 
-  const configure = async (event: FormEvent) => {
-    event.preventDefault(); setFormError(false);
-    if (Object.values(profile).some((value) => !value.trim())) { setFormError(true); return; }
+  const profileSaved = async () => {
     setBusy(true);
-    try {
-      await saveExpertProfile(workspaceId, { profile_id: "EXPERT-PROFILE-001", revision: 1, full_name: profile.full_name.trim(), professional_title: profile.professional_title.trim(), registration: profile.registration.trim(), court_registration: profile.court_registration.trim(), contact_line: profile.contact_line.trim() });
-      refreshExpert();
-    } catch { setState({ kind: "error" }); setBusy(false); return; }
-    // The profile is saved; the report may still lack the stages it binds.
     try { setState({ kind: "ready", value: await startReportSnapshot(workspaceId) }); }
     catch { setStartError(true); setState({ kind: "report-missing" }); }
     finally { setBusy(false); }
@@ -125,7 +116,7 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
 
   if (state.kind === "loading") return <section className="status-state status-state--loading" role="status"><span className="state-rule" aria-hidden="true"/><div><h2>Abrindo o laudo</h2><p>Conferindo as fontes vinculadas a cada seção.</p></div></section>;
   if (state.kind === "error") return <section className="status-state status-state--error" role="alert"><span className="state-mark" aria-hidden="true">!</span><div><h2>Não foi possível carregar o laudo</h2><p>Os dados salvos do laudo não passaram na conferência de integridade. Nada foi alterado.</p><button className="text-action" type="button" onClick={() => { setState({ kind: "loading" }); setVersion((value) => value + 1); }}>Tentar novamente</button></div></section>;
-  if (state.kind === "profile-missing") return <section className="technical-authority"><h2>Configure o perfil mestre do perito</h2><p>Esta fonte única preenche a identificação profissional sem alterar conclusões técnicas.</p><form onSubmit={configure}><label>Nome completo<input required aria-invalid={formError} value={profile.full_name} onChange={(event) => setProfile({ ...profile, full_name: event.target.value })}/></label><label>Título profissional<input required aria-invalid={formError} value={profile.professional_title} onChange={(event) => setProfile({ ...profile, professional_title: event.target.value })}/></label><label>Registro profissional<input required aria-invalid={formError} value={profile.registration} onChange={(event) => setProfile({ ...profile, registration: event.target.value })}/></label><label>Cadastro no tribunal<input required aria-invalid={formError} value={profile.court_registration} onChange={(event) => setProfile({ ...profile, court_registration: event.target.value })}/></label><label>Contato profissional<input required aria-invalid={formError} value={profile.contact_line} onChange={(event) => setProfile({ ...profile, contact_line: event.target.value })}/></label>{formError && <p role="alert">Complete todos os campos obrigatórios do perfil mestre.</p>}<button className="primary-action" type="submit" disabled={busy}>{busy ? "Salvando…" : "Salvar perfil e iniciar laudo"}</button></form></section>;
+  if (state.kind === "profile-missing") return <section className="technical-authority"><h2>Configure o perfil mestre do perito</h2><p>Esta fonte única preenche a identificação profissional sem alterar conclusões técnicas.</p><ExpertProfileSetup key={workspaceId} workspaceId={workspaceId} onSaved={profileSaved} submitLabel="Salvar perfil e iniciar laudo" /></section>;
   if (state.kind === "report-missing") return <section className="status-state status-state--empty"><span className="empty-sheet" aria-hidden="true"><span /><span /><span /></span><div><h2>Laudo ainda não iniciado</h2><p>O laudo reúne as análises e decisões já registradas. Nada é redigido automaticamente.</p>{startError && <p className="inline-alert" role="alert">O laudo ainda não pode começar: ele se vincula à análise do caso, à vistoria e à cadeia técnica de Evidências. Registre essas etapas e tente de novo.</p>}<button className="primary-action" type="button" disabled={busy} onClick={async () => { setBusy(true); setStartError(false); try { setState({ kind: "ready", value: await startReportSnapshot(workspaceId) }); } catch { setStartError(true); } finally { setBusy(false); } }}>{busy ? "Iniciando…" : "Iniciar laudo"}</button></div></section>;
 
   const { snapshot } = state.value;
@@ -141,6 +132,16 @@ export function ReportFoundationView({ workspaceId }: { workspaceId: string }) {
     {versionNotice && <section className="inline-note" role="status"><strong>Nova versão aberta em rascunho.</strong><p>{versionNotice}</p><button className="text-action" type="button" onClick={() => setVersionNotice(null)}>Fechar aviso</button></section>}
     {actionError && <section className="inline-alert" role="alert"><strong>{actionError}</strong><p>O laudo continua como estava. Confira a fonte escolhida e tente de novo.</p><button className="text-action" type="button" onClick={() => setActionError(null)}>Fechar aviso</button></section>}
     {sources === null && <p className="field-hint" role="status">As fontes para citação não puderam ser carregadas. Os textos existentes continuam visíveis.</p>}
+
+    <details className="analysis-section property-panel"><summary><strong>Processo nesta versão do laudo</strong></summary>
+      {snapshot.process_record ? <><p>Dados confirmados na revisão {snapshot.process_record.source_revision} do processo.</p><dl className="property-summary"><div><dt>Processo</dt><dd>{snapshot.process_record.numero_processo}</dd></div><div><dt>Juízo</dt><dd>{[snapshot.process_record.vara, snapshot.process_record.tribunal].filter(Boolean).join(" · ")}</dd></div><div><dt>Parte requerente</dt><dd>{snapshot.process_record.parte_requerente}</dd></div><div><dt>Parte requerida</dt><dd>{snapshot.process_record.parte_requerida}</dd></div></dl></> : <p>Esta versão ainda não inclui os dados confirmados do processo.</p>}
+      {editable && !snapshot.process_record && <button type="button" className="text-action" disabled={busy} onClick={() => void amend("SET_PROCESS_RECORD", {}, "Confirme os dados na etapa Processo antes de incluí-los.")}>Incluir dados confirmados do processo</button>}
+    </details>
+
+    <details className="analysis-section property-panel"><summary><strong>Imóvel nesta versão do laudo</strong></summary>
+      {snapshot.property_record ? <><p>Dados confirmados na revisão {snapshot.property_record.source_revision} do cadastro.</p><dl className="property-summary">{snapshot.property_record.record.values.map((value) => <div key={value.field}><dt>{propertyFieldLabel(value.field)}</dt><dd>{value.value}</dd></div>)}</dl></> : <p>Esta versão ainda não inclui o cadastro do imóvel.</p>}
+      {editable && !snapshot.property_record && <button type="button" className="text-action" disabled={busy} onClick={() => void amend("SET_PROPERTY_RECORD", {}, "Confirme o cadastro do imóvel na etapa Processo antes de incluí-lo.")}>Incluir cadastro confirmado do imóvel</button>}
+    </details>
 
     <EditorialPanel profile={snapshot.editorial_profile} editable={editable} busy={busy} onSave={(profile) => amend("SET_EDITORIAL_PROFILE", { editorial_profile: profile }, "Não foi possível salvar o padrão editorial.")} />
 

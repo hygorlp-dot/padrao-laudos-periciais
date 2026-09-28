@@ -6,6 +6,8 @@
   "additionalProperties":false,
   "required":["schema_version","report_id","workspace_id","source_snapshot","expert_profile","editorial_profile","context_matrix","sections","claims","answers","review_decisions","state","coverage","upstream_stale","upstream_stale_reasons"],
   "properties":{
+    "property_record": {"type":"object","additionalProperties":false,"required":["record","source_revision","source_checksum"],"properties":{"record":{"type":"object"},"source_revision":{"$ref":"#/$defs/positive"},"source_checksum":{"$ref":"#/$defs/digest"}}},
+    "process_record": {"type":"object","additionalProperties":false,"properties":{"numero_processo":{"type":"string"},"ramo_justica":{"type":"string"},"tribunal":{"type":"string"},"vara":{"type":"string"},"municipio_sede":{"type":"string"},"subsecao_judiciaria":{"type":"string"},"comarca_municipio":{"type":"string"},"uf":{"type":"string"},"parte_requerente":{"type":"string"},"parte_requerida":{"type":"string"},"workspace_id":{"type":"string","minLength":1},"source_revision":{"type":"integer","minimum":1},"source_checksum":{"type":"string","pattern":"^[0-9a-f]{64}$"}},"required":["numero_processo","ramo_justica","tribunal","vara","municipio_sede","subsecao_judiciaria","comarca_municipio","uf","parte_requerente","parte_requerida","workspace_id","source_revision","source_checksum"]},
     "schema_version":{"const":"1.0.0"},"report_id":{"$ref":"#/$defs/text"},"workspace_id":{"$ref":"#/$defs/text"},
     "source_snapshot":{"$ref":"#/$defs/source"},"expert_profile":{"$ref":"#/$defs/expert"},"editorial_profile":{"$ref":"#/$defs/editorial"},
     "context_matrix":{"type":"array","items":{"$ref":"#/$defs/context"}},

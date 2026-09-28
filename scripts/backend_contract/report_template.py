@@ -61,6 +61,13 @@ def _template_text(value: str) -> str:
 def _context_note(field: str):
     """The professional text the expert gave for a process context field."""
     def value(report):
+        if report.process_record is not None:
+            captured = report.process_record
+            text = captured.numero_processo if field == "PROCESS_NUMBER" else " · ".join(value for value in (captured.vara, captured.tribunal) if value.strip()) if field == "COURT" else None
+            if text is not None:
+                if not text.strip():
+                    raise ValueError(f"template field {field} is absent in the captured process")
+                return text
         item = next((entry for entry in report.context_matrix if entry.field == field), None)
         if item is None or item.status.value != "PRESENT":
             raise ValueError(f"template field {field} requires present process context")

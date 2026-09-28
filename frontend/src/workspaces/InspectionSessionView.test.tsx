@@ -25,6 +25,12 @@ const snapshot = {
 const response = (status: number, value: object) => new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 afterEach(() => { vi.unstubAllGlobals(); sessionStorage.clear(); });
 
+function inspectionOnly(inspection: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
+  return (input: RequestInfo | URL, init?: RequestInit) => String(input).includes("/property-record")
+    ? Promise.resolve(response(200, { revision: null, record: { workspace_id: ID, values: [] }, fields: [] }))
+    : inspection(input, init);
+}
+
 describe("inspection session view", () => {
   test("reopens the pending offline snapshot before further field edits", async () => {
     const offline = { ...snapshot, items: [{ ...snapshot.items[0], title: "Item preservado offline" }] };
@@ -36,7 +42,7 @@ describe("inspection session view", () => {
         items: [{ package_id: "OFFLINE-PACKAGE-001", package_revision: 2, device_sequence: 2, inspection_snapshot: offline }],
         conflicts: [{ code: "CORRUPT_OFFLINE_PACKAGE", message: "Outro pacote local está corrompido e requer recuperação." }],
       }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", inspectionOnly(fetchMock));
     render(<InspectionSessionView workspaceId={ID} />);
     expect(await screen.findByText(/Item preservado offline/)).toBeInTheDocument();
     expect(screen.getByText(/Outro pacote local está corrompido/)).toBeInTheDocument();
@@ -71,7 +77,7 @@ describe("inspection session view", () => {
       .mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T13:00:00Z", snapshot }))
       .mockResolvedValueOnce(response(200, { device_id: "DEVICE-OLD", generation: 1, revoked: true }))
       .mockResolvedValueOnce(response(200, { device_id: "DEVICE-NEW" }));
-    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("fetch", inspectionOnly(fetchMock));
     const user = userEvent.setup();
     render(<InspectionSessionView workspaceId={ID} />);
     await user.click(await screen.findByRole("button", { name: "Cadastrar novo dispositivo" }));
@@ -85,7 +91,7 @@ describe("inspection session view", () => {
       .mockResolvedValueOnce(response(404, {}))
       .mockResolvedValueOnce(response(201, { revision: 1, updated_at: "2026-08-30T12:00:00Z", snapshot: pending }))
       .mockResolvedValueOnce(response(200, { revision: 2, updated_at: "2026-08-30T12:05:00Z", snapshot: { ...pending, items: [{ ...pending.items[0], state: "COMPLETED" }] } }));
-    vi.stubGlobal("fetch", fetchMock); vi.stubGlobal("crypto", { randomUUID: () => "88888888-8888-4888-8888-888888888888" });
+    vi.stubGlobal("fetch", inspectionOnly(fetchMock)); vi.stubGlobal("crypto", { randomUUID: () => "88888888-8888-4888-8888-888888888888" });
     const user = userEvent.setup(); render(<InspectionSessionView workspaceId={ID} />);
     await user.type(await screen.findByLabelText("Profissional responsável"), "PROFESSIONAL-001");
     await user.type(screen.getByLabelText("Local e contexto"), "Local sintético");
@@ -110,7 +116,7 @@ describe("inspection session view", () => {
       .mockResolvedValueOnce(response(200, { device_id: "DEVICE-001", generation: 1, revoked: false }))
       .mockResolvedValueOnce(response(200, { device_id: "DEVICE-001", items: [], conflicts: [] }))
       .mockResolvedValueOnce(response(200, { revision: 2, updated_at: "2026-08-30T12:05:00Z", snapshot }));
-    vi.stubGlobal("fetch", fetchMock); vi.stubGlobal("crypto", { randomUUID: () => "88888888-8888-4888-8888-888888888888" });
+    vi.stubGlobal("fetch", inspectionOnly(fetchMock)); vi.stubGlobal("crypto", { randomUUID: () => "88888888-8888-4888-8888-888888888888" });
     const user = userEvent.setup(); render(<InspectionSessionView workspaceId={ID} />);
     await user.click(await screen.findByRole("button", { name: "Registrar campo" }));
     await user.selectOptions(screen.getByLabelText("Resultado"), "PARTIAL_ACCESS");

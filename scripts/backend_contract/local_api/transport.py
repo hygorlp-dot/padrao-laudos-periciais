@@ -12,6 +12,7 @@ from urllib.parse import unquote_to_bytes, urlsplit
 
 from ..application.photo_library import DuplicatePhoto, photo_library_to_mapping
 from ..application.site_location import LocationInputError, site_location_to_mapping
+from ..application.property_record import PROPERTY_FIELDS, property_record_to_mapping
 from ..application.content import (
     DOCUMENT_IO_CHUNK_BYTES,
     MAX_DOCUMENT_BYTES,
@@ -175,6 +176,9 @@ class LocalApiServices:
     store_delivery_template: object | None = None
     store_default_delivery_template: object | None = None
     get_site_location: object | None = None
+    get_property_record: object | None = None
+    save_property_record: object | None = None
+    get_property_proposals: object | None = None
     get_photo_library: object | None = None
     ai_assistant_status: object | None = None
     curate_photo_library: object | None = None
@@ -698,7 +702,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "property-record", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -771,6 +775,42 @@ class LocalApi:
                 except DuplicatePhoto as exc:
                     return _json_response(409, {"error": {"code": "PHOTO_DUPLICATE", "message": "foto já está na biblioteca", "photo_id": exc.photo_id}})
                 return _json_response(201 if tail[0] == "photos" else 200, {"revision": record.revision, "updated_at": record.created_at, "library": photo_library_to_mapping(library)})
+
+            if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "property-record":
+                workspace_id = self._workspace_id(raw_segments[2])
+                self._services.get_workspace.execute(workspace_id)
+                if self._services.get_property_record is None or self._services.save_property_record is None:
+                    return _error(503, "PROPERTY_RECORD_UNAVAILABLE")
+                if len(raw_segments) == 5:
+                    if raw_segments[4] != "proposals":
+                        return _error(404, "NOT_FOUND")
+                    if normalized_method != "GET":
+                        return _error(405, "METHOD_NOT_ALLOWED")
+                    if self._services.get_property_proposals is None:
+                        return _error(503, "PROPERTY_PROPOSALS_UNAVAILABLE")
+                    proposals = self._services.get_property_proposals.execute(workspace_id)
+                    values_by_field = {field: {p.value for p in proposals if p.field == field} for field, *_ in PROPERTY_FIELDS}
+                    return _json_response(200, {"workspace_id": str(workspace_id), "proposals": [
+                        {**asdict(p), "state": "CONFLICTING" if len(values_by_field[p.field]) > 1 else "PROPOSED"} for p in proposals
+                    ]})
+                if normalized_method == "GET":
+                    try:
+                        record, property_record = self._services.get_property_record.execute(workspace_id)
+                        mapping = property_record_to_mapping(property_record)
+                    except ArtifactRevisionNotFound:
+                        record, mapping = None, {"schema_version": "1.0.0", "workspace_id": str(workspace_id), "values": []}
+                elif normalized_method == "PUT":
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"expected_revision", "changes"}:
+                        raise ValueError("property request is invalid")
+                    record, property_record = self._services.save_property_record.execute(workspace_id, changes=dto["changes"], expected_revision=dto["expected_revision"])
+                    mapping = property_record_to_mapping(property_record)
+                else:
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                return _json_response(200, {
+                    "revision": record.revision if record else None, "updated_at": record.created_at if record else None,
+                    "record": mapping, "fields": [{"field": field, "label": label, "kind": kind} for field, label, kind, _ in PROPERTY_FIELDS],
+                })
 
             if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "site-location":
                 workspace_id = self._workspace_id(raw_segments[2])

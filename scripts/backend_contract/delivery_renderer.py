@@ -896,6 +896,10 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
     number = 0
     for section in sorted(report.sections, key=lambda item: item.order):
         body: list[ReportPresentationBlock] = []
+        if section.kind == "PURPOSE_OBJECT" and report.property_record is not None:
+            from .property_record import PROPERTY_FIELDS
+            labels = {field: label for field, label, *_ in PROPERTY_FIELDS}
+            body.extend(ReportPresentationBlock("PARAGRAPH", _canonical_text(f"{labels[item.field]}: {item.value}")) for item in report.property_record.record.values)
         if section.kind == "INSPECTION" and report.site_location is not None:
             body.append(ReportPresentationBlock("PARAGRAPH", _site_location_sentence(report.site_location)))
         if section.kind == "TECHNICAL_FINDINGS" and report.findings_table:

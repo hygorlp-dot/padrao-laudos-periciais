@@ -1,4 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
+import { PropertyPanel } from "./PropertyPanel";
 import { usePrefilledProfessional, useExpertIdentity } from "../data/expertIdentity";
 import { formatDateTime, sourceKindLabel } from "../ui/labels";
 import { ProfessionalField } from "../ui/ProfessionalField";
@@ -123,6 +124,7 @@ export function InspectionSessionView({ workspaceId }: { workspaceId: string }) 
     try { const covered = withCoverage(next); if (offlinePackageId) { const updated = await updateOfflineInspection(workspaceId, offlinePackageId, offlinePackageRevision, covered); setOfflinePackageId(updated.package.package_id); setOfflinePackageRevision(updated.package.package_revision); setState({ kind: "ready", value: { ...state.value, snapshot: updated.package.inspection_snapshot } }); } else { const value = await saveInspectionSession(workspaceId, state.value.revision, covered); setState({ kind: "ready", value }); } setSelectedItem(null); setObservation(""); setStatementSpeaker(""); setStatementRole(""); setStatementText(""); setMeasurementQuantity(""); setMeasurementValue(""); setMeasurementUnit(""); setInstrumentIdentity(""); setInstrumentModel(""); setInstrumentSerial(""); setInstrumentCapability(""); setMethodName(""); setMethodProcedure(""); setMeasurementRawObservation(""); setPhotoContentId(""); setPhotoSha(""); setPhotoCaption(""); setLimitation(""); } catch { setSaveError(true); } finally { setSaving(false); }
   };
   return <section className="inspection-workspace" aria-labelledby="inspection-title">
+    <PropertyPanel workspaceId={workspaceId} readOnly />
     <FieldMobileStatus
       online={typeof navigator === "undefined" ? true : navigator.onLine}
       pendingCaptures={offlinePackageId ? 1 : 0}

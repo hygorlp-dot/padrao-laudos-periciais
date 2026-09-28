@@ -17,6 +17,7 @@ from weakref import WeakKeyDictionary
 
 from ..photo_library import photo_library_from_mapping
 from ..site_location import site_location_from_mapping
+from ..property_record import property_record_from_mapping
 from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
@@ -326,6 +327,7 @@ _ARTIFACT_VALIDATORS = {
     "PROCESS_CASE": ProcessCaseData.from_mapping,
     "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
     "SITE_LOCATION_V1": site_location_from_mapping,
+    "PROPERTY_RECORD_V1": property_record_from_mapping,
     "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
     "AI_RUN": lambda value: _validate_ai_envelope(value, "AI_RUN"),
     "AI_PROPOSAL": lambda value: _validate_ai_envelope(value, "AI_PROPOSAL"),
@@ -445,6 +447,7 @@ _CANONICAL_PRODUCT_ARTIFACT_IDS = {
     "PROCESS_CASE": "PROCESS_CASE",
     "REPORT_SNAPSHOT_V1": "REPORT-SNAPSHOT",
     "SITE_LOCATION_V1": "SITE-LOCATION",
+    "PROPERTY_RECORD_V1": "PROPERTY-RECORD",
     "TECHNICAL_SNAPSHOT_V1": "TECHNICAL-SNAPSHOT",
 }
 _DOMAIN_REVISION_FIELDS = {
@@ -602,7 +605,11 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
 
     for record in revisions:
         payload = thaw_payload(record.payload)
-        if record.artifact_kind == "PERICIAL_PLANNING_SNAPSHOT_V1":
+        if record.artifact_kind == "PROPERTY_RECORD_V1":
+            profile_ids = {thaw_payload(r.payload)["profile_id"] for r in revisions if r.artifact_kind == "EXPERT_MASTER_PROFILE_V1"}
+            if any(item["confirmed_by"] not in profile_ids for item in payload["values"]):
+                raise RepositoryIntegrityError("backup property professional authority is incomplete")
+        elif record.artifact_kind == "PERICIAL_PLANNING_SNAPSHOT_V1":
             plan = payload["plan"]
             require("CASE_ANALYSIS_SNAPSHOT_V1", plan["case_analysis_revision"], plan["case_analysis_digest"], "snapshot_id", plan["case_analysis_snapshot_id"])
         elif record.artifact_kind == "INSPECTION_SESSION_V1":
@@ -619,6 +626,17 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
             require("PERICIAL_PLANNING_SNAPSHOT_V1", binding["planning_revision"], binding["planning_digest"], "snapshot_id", binding["planning_snapshot_id"])
             require("INSPECTION_SESSION_V1", binding["inspection_revision"], binding["inspection_digest"], "session_id", binding["inspection_session_id"])
         elif record.artifact_kind == "REPORT_SNAPSHOT_V1":
+            captured_process = payload.get("process_record")
+            if captured_process is not None:
+                process_source = require_record("PROCESS_CASE", captured_process["source_revision"], captured_process["source_checksum"])
+                process_fields = ProcessCaseData.from_mapping(thaw_payload(process_source.payload)).as_dict()
+                if any(captured_process[name] != value for name, value in process_fields.items()):
+                    raise RepositoryIntegrityError("backup report process authority diverges")
+            captured_property = payload.get("property_record")
+            if captured_property is not None:
+                property_source = require_record("PROPERTY_RECORD_V1", captured_property["source_revision"], captured_property["source_checksum"])
+                if thaw_payload(property_source.payload) != captured_property["record"]:
+                    raise RepositoryIntegrityError("backup report property authority diverges")
             binding = payload["source_snapshot"]
             require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
             require("INSPECTION_SESSION_V1", binding["inspection_session_revision"], binding["inspection_session_digest"], "session_id", binding["inspection_session_id"])
@@ -882,6 +900,10 @@ class VerifyWorkspaceBackup:
                     for item in case.documents
                 ):
                     raise RepositoryIntegrityError("backup Case Analysis source authority is incomplete")
+            elif record.artifact_kind == "PROPERTY_RECORD_V1":
+                property_record = property_record_from_mapping(thaw_payload(record.payload))
+                if any(item.evidence is not None and private_authority.get(item.evidence.document_id) != item.evidence.document_sha256 for item in property_record.values):
+                    raise RepositoryIntegrityError("backup property source authority is incomplete")
             elif record.artifact_kind == "PJE_INTAKE_V1":
                 # O inventario nomeia a fonte privada de que foi derivado. Sem
                 # este fecho, um backup podia ser certificado intacto e restaurar

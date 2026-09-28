@@ -1,0 +1,41 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, expect, it, vi } from "vitest";
+import { PropertyPanel } from "./PropertyPanel";
+import { getPropertyRecord, getPropertyProposals, savePropertyRecord } from "../data/propertyRecord";
+vi.mock("../data/propertyRecord", async (original) => ({ ...await original<object>(), getPropertyRecord: vi.fn(), getPropertyProposals: vi.fn(), savePropertyRecord: vi.fn() }));
+vi.mock("../data/siteLocation", async (original) => ({ ...await original<object>(), getSiteLocation: vi.fn().mockResolvedValue({ revision: 1, location: { state: "CONFIRMED", latitude: -12.5, longitude: -38.5 } }) }));
+const record = { revision: 1, updated_at: null, record: { schema_version: "1.0.0" as const, workspace_id: "11111111-1111-4111-8111-111111111111", values: [{ field: "owner", value: "Proprietário confirmado", evidence: null, confirmed_by: "EXPERT-1", confirmed_at: "2026-09-28T12:00:00Z" }] }, fields: [{ field: "owner", label: "Proprietário do imóvel", kind: "text" as const }] };
+beforeEach(() => { vi.clearAllMocks(); vi.mocked(getPropertyRecord).mockResolvedValue(record); });
+it("keeps confirmed values when extracting and requires an explicit choice before save", async () => {
+  const evidence = { document_id: "d", document_sha256: "a".repeat(64), filename: "documento.pdf", page: 2, excerpt: "Proprietário: Outra pessoa", method: "LABEL_NATIVE_TEXT_V1", confidence: null, source_value: "Outra pessoa" };
+  vi.mocked(getPropertyProposals).mockResolvedValue([{ proposal_id: "source-token", workspace_id: "11111111-1111-4111-8111-111111111111", field: "owner", value: "Outra pessoa", evidence, state: "CONFLICTING" }]);
+  vi.mocked(savePropertyRecord).mockResolvedValue(record);
+  render(<PropertyPanel workspaceId="11111111-1111-4111-8111-111111111111" />);
+  fireEvent.click(screen.getByText("Imóvel"));
+  const input = await screen.findByLabelText("Proprietário do imóvel");
+  fireEvent.click(screen.getByRole("button", { name: "Buscar informações nos documentos" }));
+  await screen.findByText("Outra pessoa");
+  expect(input).toHaveValue("Proprietário confirmado");
+  expect(savePropertyRecord).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Usar esta proposta" }));
+  expect(input).toHaveValue("Outra pessoa");
+  fireEvent.click(screen.getByRole("button", { name: "Confirmar dados do imóvel" }));
+  await waitFor(() => expect(savePropertyRecord).toHaveBeenCalledWith("11111111-1111-4111-8111-111111111111", 1, [{ field: "owner", value: "Outra pessoa", proposal_id: "source-token" }]));
+});
+it("reuses the record as a read-only summary without writable duplicate fields", async () => {
+  render(<PropertyPanel workspaceId="11111111-1111-4111-8111-111111111111" readOnly />);
+  await screen.findByText("Proprietário confirmado");
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Confirmar dados do imóvel" })).not.toBeInTheDocument();
+});
+it("keeps unsaved typing when the property panel is collapsed and reopened", async () => {
+  render(<PropertyPanel workspaceId="11111111-1111-4111-8111-111111111111" />);
+  fireEvent.click(screen.getByText("Imóvel"));
+  const input = await screen.findByLabelText("Proprietário do imóvel");
+  fireEvent.change(input, { target: { value: "Ainda em edição" } });
+  fireEvent.click(screen.getByText("Imóvel"));
+  fireEvent.click(screen.getByText("Imóvel"));
+  await waitFor(() => expect(input).toHaveValue("Ainda em edição"));
+  expect(getPropertyRecord).toHaveBeenCalledTimes(1);
+  expect(screen.getByText("12,500000° S, 38,500000° O")).toBeInTheDocument();
+});

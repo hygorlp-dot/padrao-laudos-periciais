@@ -15,6 +15,7 @@ from uuid import UUID, uuid4
 from ..application.ai_assistant import AIAssistantStatus
 from ..application.photo_library import CuratePhotoLibrary, GetPhotoLibrary, ReadPhotoThumbnail
 from ..application.site_location import ConfirmSiteLocation, GetSiteLocation, ProposeSiteLocation
+from ..application.property_record import GetPropertyRecord, GetPropertyProposals, SavePropertyRecord
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.workspace_recovery import (
     AbandonWorkspaceRecovery,
@@ -92,6 +93,7 @@ from ..application.construction_defect_analysis import (
 )
 from ..application.report_foundation import (
     StartReportVersion,
+    GetReportProcess,
     GetExpertProfile,
     GetReportSnapshot,
     SaveExpertProfile,
@@ -488,6 +490,15 @@ def build_local_api(
         local_ids,
     )
     get_site_location = GetSiteLocation(get_latest_artifact)
+    get_property_record = GetPropertyRecord(get_latest_artifact)
+    get_property_proposals = (
+        GetPropertyProposals(list_case_documents, read_case_document, LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()))
+        if list_case_documents is not None and read_case_document is not None else None
+    )
+    save_property_record = SavePropertyRecord(
+        get_property_record, store.revisions, get_expert_profile, get_property_proposals,
+        private_store.authority_guard if private_store is not None else nullcontext, local_clock, local_ids,
+    )
     get_photo_library = GetPhotoLibrary(get_latest_artifact)
     propose_site_location = ProposeSiteLocation(
         store.revisions,
@@ -496,6 +507,7 @@ def build_local_api(
         local_clock,
         local_ids,
     )
+    get_report_process = GetReportProcess(get_latest_artifact)
     get_report_snapshot = GetReportSnapshot(
         get_latest_artifact,
         get_case_analysis,
@@ -504,6 +516,7 @@ def build_local_api(
         get_expert_profile,
         get_construction_defect_analysis,
         get_site_location=get_site_location,
+        get_property_record=get_property_record, get_process_record=get_report_process,
     )
     save_report_snapshot = SaveReportSnapshot(
         store.revisions,
@@ -517,6 +530,7 @@ def build_local_api(
         local_ids,
         get_construction_defect_analysis,
         get_site_location=get_site_location,
+        get_property_record=get_property_record, get_process_record=get_report_process,
     )
     get_delivery_snapshot = None
     get_delivery_history = None
@@ -749,13 +763,15 @@ def build_local_api(
             save_report_snapshot,
             local_ids,
             get_construction_defect_analysis,
+            get_property_record=get_property_record, get_process_record=get_report_process,
         ),
         review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
         start_report_version=StartReportVersion(
             get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile,
             save_report_snapshot, local_ids, get_construction_defect_analysis, get_site_location,
+            get_property_record=get_property_record, get_process_record=get_report_process,
         ),
-        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids, get_case_analysis, get_technical_snapshot, get_construction_defect_analysis, get_site_location, get_photo_library),
+        amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids, get_case_analysis, get_technical_snapshot, get_construction_defect_analysis, get_site_location, get_photo_library, get_property_record=get_property_record, get_process_record=get_report_process),
         list_report_sources=ListReportSources(get_case_analysis, get_inspection_session, get_technical_snapshot, get_construction_defect_analysis),
         export_report_audit_trail=ExportReportAuditTrail(get_report_snapshot),
         store_delivery_template=generic_store,
@@ -763,6 +779,9 @@ def build_local_api(
         get_site_location=get_site_location,
         get_photo_library=get_photo_library,
         ai_assistant_status=AIAssistantStatus(),
+        get_property_record=get_property_record,
+        save_property_record=save_property_record,
+        get_property_proposals=get_property_proposals,
         curate_photo_library=CuratePhotoLibrary(
             store.revisions, get_latest_artifact, get_private_content,
             private_store.authority_guard if private_store is not None else nullcontext, local_clock, local_ids,

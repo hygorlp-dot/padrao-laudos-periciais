@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { ExpertProfilePanel } from "./ExpertProfileSetup";
+import { PropertyPanel } from "./PropertyPanel";
 
 import {
   getProcessCase,
@@ -355,7 +357,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
   }
 
   return (
-    <form className="process-case-form" onSubmit={submit}>
+    <><form className="process-case-form" onSubmit={submit}>
       <div className="process-case-intro">
         <h2>Identificação do processo</h2>
         <p>Revise os dados extraídos dos autos. Corrija apenas o que o documento não informou corretamente.</p>
@@ -604,6 +606,6 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
           <span className="revision-note">Revisão atual {visibleState.snapshot.revision}</span>
         ) : null}
       </div>
-    </form>
+    </form><ExpertProfilePanel workspaceId={workspaceId} /><PropertyPanel workspaceId={workspaceId} /></>
   );
 }

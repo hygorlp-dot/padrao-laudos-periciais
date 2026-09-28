@@ -31,6 +31,8 @@ from ..report_foundation import (
     ReportReference,
     ReportReviewDecision,
     ReportSiteLocation,
+    ReportProperty,
+    ReportProcess,
     ReportSection,
     ReportSnapshot,
     ReportSourceSnapshot,
@@ -47,7 +49,7 @@ from ..report_foundation import (
 from ..site_location import SiteLocationState
 from ..technical_findings import DecisionAction, TechnicalSnapshot, technical_snapshot_to_mapping
 from ..vistoria import InspectionSession, inspection_session_to_mapping
-from .models import thaw_payload
+from .models import thaw_payload, ProcessCaseData
 from .ports import ArtifactRevisionNotFound, RepositoryConflict, RepositoryIntegrityError
 
 
@@ -222,6 +224,69 @@ def _with_site_location_staleness(snapshot: ReportSnapshot, get_site_location, w
     )
 
 
+@dataclass(frozen=True, slots=True)
+class GetReportProcess:
+    get_latest_revision: object
+
+    def execute(self, workspace_id):
+        record = self.get_latest_revision.execute(workspace_id, "PROCESS_CASE", "PROCESS_CASE")
+        if record.workspace_id != workspace_id:
+            raise ValueError("report process workspace mismatch")
+        data = ProcessCaseData.from_mapping(thaw_payload(record.payload)).as_dict()
+        return ReportProcess(str(workspace_id), record.revision, record.checksum_sha256, **data)
+
+
+def _capture_process(get_process_record, workspace_id):
+    if get_process_record is None:
+        return None
+    try:
+        result = get_process_record.execute(workspace_id)
+    except ArtifactRevisionNotFound:
+        return None
+    if result.workspace_id != str(workspace_id):
+        raise ValueError("report process workspace mismatch")
+    return result
+
+
+def _process_reasons(snapshot, get_process_record, workspace_id):
+    if snapshot.process_record is None:
+        return ()
+    return () if _capture_process(get_process_record, workspace_id) == snapshot.process_record else ("process record changed",)
+
+
+def _with_process_staleness(snapshot, get_process_record, workspace_id):
+    reasons = _process_reasons(snapshot, get_process_record, workspace_id)
+    if not reasons:
+        return snapshot
+    return replace(snapshot, state=ReportState.DRAFT, review_decisions=(), coverage=replace(snapshot.coverage, complete=False), upstream_stale=True, upstream_stale_reasons=(*snapshot.upstream_stale_reasons, *reasons))
+
+
+def _capture_property(get_property_record, workspace_id):
+    if get_property_record is None:
+        return None
+    try:
+        record, property_record = get_property_record.execute(workspace_id)
+    except ArtifactRevisionNotFound:
+        return None
+    if property_record.workspace_id != str(workspace_id):
+        raise ValueError("report property workspace mismatch")
+    return ReportProperty(property_record, record.revision, record.checksum_sha256)
+
+
+def _property_reasons(snapshot, get_property_record, workspace_id):
+    if snapshot.property_record is None:
+        return ()
+    current = _capture_property(get_property_record, workspace_id)
+    return () if current == snapshot.property_record else ("property record changed",)
+
+
+def _with_property_staleness(snapshot, get_property_record, workspace_id):
+    reasons = _property_reasons(snapshot, get_property_record, workspace_id)
+    if not reasons:
+        return snapshot
+    return replace(snapshot, state=ReportState.DRAFT, review_decisions=(), coverage=replace(snapshot.coverage, complete=False), upstream_stale=True, upstream_stale_reasons=(*snapshot.upstream_stale_reasons, *reasons))
+
+
 def _validate_answer_chains(snapshot: ReportSnapshot, technical: TechnicalSnapshot) -> None:
     findings = {item.finding_id: item for item in technical.findings}
     proposals = {item.proposal_id: item for item in technical.finding_proposals}
@@ -384,6 +449,8 @@ class SaveReportSnapshot:
     ids: object
     get_construction_defect_analysis: object | None = None
     get_site_location: object | None = None
+    get_property_record: object | None = None
+    get_process_record: object | None = None
 
     def execute(self, workspace_id, snapshot: ReportSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False, allow_initial_create: bool = False, allow_new_version: bool = False):
         if type(snapshot) is not ReportSnapshot or snapshot.workspace_id != str(workspace_id) or snapshot.upstream_stale:
@@ -405,7 +472,7 @@ class SaveReportSnapshot:
                 ),
                 self.get_construction_defect_analysis,
             )
-            if _reconcile(snapshot, current[-1]).upstream_stale or _site_location_reasons(snapshot, self.get_site_location, workspace_id):
+            if _reconcile(snapshot, current[-1]).upstream_stale or _site_location_reasons(snapshot, self.get_site_location, workspace_id) or _property_reasons(snapshot, self.get_property_record, workspace_id) or _process_reasons(snapshot, self.get_process_record, workspace_id):
                 raise ValueError("Report Snapshot upstream authority is stale")
             _validate_answer_chains(snapshot, current[5])
             _validate_claim_provenance(
@@ -417,23 +484,27 @@ class SaveReportSnapshot:
                 if allow_new_version:
                     # A new version replaces only a report that can no longer
                     # change itself, and starts every professional review again.
-                    stale = _reconcile(predecessor, current[-1]).upstream_stale or bool(_site_location_reasons(predecessor, self.get_site_location, workspace_id))
+                    stale = _reconcile(predecessor, current[-1]).upstream_stale or bool(_site_location_reasons(predecessor, self.get_site_location, workspace_id)) or bool(_property_reasons(predecessor, self.get_property_record, workspace_id)) or bool(_process_reasons(predecessor, self.get_process_record, workspace_id))
                     if snapshot.state is not ReportState.DRAFT or snapshot.review_decisions or not (predecessor.state is ReportState.SUPERSEDED or stale):
                         raise ValueError("Report new version requires a superseded or stale predecessor")
                 elif not allow_review_transition and snapshot.review_decisions != predecessor.review_decisions:
                     raise ValueError("Report Snapshot review decisions require the professional review command")
-                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table", "site_location", "figures")
+                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table", "site_location", "figures", "property_record", "process_record")
                 if not allow_new_version and predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
                     raise ValueError("Report Snapshot material change requires a new draft before professional review")
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("Report Snapshot clock requires timezone")
             records = [current[0], current[2], current[4], current[6]]
+            if snapshot.property_record is not None:
+                records.append(self.get_property_record.execute(workspace_id)[0])
             if (
                 current[-1].construction_defect_analysis_snapshot_id is not None
                 and current[8] is not None
             ):
                 records.append(current[8])
+            if snapshot.process_record is not None:
+                records.append(self.get_latest_revision.execute(workspace_id, "PROCESS_CASE", "PROCESS_CASE"))
             dependencies = tuple({"artifact_kind": item.artifact_kind, "artifact_id": item.artifact_id, "revision": item.revision, "checksum_sha256": item.checksum_sha256} for item in records)
             return self.revisions.append_if_latest(
                 workspace_id=workspace_id, artifact_kind=REPORT_SNAPSHOT_ARTIFACT_KIND, artifact_id=REPORT_SNAPSHOT_ARTIFACT_ID,
@@ -451,6 +522,8 @@ class GetReportSnapshot:
     get_expert_profile: object
     get_construction_defect_analysis: object | None = None
     get_site_location: object | None = None
+    get_property_record: object | None = None
+    get_process_record: object | None = None
 
     def execute(self, workspace_id):
         record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
@@ -465,7 +538,7 @@ class GetReportSnapshot:
             ),
             self.get_construction_defect_analysis,
         )
-        return record, _with_site_location_staleness(_reconcile(snapshot, current[-1]), self.get_site_location, workspace_id)
+        return record, _with_process_staleness(_with_property_staleness(_with_site_location_staleness(_reconcile(snapshot, current[-1]), self.get_site_location, workspace_id), self.get_property_record, workspace_id), self.get_process_record, workspace_id)
 
 
 @dataclass(frozen=True, slots=True)
@@ -514,6 +587,8 @@ class AmendReportDraft:
     get_construction_defect_analysis: object | None = None
     get_site_location: object | None = None
     get_photo_library: object | None = None
+    get_property_record: object | None = None
+    get_process_record: object | None = None
 
     def execute(self, workspace_id, *, expected_revision: int, action: str, values: dict):
         record, snapshot = self.get_snapshot.execute(workspace_id)
@@ -590,6 +665,16 @@ class AmendReportDraft:
             if values != {} or snapshot.figures is None:
                 raise ValueError("Report figures amendment is invalid")
             amended = replace(snapshot, figures=None)
+        elif action == "SET_PROCESS_RECORD":
+            captured = _capture_process(self.get_process_record, workspace_id)
+            if values != {} or captured is None:
+                raise ValueError("confirmed process record is required")
+            amended = replace(snapshot, process_record=captured)
+        elif action == "SET_PROPERTY_RECORD":
+            captured = _capture_property(self.get_property_record, workspace_id)
+            if values != {} or captured is None:
+                raise ValueError("confirmed property record is required")
+            amended = replace(snapshot, property_record=captured)
         elif action == "SET_SITE_LOCATION":
             if values != {} or self.get_site_location is None:
                 raise ValueError("Report site location amendment is invalid")
@@ -738,6 +823,8 @@ class StartReportVersion:
     ids: object
     get_construction_defect_analysis: object | None = None
     get_site_location: object | None = None
+    get_property_record: object | None = None
+    get_process_record: object | None = None
 
     def execute(self, workspace_id, *, expected_revision: int):
         record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
@@ -750,7 +837,7 @@ class StartReportVersion:
             self.get_construction_defect_analysis,
         )
         case, inspection, technical, profile, pathology, binding = current[1], current[3], current[5], current[7], current[9], current[-1]
-        stale = _reconcile(stored, binding).upstream_stale or bool(_site_location_reasons(stored, self.get_site_location, workspace_id))
+        stale = _reconcile(stored, binding).upstream_stale or bool(_site_location_reasons(stored, self.get_site_location, workspace_id)) or bool(_property_reasons(stored, self.get_property_record, workspace_id)) or bool(_process_reasons(stored, self.get_process_record, workspace_id))
         if stored.state is not ReportState.SUPERSEDED and not stale:
             raise ValueError("a new report version requires a superseded or stale report")
         if case.source_inventory_stale or inspection.upstream_stale or technical.upstream_stale:
@@ -807,7 +894,7 @@ class StartReportVersion:
         draft = replace(
             stored, source_snapshot=binding, expert_profile=profile, context_matrix=context_tuple, claims=kept_claims,
             answers=answers_tuple, review_decisions=(), state=ReportState.DRAFT, upstream_stale=False, upstream_stale_reasons=(),
-            findings_table=findings_table, site_location=site_location,
+            findings_table=findings_table, site_location=site_location, property_record=_capture_property(self.get_property_record, workspace_id), process_record=_capture_process(self.get_process_record, workspace_id),
             coverage=_draft_coverage(stored, claims=kept_claims, answers=answers_tuple, context=context_tuple),
         )
         saved = self.save_snapshot.execute(workspace_id, draft, expected_revision, allow_new_version=True)
@@ -953,6 +1040,8 @@ class StartReportSnapshot:
     save_snapshot: object
     ids: object
     get_construction_defect_analysis: object | None = None
+    get_property_record: object | None = None
+    get_process_record: object | None = None
 
     def execute(self, workspace_id):
         current = _current(
@@ -976,7 +1065,7 @@ class StartReportSnapshot:
             editorial_profile=EditorialProfile("JUSTICA_PLURAL_CHAPTER_4", "Arial", 11, 10, 9, "JUSTIFIED", 1.15, 1.25, "A4", 2, 2, 3, 2, False, ()),
             context_matrix=context, sections=sections, claims=(), answers=(), review_decisions=(), state=ReportState.DRAFT,
             coverage=ReportCoverage(14, 0, 0, 0, 0, sum(item.required_by_cpc473 for item in sections), 0, 6, 0, False, ("Report draft has no material claims.",)),
-            upstream_stale=False, upstream_stale_reasons=(),
+            upstream_stale=False, upstream_stale_reasons=(), property_record=_capture_property(self.get_property_record, workspace_id), process_record=_capture_process(self.get_process_record, workspace_id),
         )
         record = self.save_snapshot.execute(workspace_id, snapshot, None, allow_initial_create=True)
         return record, snapshot
