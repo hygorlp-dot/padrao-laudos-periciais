@@ -1,0 +1,31 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { expect, test, vi } from "vitest";
+import { confirmInspectionVisit, type InspectionEnvelope } from "../data/inspectionSession";
+import { getProcessCase } from "../data/processCase";
+import { getPropertyRecord } from "../data/propertyRecord";
+import { InspectionVisitForm } from "./InspectionVisitForm";
+vi.mock("../data/inspectionSession", () => ({ confirmInspectionVisit: vi.fn() }));
+vi.mock("../data/processCase", () => ({ getProcessCase: vi.fn() }));
+vi.mock("../data/propertyRecord", () => ({ getPropertyRecord: vi.fn() }));
+
+test("does not infer physical visit date or attendance from known process participants", async () => {
+  const envelope = { revision: 2, snapshot: { started_at: "2026-09-28T12:00:00Z" } } as unknown as InspectionEnvelope;
+  vi.mocked(getProcessCase).mockResolvedValue({ data: { parte_requerente: "Pessoa sintética", parte_requerida: "" } } as Awaited<ReturnType<typeof getProcessCase>>);
+  vi.mocked(getPropertyRecord).mockResolvedValue({ record: { values: [] } } as unknown as Awaited<ReturnType<typeof getPropertyRecord>>);
+  vi.mocked(confirmInspectionVisit).mockResolvedValue(envelope);
+  render(<InspectionVisitForm workspaceId="11111111-1111-4111-8111-111111111111" envelope={envelope} disabled={false} onSaved={vi.fn()}/>);
+  const user = userEvent.setup();
+  await user.click(screen.getByText(/Dados da diligência/));
+  expect(screen.getByLabelText("Data da vistoria")).toHaveValue("");
+  fireEvent.change(screen.getByLabelText("Data da vistoria"), { target: { value: "2026-09-20" } });
+  fireEvent.change(screen.getByLabelText("Hora de início"), { target: { value: "09:10" } });
+  await user.click(screen.getByRole("button", { name: "Consultar nomes do processo e do imóvel" }));
+  await user.click(await screen.findByRole("button", { name: /Adicionar Pessoa sintética/ }));
+  expect(screen.getByLabelText("Confirmo que esteve presente")).not.toBeChecked();
+  await user.click(screen.getByRole("button", { name: "Confirmar dados da diligência" }));
+  expect(confirmInspectionVisit).not.toHaveBeenCalled();
+  await user.click(screen.getByLabelText("Confirmo que esteve presente"));
+  await user.click(screen.getByRole("button", { name: "Confirmar dados da diligência" }));
+  await waitFor(() => expect(confirmInspectionVisit).toHaveBeenCalledWith(expect.any(String), 2, expect.objectContaining({ date: "2026-09-20", start_time: "09:10", attendants: [{ name: "Pessoa sintética", role: "Parte autora", presence_confirmed: true }] })));
+});

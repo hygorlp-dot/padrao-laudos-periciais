@@ -106,6 +106,7 @@ def test_process_case_domain_fields_stay_out_of_bridge_and_in_exact_frontend_mod
         if forbidden.search(path.read_text(encoding="utf-8"))
     }
     assert frontend_domain_sources == {
+        "frontend/src/workspaces/InspectionVisitForm.tsx",
         # Property UF and professional court labels are presentation text;
         # ProcessCase remains the only writer of the ten process fields.
         "frontend/src/data/propertyRecord.ts",

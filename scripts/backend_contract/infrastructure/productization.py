@@ -616,6 +616,9 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
         elif record.artifact_kind == "INSPECTION_SESSION_V1":
             binding = payload["plan_snapshot"]
             require("PERICIAL_PLANNING_SNAPSHOT_V1", binding["planning_revision"], binding["planning_digest"], "snapshot_id", binding["planning_snapshot_id"])
+            visit = payload.get("visit_context")
+            if visit is not None and not any(candidate.artifact_kind == "EXPERT_MASTER_PROFILE_V1" and thaw_payload(candidate.payload)["profile_id"] == visit["confirmed_by"] for candidate in revisions):
+                raise RepositoryIntegrityError("backup visit professional authority is incomplete")
         elif record.artifact_kind == "TECHNICAL_SNAPSHOT_V1":
             binding = payload["source_snapshot"]
             require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
@@ -894,6 +897,7 @@ class VerifyWorkspaceBackup:
         }
         private_by_id = {str(item.metadata.content_id): item for item in private_contents}
         property_source_proposals = {}
+        question_source_proposals = {}
         for record in revisions:
             if record.artifact_kind == "CASE_ANALYSIS_SNAPSHOT_V1":
                 case = case_analysis_from_mapping(thaw_payload(record.payload))
@@ -902,6 +906,29 @@ class VerifyWorkspaceBackup:
                     for item in case.documents
                 ):
                     raise RepositoryIntegrityError("backup Case Analysis source authority is incomplete")
+                profiles = {thaw_payload(r.payload)["profile_id"] for r in revisions if r.artifact_kind == "EXPERT_MASTER_PROFILE_V1"}
+                if any(item.confirmed_by not in profiles for item in case.document_inventory):
+                    raise RepositoryIntegrityError("backup document inventory professional authority is incomplete")
+                for question in case.questions:
+                    if question.source_question is None:
+                        continue
+                    if len(question.provenance) != 1:
+                        raise RepositoryIntegrityError("backup question source authority is ambiguous")
+                    origin = question.provenance[0]
+                    document = next(d for d in case.documents if d.document_id == origin.source_document_id)
+                    cache_key = (document.storage_content_id, document.document_id, document.page_count_or_span)
+                    if cache_key not in question_source_proposals:
+                        from .pdf_text import LocalPdfTextExtractor
+                        from .rapid_ocr import RapidOcrLatinEngine
+                        from ..case_intake import extract_questions
+                        private = private_by_id[document.storage_content_id]
+                        try:
+                            extracted = LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()).extract(BytesIO(private.content), document_sha256=document.source_sha256)
+                            question_source_proposals[cache_key] = extract_questions(document, extracted.pages)
+                        except Exception as exc:
+                            raise RepositoryIntegrityError("backup question source evidence cannot be verified locally") from exc
+                    if not any((p.text, p.source) == (question.text, question.source_question) for p in question_source_proposals[cache_key]):
+                        raise RepositoryIntegrityError("backup question source evidence diverges from document bytes")
             elif record.artifact_kind == "PROPERTY_RECORD_V1":
                 property_record = property_record_from_mapping(thaw_payload(record.payload))
                 if any(item.evidence is not None and private_authority.get(item.evidence.document_id) != item.evidence.document_sha256 for item in property_record.values):

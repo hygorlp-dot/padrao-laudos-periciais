@@ -96,19 +96,19 @@ class SaveCaseAnalysis:
     list_documents: object | None
     authority_guard: object
 
-    def execute(self, workspace_id, snapshot: CaseAnalysisSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False, allow_item_append: bool = False):
+    def execute(self, workspace_id, snapshot: CaseAnalysisSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False, allow_item_append: bool = False, allow_inventory_confirmation: bool = False):
         if type(snapshot) is not CaseAnalysisSnapshot or str(workspace_id) != snapshot.workspace_id:
             raise ValueError("Case Analysis workspace identity mismatch")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected revision is invalid")
-        if expected_revision is None and (snapshot.human_reviews or snapshot.material_items):
+        if expected_revision is None and (snapshot.human_reviews or snapshot.material_items or snapshot.document_inventory):
             raise ValueError("initial Case Analysis must be the canonical authority-free bootstrap")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Case Analysis authority guard is unavailable")
         with self.authority_guard():
-            return self._execute_guarded(workspace_id, snapshot, expected_revision, allow_review_transition, allow_item_append)
+            return self._execute_guarded(workspace_id, snapshot, expected_revision, allow_review_transition, allow_item_append, allow_inventory_confirmation)
 
-    def _execute_guarded(self, workspace_id, snapshot: CaseAnalysisSnapshot, expected_revision: int | None, allow_review_transition: bool, allow_item_append: bool):
+    def _execute_guarded(self, workspace_id, snapshot: CaseAnalysisSnapshot, expected_revision: int | None, allow_review_transition: bool, allow_item_append: bool, allow_inventory_confirmation: bool):
         if self.list_documents is None:
             raise RepositoryIntegrityError("Case Analysis source inventory is unavailable")
         authoritative = {
@@ -134,6 +134,8 @@ class SaveCaseAnalysis:
                 raise ValueError("Case Analysis canonical identity and JDM provenance are immutable")
             if predecessor.documents != snapshot.documents:
                 raise ValueError("Case Analysis source extraction is immutable")
+            if snapshot.document_inventory != predecessor.document_inventory and not allow_inventory_confirmation:
+                raise ValueError("document inventory requires the dedicated confirmation command")
             if allow_item_append:
                 prior = {item.item_id: item for item in predecessor.material_items}
                 current = {item.item_id: item for item in snapshot.material_items}

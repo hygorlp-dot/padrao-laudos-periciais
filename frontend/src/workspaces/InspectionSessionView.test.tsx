@@ -32,6 +32,39 @@ function inspectionOnly(inspection: (input: RequestInfo | URL, init?: RequestIni
 }
 
 describe("inspection session view", () => {
+  test("reuses instrument identity and procedure without copying a reading or calibration claim", async () => {
+    const reusable = { ...snapshot,
+      instruments: [{ instrument_id: "INST-001", identity: "Trena", model: "Modelo sintético", serial_number: "SERIE-01", capability: "0 a 5 m", calibration_claimed: true, certificate_reference: "Certificado anterior" }],
+      methods: [{ method_id: "METHOD-001", name: "Leitura direta", procedure: "Posicionar e ler a escala.", provenance: "Registro anterior" }],
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { revision: 1, updated_at: "2026-08-30T12:00:00Z", snapshot: reusable }))
+      .mockResolvedValueOnce(response(200, { device_id: "DEVICE-001", generation: 1, revoked: false }))
+      .mockResolvedValueOnce(response(200, { device_id: "DEVICE-001", items: [], conflicts: [] }))
+      .mockResolvedValueOnce(response(200, { revision: 2, updated_at: "2026-08-30T12:05:00Z", snapshot: reusable }));
+    vi.stubGlobal("fetch", inspectionOnly(fetchMock));
+    const user = userEvent.setup(); render(<InspectionSessionView workspaceId={ID} />);
+    await user.click(await screen.findByRole("button", { name: "Registrar campo" }));
+    await user.click(screen.getByText("Reutilizar instrumento e método desta vistoria"));
+    await user.selectOptions(screen.getByLabelText("Instrumento já registrado"), "INST-001");
+    await user.selectOptions(screen.getByLabelText("Método já registrado"), "METHOD-001");
+    expect(screen.getByLabelText("Identidade do instrumento")).toHaveValue("Trena");
+    expect(screen.getByLabelText("Procedimento efetivamente aplicado")).toHaveValue("Posicionar e ler a escala.");
+    expect(screen.getByLabelText("Valor bruto")).toHaveValue("");
+    await user.type(screen.getByLabelText("Grandeza"), "comprimento");
+    await user.type(screen.getByLabelText("Valor bruto"), "2.3");
+    await user.type(screen.getByLabelText("Unidade bruta"), "m");
+    await user.type(screen.getByLabelText("Observação bruta da leitura"), "Leitura atual.");
+    await user.click(screen.getByRole("button", { name: "Salvar registros de campo" }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    const saved = JSON.parse(String(fetchMock.mock.calls[3][1].body)).snapshot;
+    expect(saved.instruments.at(-1).calibration_claimed).toBe(false);
+    expect(saved.instruments.at(-1).certificate_reference).toBeNull();
+    expect(saved.instruments[0].calibration_claimed).toBe(true);
+    expect(saved.measurements.at(-1).raw_value).toBe("2.3");
+    expect(saved.measurements.at(-1).instrument_id).not.toBe("INST-001");
+  });
+
   test("reopens the pending offline snapshot before further field edits", async () => {
     const offline = { ...snapshot, items: [{ ...snapshot.items[0], title: "Item preservado offline" }] };
     const fetchMock = vi.fn()

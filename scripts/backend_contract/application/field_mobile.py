@@ -223,6 +223,8 @@ class UpdateOfflineInspection:
             raise ValueError("offline package revision conflict")
         if snapshot.workspace_id != str(workspace_id) or snapshot.session_id != previous.inspection_id:
             raise ValueError("offline update workspace/inspection mismatch")
+        if snapshot.visit_context != previous.inspection_snapshot.visit_context:
+            raise ValueError("offline visit facts require dedicated confirmation in the local service")
         manifests = []
         originals = {}
         for kind, records, identity in (("PHOTO", snapshot.photos, "photo_id"), ("VIDEO", snapshot.videos, "video_id"), ("SKETCH", snapshot.sketches, "sketch_id")):

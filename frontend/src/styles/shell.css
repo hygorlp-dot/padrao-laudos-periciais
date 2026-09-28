@@ -1836,3 +1836,12 @@ button.text-action {
 .property-summary dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .75rem; }
 .property-summary dt { font-size: .8rem; color: var(--text-muted, #62686c); }
 .property-summary dd { margin: .2rem 0 0; }
+.visit-context-form { grid-template-columns: repeat(3, minmax(0, 1fr)); max-width: none; }
+.visit-context-form > :is(fieldset, p, button) { grid-column: 1 / -1; }
+.visit-context-form fieldset { min-width: 0; border: 1px solid var(--color-rule-strong); padding: var(--space-4); }
+.visit-attendant { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); padding: var(--space-4) 0; border-bottom: 1px solid var(--color-rule-strong); margin-bottom: var(--space-3); }
+.analysis-form .checkbox-label { display: flex; align-items: center; gap: var(--space-2); }
+.analysis-form .checkbox-label input[type="checkbox"] { width: auto; padding: 0; flex: 0 0 auto; }
+.visit-attendant > button { justify-self: end; }
+@media (max-width: 1050px) { .visit-context-form { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .visit-context-form, .visit-attendant { grid-template-columns: 1fr; } }

@@ -24,6 +24,7 @@ from ..vistoria import (
 )
 from .models import PrivateContentId, thaw_payload
 from .ports import RepositoryConflict, RepositoryIntegrityError
+from ..visit_context import VisitContext
 
 
 _SCHEMA_PATH = Path(__file__).resolve().parents[3] / "schemas" / "inspection-session-v1.schema.json"
@@ -119,7 +120,7 @@ class SaveInspectionSession:
     clock: object
     ids: object
 
-    def execute(self, workspace_id, session: InspectionSession, expected_revision: int | None, *, allow_initial_create: bool = False):
+    def execute(self, workspace_id, session: InspectionSession, expected_revision: int | None, *, allow_initial_create: bool = False, allow_visit_confirmation: bool = False):
         if type(session) is not InspectionSession or str(workspace_id) != session.workspace_id:
             raise ValueError("Inspection Session workspace identity mismatch")
         if session.upstream_stale:
@@ -128,6 +129,8 @@ class SaveInspectionSession:
             raise ValueError("expected revision is invalid")
         if expected_revision is None and not allow_initial_create:
             raise ValueError("initial Inspection Session requires the canonical start command")
+        if expected_revision is None and session.visit_context is not None:
+            raise ValueError("visit facts require the dedicated confirmation command")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Inspection Session authority guard is unavailable")
         with self.authority_guard():
@@ -145,7 +148,11 @@ class SaveInspectionSession:
                     (item.item_id, item.planning_item_id): item.title for item in predecessor.items
                 }:
                     raise ValueError("Inspection Session planned item identity or title changed")
-                if session.reviews != predecessor.reviews:
+                if session.visit_context != predecessor.visit_context and not allow_visit_confirmation:
+                    raise ValueError("visit facts require the dedicated confirmation command")
+                if allow_visit_confirmation and session.reviews:
+                    raise ValueError("changed visit facts invalidate prior inspection review")
+                if session.reviews != predecessor.reviews and not allow_visit_confirmation:
                     raise ValueError("Inspection Session reviews require a dedicated professional command")
                 append_only = (
                     "observations", "statements", "measurements", "measurement_series", "methods", "instruments",
@@ -190,6 +197,26 @@ class SaveInspectionSession:
                 or type(metadata.media_type) is not str or not metadata.media_type.startswith("image/")
             ):
                 raise ValueError("photo record diverges from private original authority")
+
+
+@dataclass(frozen=True, slots=True)
+class ConfirmInspectionVisit:
+    get_session: object
+    save_session: object
+    get_expert_profile: object
+    clock: object
+
+    def execute(self, workspace_id, *, values, expected_revision):
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("visit expected revision is invalid")
+        record, session = self.get_session.execute(workspace_id)
+        if record.revision != expected_revision or session.upstream_stale:
+            raise RepositoryConflict("visit session is stale")
+        _, profile = self.get_expert_profile.execute(workspace_id)
+        context = VisitContext.from_values(values, confirmed_by=profile.profile_id, confirmed_at=self.clock.now().isoformat())
+        updated = replace(session, visit_context=context, participant_references=tuple(dict.fromkeys(person.name for person in context.attendants)), reviews=())
+        saved = self.save_session.execute(workspace_id, updated, expected_revision, allow_visit_confirmation=True)
+        return saved, updated
 
 
 @dataclass(frozen=True, slots=True)

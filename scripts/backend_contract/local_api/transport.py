@@ -143,6 +143,10 @@ class LocalApiServices:
     save_inspection_session: object | None = None
     get_inspection_session: object | None = None
     start_inspection_session: object | None = None
+    confirm_inspection_visit: object | None = None
+    get_case_intake: object | None = None
+    accept_case_questions: object | None = None
+    confirm_document_inventory: object | None = None
     prepare_offline_inspection: object | None = None
     sync_offline_inspection: object | None = None
     update_offline_inspection: object | None = None
@@ -1243,6 +1247,27 @@ class LocalApi:
                 record, snapshot = service.execute(workspace_id, **dto)
                 return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": technical_snapshot_to_validated_mapping(snapshot)})
 
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "case-analysis" and raw_segments[4] in {"intake", "questions", "document-inventory"}:
+                workspace_id = self._workspace_id(raw_segments[2])
+                action = raw_segments[4]
+                if action == "intake":
+                    if normalized_method != "GET":
+                        return _error(405, "METHOD_NOT_ALLOWED")
+                    if self._services.get_case_intake is None:
+                        return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
+                    record, snapshot, questions, inventory = self._services.get_case_intake.execute(workspace_id)
+                    return _json_response(200, {"revision": record.revision, "questions": [asdict(item) for item in questions], "inventory": inventory})
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                dto = self._request_dto(request_headers, body)
+                service = self._services.accept_case_questions if action == "questions" else self._services.confirm_document_inventory
+                if service is None:
+                    return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
+                if set(dto) != ({"proposal_ids", "expected_revision"} if action == "questions" else {"values", "expected_revision"}):
+                    raise ValueError("case intake command is invalid")
+                record, snapshot = service.execute(workspace_id, **dto)
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": case_analysis_to_mapping(snapshot)})
+
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "case-analysis":
                 workspace_id = self._workspace_id(raw_segments[2])
                 if normalized_method == "GET":
@@ -1363,6 +1388,18 @@ class LocalApi:
                     200,
                     {"revision": record.revision, "updated_at": record.created_at, "snapshot": pericial_planning_to_mapping(snapshot)},
                 )
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("inspection-session", "visit-context"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.confirm_inspection_visit is None:
+                    return _error(503, "INSPECTION_SESSION_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_revision", "values"}:
+                    raise ValueError("visit confirmation request is invalid")
+                record, snapshot = self._services.confirm_inspection_visit.execute(workspace_id, expected_revision=dto["expected_revision"], values=dto["values"])
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_validated_mapping(snapshot)})
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "inspection-session":
                 workspace_id = self._workspace_id(raw_segments[2])

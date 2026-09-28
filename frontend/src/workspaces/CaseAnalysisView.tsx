@@ -1,9 +1,10 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { usePrefilledProfessional, useExpertIdentity } from "../data/expertIdentity";
-import { documentTypeLabel, plural, roleLabel } from "../ui/labels";
+import { documentTypeLabel, plural, roleLabel, questionOriginLabel } from "../ui/labels";
 import { ProfessionalField } from "../ui/ProfessionalField";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
+import { CaseIntakePanel } from "./CaseIntakePanel";
 import { addCaseAnalysisItem, CaseAnalysisApiError, getCaseAnalysis, reviewCaseAnalysisItem, startCaseAnalysis, type AnalysisItem, type CaseAnalysisEnvelope } from "../data/caseAnalysis";
 
 type State = { kind: "loading" } | { kind: "ready"; value: CaseAnalysisEnvelope } | { kind: "empty" } | { kind: "error" };
@@ -11,7 +12,7 @@ type State = { kind: "loading" } | { kind: "ready"; value: CaseAnalysisEnvelope 
 function ItemList({ items, staleDocumentIds }: { items: AnalysisItem[]; staleDocumentIds: string[] }) {
   if (items.length === 0) return <p className="analysis-empty">Nenhum item identificado nesta revisão.</p>;
   const stale = new Set(staleDocumentIds);
-  return <ul className="analysis-list">{items.map((item) => <li key={item.item_id}><p>{item.text}</p>{item.provenance.some((source) => stale.has(source.source_document_id)) && <span className="analysis-stale">Fonte alterada — revisão necessária</span>}<details><summary>Ver proveniência</summary><ul>{item.provenance.map((source) => <li key={source.occurrence_id}>{source.page_or_span}<small className="data"> · {source.source_document_id} · ocorrência {source.occurrence_id} · SHA-256 {source.source_document_sha256} · revisão {source.source_revision}</small></li>)}</ul></details></li>)}</ul>;
+  return <ul className="analysis-list">{items.map((item) => <li key={item.item_id}>{item.source_question && <strong>{questionOriginLabel(item.source_question.origin)} · quesito {item.source_question.original_number}</strong>}<p style={{ whiteSpace: "pre-wrap" }}>{item.text}</p>{item.provenance.some((source) => stale.has(source.source_document_id)) && <span className="analysis-stale">Fonte alterada — revisão necessária</span>}<details><summary>Ver proveniência</summary><ul>{item.provenance.map((source) => <li key={source.occurrence_id}>{source.page_or_span}<small className="data"> · {source.source_document_id} · ocorrência {source.occurrence_id} · SHA-256 {source.source_document_sha256} · revisão {source.source_revision}</small></li>)}</ul></details></li>)}</ul>;
 }
 
 export function CaseAnalysisView({ workspaceId }: { workspaceId: string }) {
@@ -77,6 +78,7 @@ export function CaseAnalysisView({ workspaceId }: { workspaceId: string }) {
   ];
   const judicialContextStale = judicialContextProvenance.some((source) => staleSources.has(source.source_document_id));
   return <section className="analysis-workspace" aria-labelledby="analysis-map-title">
+    <CaseIntakePanel workspaceId={workspaceId} envelope={state.value} onSaved={(value) => setState({ kind: "ready", value })}/>
     <header className="analysis-overview"><div><h2 id="analysis-map-title">Mapa do processo</h2><p>Leitura estruturada das fontes documentais. Não contém conclusão pericial.</p></div><div className={`coverage coverage--${snapshot.coverage.status.toLowerCase()}`}><strong>{coverageLabel}</strong><span>{snapshot.coverage.documents_analyzed} de {snapshot.coverage.documents_total} documentos analisados</span></div></header>
     {snapshot.source_inventory_stale && <p className="analysis-inventory-warning" role="status">{snapshot.unindexed_source_count} fonte nova ainda não foi incorporada à análise.</p>}
     {judicialContextStale && <p className="analysis-inventory-warning" role="status">Fonte alterada — contexto judicial requer revisão</p>}
