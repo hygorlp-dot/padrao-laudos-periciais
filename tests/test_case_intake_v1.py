@@ -36,7 +36,10 @@ def test_inventory_document_heading_is_a_proposal_but_body_mention_is_not_presen
 
 
 def test_real_intake_accepts_literal_questions_once_and_backup_rejects_forged_excerpt(tmp_path):
-    import pymupdf as fitz
+    # `pymupdf` nao e dependencia declarada: o CI instala so requirements-dev.txt.
+    # `_text_pdf` usa `pypdf`, e o extrator do produto le deste PDF exatamente o
+    # mesmo texto que lia do gerado por pymupdf (acentos e quebras incluidos).
+    from tests.test_property_record_v1 import _text_pdf
     from scripts.backend_contract.local_api.composition import build_local_api
     from scripts.backend_contract.infrastructure.productization import VerifyWorkspaceBackup
     from scripts.backend_contract.application.ports import RepositoryIntegrityError
@@ -49,9 +52,7 @@ def test_real_intake_accepts_literal_questions_once_and_backup_rejects_forged_ex
         root = f"/v1/workspaces/{workspace['workspace_id']}"
         profile = json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8"))["expert_profile"]
         assert _http(runtime, "PUT", root + "/expert-profile", {"expected_revision": None, "profile": profile})[0] == 200
-        with fitz.open() as pdf:
-            pdf.new_page().insert_text((72, 72), "QUESITOS DA PARTE AUTORA\n01) A parede apresenta umidade?\n\n2. Qual a extensão?")
-            data = pdf.tobytes()
+        data = _text_pdf(["QUESITOS DA PARTE AUTORA", "01) A parede apresenta umidade?", "", "2. Qual a extensão?"])
         assert _http(runtime, "POST", root + "/materials", raw_body=data, headers={"Content-Type": "application/pdf", "X-Document-Filename": "quesitos-sinteticos.pdf"})[0] == 201
         assert _http(runtime, "POST", root + "/case-analysis", {})[0] == 201
         status, proposed = _http(runtime, "GET", root + "/case-analysis/intake")
