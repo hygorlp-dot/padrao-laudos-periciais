@@ -386,3 +386,100 @@ def test_real_local_ocr_property_evidence_survives_backup_replay():
     backup["artifact_revisions"].sort(key=lambda r: (r["artifact_kind"], r["artifact_id"], r["revision"]))
     backup["private_contents"].append(_private(document_id, source, "imovel-digitalizado.pdf", "application/pdf"))
     assert VerifyWorkspaceBackup().execute(_reseal(backup)).workspace.workspace_id == workspace
+
+
+def _pje_export_with_owner(path, owner_line):
+    """Export PJe sintetico cuja linha de proprietario fica na p. 4, dentro do DOC-PJE-002.
+
+    Mesma estrutura de `tests.test_final_closure_r7.pdf_sintetico` (indice na p. 1,
+    DOC-PJE-001 na p. 2, pagina complementar na p. 3, DOC-PJE-002 na p. 4), com a
+    linha do proprietario acrescentada a peca 2.
+    """
+    from pypdf import PdfWriter
+    from pypdf.generic import DictionaryObject, NameObject, StreamObject
+
+    writer = PdfWriter()
+
+    def page(commands):
+        added = writer.add_blank_page(width=612, height=792)
+        font = DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"), NameObject("/BaseFont"): NameObject("/Helvetica")})
+        added[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)})})
+        stream = StreamObject()
+        stream.set_data(commands.encode("ascii"))
+        added[NameObject("/Contents")] = writer._add_object(stream)
+
+    grid = " ".join(f"{x} 650 m {x} 740 l S" for x in (40, 140, 260, 480, 570)) + " 40 650 m 570 650 l S 40 680 m 570 680 l S 40 710 m 570 710 l S 40 740 m 570 740 l S"
+    index = "BT /F1 10 Tf 45 720 Td (ID) Tj 100 0 Td (Data) Tj 120 0 Td (Titulo) Tj 220 0 Td (Tipo) Tj ET BT /F1 10 Tf 45 690 Td (900001) Tj 100 0 Td (01/01/2026) Tj 120 0 Td (Manifestacao da parte autora) Tj 220 0 Td (PETICAO) Tj ET BT /F1 10 Tf 45 660 Td (900002) Tj 100 0 Td (02/01/2026) Tj 120 0 Td (Decisao sintetica) Tj 220 0 Td (DECISAO) Tj ET"
+    page(grid + index + " BT /F1 10 Tf 40 760 Td (Processo 0000001-00.2026.4.00.0001) Tj ET")
+    page("BT /F1 10 Tf 40 730 Td (A autora alega infiltracao e fissura no imovel por vicio construtivo.) Tj 0 -20 Td (O objeto da pericia e o imovel e o objetivo da pericia e determinar a causa.) Tj 0 -20 Td (QUESITOS:) Tj 0 -20 Td (1. Existe umidade na parede?) Tj 0 -630 Td (Num. 900001 - Pag. 1) Tj ET")
+    page("BT /F1 10 Tf 40 730 Td (Pagina complementar sem rodape e sem link) Tj ET")
+    page(f"BT /F1 10 Tf 40 730 Td (DECISAO: defiro pericia para verificar infiltracao, fissura e determinar a causa.) Tj 0 -20 Td (O objeto da pericia e o imovel e o objetivo da pericia e sanear a controversia.) Tj 0 -20 Td ({owner_line}) Tj 0 -630 Td (Num. 900002 - Pag. 1) Tj ET")
+    with open(path, "wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def test_a_pje_document_excluded_by_the_professional_does_not_feed_property_proposals(tmp_path):
+    """A exclusao profissional de uma peca PJe precisa alcancar o cadastro do imovel.
+
+    As propostas leem o arquivo FISICO inteiro, mas a exclusao recai sobre o
+    documento LOGICO. Antes do reparo, a linha do proprietario de uma peca excluida
+    seguia como PROPOSED, podia ser confirmada e ia ao laudo citando a pagina que o
+    perito tirou da analise.
+
+    Os controles impedem o teste de ficar verde pelo motivo errado: a proposta
+    existe antes da exclusao (e vem da p. 4), excluir OUTRA peca nao a afeta, e
+    reabilitar a traz de volta.
+    """
+    from scripts.planejamento_pericial.app_composition import build_pericial_local_api
+    from tests.test_document_intake_v1 import provision_private_root
+    from tests.test_product_integration_oracle_v1 import _http, _fixture, TOKEN
+
+    provision_private_root(tmp_path / "private")
+    pdf = _pje_export_with_owner(tmp_path / "autos.pdf", "Proprietario do imovel: Pessoa Sintetica Excluida")
+    runtime = build_pericial_local_api(tmp_path / "property.db", private_root=tmp_path / "private", token=TOKEN)
+    runtime.start()
+    try:
+        workspace_id = _http(runtime, "POST", "/v1/workspaces", {"name": "Imovel PJe"})[1]["workspace_id"]
+        root = f"/v1/workspaces/{workspace_id}"
+        profile = _fixture("report-snapshot-v1.json")["expert_profile"]
+        assert _http(runtime, "PUT", root + "/expert-profile", {"expected_revision": None, "profile": profile})[0] == 200
+        status, material = _http(runtime, "POST", root + "/materials", raw_body=pdf.read_bytes(), headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"})
+        assert status == 201, material
+        content_id = material["content_id"]
+
+        def owners():
+            status, body = _http(runtime, "GET", root + "/property-record/proposals")
+            assert status == 200, body
+            return [p for p in body["proposals"] if p["field"] == "owner"]
+
+        def set_available(document_id, available):
+            intake = next(i for i in _http(runtime, "GET", root + "/pje-intake")[1]["intakes"] if i["inventory"]["storage_content_id"] == content_id)
+            assert intake["inventory"]["status"] == "OK", intake
+            status, body = _http(runtime, "POST", root + "/pje-intake/availability", {
+                "storage_content_id": content_id, "document_id": document_id,
+                "available": available, "expected_revision": intake["revision"],
+            })
+            assert status == 200, body
+
+        # Controle: sem exclusao, o proprietario e proposto a partir da p. 4 (DOC-PJE-002).
+        before = owners()
+        assert len(before) == 1 and before[0]["evidence"]["page"] == 4, before
+        stale_proposal = before[0]
+
+        # Excluir OUTRA peca nao pode apagar a proposta: o filtro e por pagina da peca.
+        set_available("DOC-PJE-001", False)
+        assert owners() == before
+
+        set_available("DOC-PJE-002", False)
+        assert owners() == [], "peca excluida pelo perito ainda propoe o proprietario"
+        status, _ = _http(runtime, "PUT", root + "/property-record", {"expected_revision": None, "changes": [
+            {"field": "owner", "value": stale_proposal["value"], "proposal_id": stale_proposal["proposal_id"]},
+        ]})
+        assert status == 400, "uma proposta de peca excluida foi confirmada"
+
+        # A exclusao e reversivel: reabilitar devolve a proposta, identica.
+        set_available("DOC-PJE-002", True)
+        assert owners() == before
+    finally:
+        runtime.close()

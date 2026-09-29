@@ -24,14 +24,42 @@ class GetPropertyRecord:
         return record, property_record
 
 
+def _excluded_pages(indexed_documents) -> dict[str, frozenset[int]]:
+    """Paginas fisicas que pertencem a um documento logico excluido pelo perito.
+
+    A exclusao e feita sobre o documento LOGICO do inventario PJe, mas a extracao
+    le o arquivo FISICO inteiro. Sem este filtro, a linha "Proprietario: X" de uma
+    peca excluida continuava virando proposta -- e podia ser confirmada e levada ao
+    laudo citando uma pagina que a decisao profissional tirou da analise.
+    """
+    excluded: dict[str, frozenset[int]] = {}
+    for item in indexed_documents:
+        inventory = item.pje_inventory
+        if inventory is None:
+            continue
+        pages = {
+            page
+            for row in inventory["documents"]
+            if row["available"] is False
+            for page in range(row["page_start"], row["page_end"] + 1)
+        }
+        if pages:
+            excluded[str(item.content_id)] = frozenset(pages)
+    return excluded
+
+
 @dataclass(frozen=True, slots=True)
 class GetPropertyProposals:
     list_documents: object
     open_document: object
     extractor: object
+    # Leitor do inventario PJe vigente. Obrigatorio: sem ele nao ha como saber o
+    # que o perito excluiu, e o silencio equivaleria a tratar tudo como disponivel.
+    pje_documents: object
 
     def execute(self, workspace_id):
         proposals = []
+        excluded = _excluded_pages(self.pje_documents.execute(workspace_id))
         for document in self.list_documents.execute(workspace_id):
             if document.workspace_id != workspace_id:
                 raise RepositoryIntegrityError("property source workspace mismatch")
@@ -41,7 +69,9 @@ class GetPropertyProposals:
                 extracted = self.extractor.extract(opened.stream, document_sha256=document.checksum_sha256)
                 if extracted.document_sha256 != document.checksum_sha256:
                     raise RepositoryIntegrityError("property extraction source mismatch")
-                proposals.extend(property_proposals(workspace_id, document.content_id, document.checksum_sha256, document.original_filename, extracted.pages))
+                skipped = excluded.get(str(document.content_id), frozenset())
+                pages = tuple(page for page in extracted.pages if page.number not in skipped)
+                proposals.extend(property_proposals(workspace_id, document.content_id, document.checksum_sha256, document.original_filename, pages))
         return tuple(proposals)
 
 
