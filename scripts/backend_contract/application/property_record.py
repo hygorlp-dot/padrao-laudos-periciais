@@ -15,6 +15,8 @@ __all__ = ["GetPropertyRecord", "SavePropertyRecord", "GetPropertyProposals", "P
 @dataclass(frozen=True, slots=True)
 class GetPropertyRecord:
     get_latest_revision: object
+    # Leitor do inventario PJe vigente; ausente apenas sem armazenamento privado.
+    pje_documents: object | None = None
 
     def execute(self, workspace_id):
         record = self.get_latest_revision.execute(workspace_id, PROPERTY_RECORD_KIND, PROPERTY_RECORD_ID)
@@ -23,15 +25,65 @@ class GetPropertyRecord:
             raise ValueError("property workspace mismatch")
         return record, property_record
 
+    def stale_fields(self, workspace_id, property_record) -> tuple[str, ...]:
+        """Campos confirmados cuja evidencia esta numa peca que o perito excluiu depois.
+
+        O registro persistido nao e reescrito: o valor foi uma decisao do perito e
+        continua auditavel. A exclusao posterior e projetada na LEITURA, como a Analise
+        do Caso faz com `project_effective_availability` -- quem consome o registro
+        passa a saber que aquela fonte saiu da analise, em vez de citar a pagina como
+        se ainda valesse.
+        """
+        cited = [value for value in property_record.values if value.evidence is not None]
+        if not cited:
+            return ()
+        if self.pje_documents is None:
+            # Sem o inventario nao ha como provar que a pagina citada continua
+            # admitida; afirmar que continua seria fabricar disponibilidade.
+            raise RepositoryIntegrityError("property source availability is unavailable")
+        excluded = _excluded_pages(self.pje_documents.execute(workspace_id))
+        return tuple(
+            value.field for value in cited
+            if value.evidence.page in excluded.get(str(value.evidence.document_id), frozenset())
+        )
+
+
+def _excluded_pages(indexed_documents) -> dict[str, frozenset[int]]:
+    """Paginas fisicas que pertencem a um documento logico excluido pelo perito.
+
+    A exclusao e feita sobre o documento LOGICO do inventario PJe, mas a extracao
+    le o arquivo FISICO inteiro. Sem este filtro, a linha "Proprietario: X" de uma
+    peca excluida continuava virando proposta -- e podia ser confirmada e levada ao
+    laudo citando uma pagina que a decisao profissional tirou da analise.
+    """
+    excluded: dict[str, frozenset[int]] = {}
+    for item in indexed_documents:
+        inventory = item.pje_inventory
+        if inventory is None:
+            continue
+        pages = {
+            page
+            for row in inventory["documents"]
+            if row["available"] is False
+            for page in range(row["page_start"], row["page_end"] + 1)
+        }
+        if pages:
+            excluded[str(item.content_id)] = frozenset(pages)
+    return excluded
+
 
 @dataclass(frozen=True, slots=True)
 class GetPropertyProposals:
     list_documents: object
     open_document: object
     extractor: object
+    # Leitor do inventario PJe vigente. Obrigatorio: sem ele nao ha como saber o
+    # que o perito excluiu, e o silencio equivaleria a tratar tudo como disponivel.
+    pje_documents: object
 
     def execute(self, workspace_id):
         proposals = []
+        excluded = _excluded_pages(self.pje_documents.execute(workspace_id))
         for document in self.list_documents.execute(workspace_id):
             if document.workspace_id != workspace_id:
                 raise RepositoryIntegrityError("property source workspace mismatch")
@@ -41,7 +93,9 @@ class GetPropertyProposals:
                 extracted = self.extractor.extract(opened.stream, document_sha256=document.checksum_sha256)
                 if extracted.document_sha256 != document.checksum_sha256:
                     raise RepositoryIntegrityError("property extraction source mismatch")
-                proposals.extend(property_proposals(workspace_id, document.content_id, document.checksum_sha256, document.original_filename, extracted.pages))
+                skipped = excluded.get(str(document.content_id), frozenset())
+                pages = tuple(page for page in extracted.pages if page.number not in skipped)
+                proposals.extend(property_proposals(workspace_id, document.content_id, document.checksum_sha256, document.original_filename, pages))
         return tuple(proposals)
 
 

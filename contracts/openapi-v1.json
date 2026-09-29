@@ -218,7 +218,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Cadastro e metadados de campos; revisão nula quando ausente"
+            "description": "Cadastro, metadados de campos e stale_fields (campos confirmados cuja página de origem o perito excluiu depois); revisão nula quando ausente"
           }
         }
       },

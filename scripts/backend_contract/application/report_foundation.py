@@ -263,23 +263,38 @@ def _with_process_staleness(snapshot, get_process_record, workspace_id):
     return replace(snapshot, state=ReportState.DRAFT, review_decisions=(), coverage=replace(snapshot.coverage, complete=False), upstream_stale=True, upstream_stale_reasons=(*snapshot.upstream_stale_reasons, *reasons))
 
 
-def _capture_property(get_property_record, workspace_id):
+def _read_property(get_property_record, workspace_id):
+    """Registro vigente do imovel e os campos cuja fonte o perito excluiu depois."""
     if get_property_record is None:
-        return None
+        return None, ()
     try:
         record, property_record = get_property_record.execute(workspace_id)
     except ArtifactRevisionNotFound:
-        return None
+        return None, ()
     if property_record.workspace_id != str(workspace_id):
         raise ValueError("report property workspace mismatch")
-    return ReportProperty(property_record, record.revision, record.checksum_sha256)
+    stale = get_property_record.stale_fields(workspace_id, property_record)
+    return ReportProperty(property_record, record.revision, record.checksum_sha256), stale
+
+
+def _capture_property(get_property_record, workspace_id):
+    # Capturar um valor cuja pagina de origem foi excluida levaria ao texto do laudo
+    # uma citacao que a decisao profissional tirou da analise. O perito precisa
+    # resolver o campo (outra fonte, confirmacao manual ou remocao) antes.
+    captured, stale = _read_property(get_property_record, workspace_id)
+    if stale:
+        raise ValueError("report property cites a document excluded by the professional: " + ", ".join(stale))
+    return captured
 
 
 def _property_reasons(snapshot, get_property_record, workspace_id):
     if snapshot.property_record is None:
         return ()
-    current = _capture_property(get_property_record, workspace_id)
-    return () if current == snapshot.property_record else ("property record changed",)
+    current, stale = _read_property(get_property_record, workspace_id)
+    reasons = () if current == snapshot.property_record else ("property record changed",)
+    # Mesmo sem nova revisao do imovel, um laudo que capturou o valor passa a
+    # depender de uma pagina excluida -- e isso tem de aparecer, nao ficar inerte.
+    return (*reasons, "property evidence excluded by the professional") if stale else reasons
 
 
 def _with_property_staleness(snapshot, get_property_record, workspace_id):

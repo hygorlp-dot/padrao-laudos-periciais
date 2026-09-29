@@ -27,7 +27,7 @@ afterEach(() => { vi.unstubAllGlobals(); sessionStorage.clear(); });
 
 function inspectionOnly(inspection: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
   return (input: RequestInfo | URL, init?: RequestInit) => String(input).includes("/property-record")
-    ? Promise.resolve(response(200, { revision: null, record: { workspace_id: ID, values: [] }, fields: [] }))
+    ? Promise.resolve(response(200, { revision: null, record: { workspace_id: ID, values: [] }, fields: [], stale_fields: [] }))
     : inspection(input, init);
 }
 

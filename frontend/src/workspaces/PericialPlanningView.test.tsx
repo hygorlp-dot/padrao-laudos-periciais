@@ -42,7 +42,7 @@ afterEach(() => vi.unstubAllGlobals());
 // The site location panel reads its own resource; the planning mock stays exact.
 function planningOnly(planning: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => String(input).includes("/property-record")
-    ? Promise.resolve(response(200, { revision: null, record: { workspace_id: WORKSPACE_ID, values: [] }, fields: [] }))
+    ? Promise.resolve(response(200, { revision: null, record: { workspace_id: WORKSPACE_ID, values: [] }, fields: [], stale_fields: [] }))
     : String(input).includes("/site-location")
     ? Promise.resolve(response(404, { error: { code: "ARTIFACT_REVISION_NOT_FOUND" } }))
     : planning(input, init));

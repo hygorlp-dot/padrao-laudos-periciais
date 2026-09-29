@@ -4,6 +4,8 @@ export type PropertyEnvelope = {
   revision: number | null; updated_at: string | null;
   record: { schema_version: "1.0.0"; workspace_id: string; values: PropertyValue[] };
   fields: { field: string; label: string; kind: "text" | "decimal" | "date" }[];
+  /** Campos confirmados cuja página de origem o perito excluiu depois da confirmação. */
+  stale_fields: string[];
 };
 export type PropertyProposal = { proposal_id: string; workspace_id: string; field: string; value: string; evidence: PropertyEvidence; state: "PROPOSED" | "CONFLICTING" };
 export type PropertyChange = { field: string; value: string | null; proposal_id: string | null };
@@ -19,7 +21,7 @@ async function read(response: Response) {
   return response.json();
 }
 function envelope(value: PropertyEnvelope, workspace: string) {
-  if (value?.record?.workspace_id !== workspace || !Array.isArray(value.record.values) || !Array.isArray(value.fields) || (value.revision !== null && (!Number.isInteger(value.revision) || value.revision < 1))) throw new PropertyApiError("unavailable");
+  if (value?.record?.workspace_id !== workspace || !Array.isArray(value.record.values) || !Array.isArray(value.fields) || !Array.isArray(value.stale_fields) || (value.revision !== null && (!Number.isInteger(value.revision) || value.revision < 1))) throw new PropertyApiError("unavailable");
   return value;
 }
 export async function getPropertyRecord(workspace: string, signal?: AbortSignal) {
