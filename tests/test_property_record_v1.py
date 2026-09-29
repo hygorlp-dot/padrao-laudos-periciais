@@ -13,6 +13,44 @@ from scripts.backend_contract.property_record import (
 )
 
 
+def _text_pdf(lines):
+    """PDF de uma pagina com camada de texto, usando apenas `pypdf` (dependencia do produto).
+
+    Os rotulos procurados sao acentuados ("Proprietário", "Área privativa", "m²"), entao
+    a fonte declara WinAnsiEncoding e o texto vai em cp1252 com escape octal: a extracao
+    devolve exatamente as linhas escritas, e o teste nao passa nem falha por perda de acento.
+    """
+    import io
+
+    from pypdf import PdfWriter
+    from pypdf.generic import DictionaryObject, NameObject, StreamObject
+
+    def literal(text):
+        return "(" + "".join(
+            chr(byte) if 32 <= byte < 127 and byte not in b"()\\" else "\\%03o" % byte
+            for byte in text.encode("cp1252")
+        ) + ")"
+
+    writer = PdfWriter()
+    page = writer.add_blank_page(width=612, height=792)
+    font = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+        NameObject("/Encoding"): NameObject("/WinAnsiEncoding"),
+    })
+    page[NameObject("/Resources")] = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)}),
+    })
+    body = " ".join(f"{literal(line)} Tj 0 -14 Td" for line in lines)
+    stream = StreamObject()
+    stream.set_data(f"BT /F1 11 Tf 72 720 Td {body} ET".encode("ascii"))
+    page[NameObject("/Contents")] = writer._add_object(stream)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
 def test_property_is_not_a_duplicate_coordinate_or_claimant_authority():
     value = PropertyValue("street", "Rua Sintética", None, "EXPERT-1", "2026-09-28T12:00:00+00:00")
     record = PropertyRecord("1.0.0", "workspace-one", (value,))
@@ -108,11 +146,8 @@ def test_local_product_saves_property_and_backup_requires_its_professional(tmp_p
         assert status == 200 and saved["record"]["values"][0]["confirmed_by"] == profile["profile_id"]
         assert _http(runtime, "PUT", root + "/property-record", {"expected_revision": None, "changes": changes})[0] == 409
         assert _http(runtime, "GET", root + "/property-record")[1] == saved
-        import pymupdf as fitz
         for owner in ("Pessoa Sintetica A", "Pessoa Sintetica B"):
-            with fitz.open() as pdf:
-                pdf.new_page().insert_text((72, 72), f"Proprietário do imóvel: {owner}\nÁrea privativa: 42,50 m²")
-                source = pdf.tobytes()
+            source = _text_pdf([f"Proprietário do imóvel: {owner}", "Área privativa: 42,50 m²"])
             status, _ = _http(runtime, "POST", root + "/materials", raw_body=source, headers={"Content-Type": "application/pdf", "X-Document-Filename": "imovel-sintetico.pdf"})
             assert status == 201
         status, proposed = _http(runtime, "GET", root + "/property-record/proposals")
