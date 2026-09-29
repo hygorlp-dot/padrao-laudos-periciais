@@ -8,6 +8,7 @@ from enum import StrEnum
 import json
 import re
 from typing import Any, TypeVar
+from .property_record import PropertyRecord, property_record_from_mapping
 
 
 REPORT_SNAPSHOT_ARTIFACT_KIND = "REPORT_SNAPSHOT_V1"
@@ -531,6 +532,54 @@ class ReportCoverage:
 
 
 @dataclass(frozen=True, slots=True)
+class ReportProcess:
+    """Immutable presentation capture of ProcessCase; never a second editor."""
+    workspace_id: str
+    source_revision: int
+    source_checksum: str
+    numero_processo: str
+    ramo_justica: str
+    tribunal: str
+    vara: str
+    municipio_sede: str
+    subsecao_judiciaria: str
+    comarca_municipio: str
+    uf: str
+    parte_requerente: str
+    parte_requerida: str
+
+    @property
+    def has_identity(self) -> bool:
+        return bool(self.numero_processo.strip() and (self.vara.strip() or self.tribunal.strip()))
+
+    def __post_init__(self):
+        if not _text(self.workspace_id):
+            raise ValueError("report process workspace is invalid")
+        if type(self.source_revision) is not int or self.source_revision < 1 or type(self.source_checksum) is not str or not _SHA256.fullmatch(self.source_checksum):
+            raise ValueError("report process binding is invalid")
+        for field in fields(self):
+            if field.name in {"workspace_id", "source_revision", "source_checksum"}:
+                continue
+            value = getattr(self, field.name)
+            if type(value) is not str:
+                raise ValueError("report process field is invalid")
+            value.encode("utf-8")
+
+
+@dataclass(frozen=True, slots=True)
+class ReportProperty:
+    record: PropertyRecord
+    source_revision: int
+    source_checksum: str
+
+    def __post_init__(self):
+        if type(self.record) is not PropertyRecord or type(self.source_revision) is not int or self.source_revision < 1:
+            raise ValueError("report property binding is invalid")
+        if type(self.source_checksum) is not str or not _SHA256.fullmatch(self.source_checksum):
+            raise ValueError("report property checksum is invalid")
+
+
+@dataclass(frozen=True, slots=True)
 class ReportSnapshot:
     schema_version: str
     report_id: str
@@ -554,6 +603,8 @@ class ReportSnapshot:
     findings_table: tuple[ReportFindingRow, ...] | None = None
     site_location: ReportSiteLocation | None = None
     figures: tuple[ReportFigure, ...] | None = None
+    property_record: ReportProperty | None = None
+    process_record: ReportProcess | None = None
 
     def __post_init__(self):
         _all_text(self, ("schema_version", "report_id", "workspace_id"))
@@ -592,6 +643,12 @@ class ReportSnapshot:
                 raise ValueError("report references must be unique")
         if self.site_location is not None and type(self.site_location) is not ReportSiteLocation:
             raise ValueError("report site location is invalid")
+        if self.process_record is not None and (type(self.process_record) is not ReportProcess or self.process_record.workspace_id != self.workspace_id):
+            raise ValueError("report process workspace mismatch")
+        if self.state is ReportState.APPROVED and self.process_record is not None and not self.process_record.has_identity:
+            raise ValueError("approved report requires complete captured process identity")
+        if self.property_record is not None and (type(self.property_record) is not ReportProperty or self.property_record.record.workspace_id != self.workspace_id):
+            raise ValueError("report property workspace is invalid")
         if self.figures is not None:
             if type(self.figures) is not tuple or not self.figures or any(type(item) is not ReportFigure for item in self.figures):
                 raise ValueError("report figures are invalid")
@@ -695,10 +752,18 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     if type(value) is not dict:
         raise ValueError("ReportSnapshot mapping is invalid")
     allowed = {item.name for item in fields(ReportSnapshot)}
-    optional = {"references", "findings_table", "site_location", "figures"}
+    optional = {"references", "findings_table", "site_location", "figures", "property_record", "process_record"}
     if not allowed - optional <= set(value) <= allowed:
         raise ValueError("ReportSnapshot fields are invalid")
     data = dict(value)
+    data["process_record"] = _construct(ReportProcess, data["process_record"]) if "process_record" in data else None
+    if "property_record" not in data:
+        data["property_record"] = None
+    else:
+        capture = data["property_record"]
+        if type(capture) is not dict or set(capture) != {"record", "source_revision", "source_checksum"}:
+            raise ValueError("report property capture is invalid")
+        data["property_record"] = ReportProperty(property_record_from_mapping(capture["record"]), capture["source_revision"], capture["source_checksum"])
     if "site_location" not in data:
         data["site_location"] = None
     elif type(data["site_location"]) is not dict:
@@ -779,7 +844,7 @@ def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     for answer in mapping["answers"]:
         if answer["question_text"] is None:
             del answer["question_text"]
-    for name in ("references", "findings_table", "site_location", "figures"):
+    for name in ("references", "findings_table", "site_location", "figures", "property_record", "process_record"):
         if mapping[name] is None:
             del mapping[name]
     return mapping

@@ -37,6 +37,7 @@ export function ReportReviewView({ workspaceId }: { workspaceId: string }) {
   const { snapshot } = state.value;
   const coverage = snapshot.coverage;
   const checks: Check[] = [
+    { label: "Identificação capturada do processo", done: !coverage.reasons.includes("captured process identity incomplete"), detail: "Número e juízo utilizados no documento final" },
     { label: "Contexto processual (art. 319)", done: coverage.context_present_fields >= coverage.context_required_fields, detail: `${coverage.context_present_fields} de ${coverage.context_required_fields} campos` },
     { label: "Conteúdo pericial obrigatório (art. 473)", done: coverage.cpc473_present_sections >= coverage.cpc473_required_sections, detail: `${coverage.cpc473_present_sections} de ${coverage.cpc473_required_sections} seções` },
     { label: "Afirmações com fonte", done: coverage.material_claims > 0 && coverage.traceable_claims === coverage.material_claims, detail: `${coverage.traceable_claims} de ${coverage.material_claims} afirmações rastreáveis` },

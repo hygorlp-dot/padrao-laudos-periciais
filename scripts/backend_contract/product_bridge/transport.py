@@ -154,6 +154,10 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/photo-library/{remainder[2]}"
         if len(remainder) == 5 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:3] == ["photo-library", "photos"] and _PHOTO_ID.fullmatch(remainder[3]) and remainder[4] == "thumbnail" and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/photo-library/photos/{remainder[3]}/thumbnail"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "property-record" and method in {"GET", "PUT"}:
+            return f"/v1/workspaces/{remainder[0]}/property-record"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["property-record", "proposals"] and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/property-record/proposals"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "site-location" and method in {"GET", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["site-location", "confirmation"] and method == "POST":

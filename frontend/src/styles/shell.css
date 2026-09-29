@@ -1826,3 +1826,13 @@ button.text-action {
   width: auto;
   margin: 0;
 }
+.property-panel > summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: .5rem 1rem; cursor: pointer; }
+.property-panel > summary span, .property-source, .property-candidates { color: var(--text-muted, #62686c); font-size: .875rem; }
+.property-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr)); gap: 1.25rem; margin-block: 1rem; }
+.property-field, .property-field > label { display: grid; align-content: start; gap: .4rem; min-width: 0; }
+.property-field input { width: 100%; min-width: 0; box-sizing: border-box; font: inherit; padding: .65rem; border: 1px solid var(--border, #cbd0d3); border-radius: .3rem; }
+.property-candidate { display: grid; gap: .35rem; padding-block: .75rem; border-bottom: 1px solid var(--border, #d6dadd); }
+.property-source blockquote { margin: .5rem 0; padding-left: .75rem; border-left: 2px solid var(--border, #cbd0d3); overflow-wrap: anywhere; }
+.property-summary dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); gap: .75rem; }
+.property-summary dt { font-size: .8rem; color: var(--text-muted, #62686c); }
+.property-summary dd { margin: .2rem 0 0; }

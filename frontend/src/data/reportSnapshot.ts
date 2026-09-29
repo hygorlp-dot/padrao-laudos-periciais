@@ -1,3 +1,6 @@
+import type { ProcessCaseData } from "./processCase";
+import type { PropertyEnvelope } from "./propertyRecord";
+
 export type ExpertProfile = { profile_id: string; revision: number; full_name: string; professional_title: string; registration: string; court_registration: string; contact_line: string };
 export type EditorialTypography = { heading1_pt: number; heading2_pt: number; heading3_pt: number; headings_bold: boolean; heading_space_before_pt: number; heading_space_after_pt: number; paragraph_space_after_pt: number };
 export type EditorialProfile = { profile_id: string; font_family: string; body_font_pt: number; table_font_pt?: number; caption_font_pt?: number; alignment?: string; line_spacing?: number; first_line_indent_cm?: number; page_size?: string; margin_top_cm?: number; margin_bottom_cm?: number; margin_left_cm?: number; margin_right_cm?: number; hyphenation?: boolean; overrides?: string[]; typography?: EditorialTypography };
@@ -23,6 +26,8 @@ export type ReportSnapshot = {
   upstream_stale: boolean; upstream_stale_reasons: string[];
   references?: ReportReference[]; findings_table?: ReportFindingRow[];
   figures?: Array<{ figure_id: string; content_id: string; original_sha256: string; caption: string; section_kind: string; width: number; height: number }>;
+  process_record?: ProcessCaseData & { workspace_id: string; source_revision: number; source_checksum: string };
+  property_record?: { record: PropertyEnvelope["record"]; source_revision: number; source_checksum: string };
   site_location?: { latitude: number; longitude: number; address_label: string | null; source_revision: number; source_checksum: string };
 };
 export type ProfileEnvelope = { revision: number; updated_at: string; profile: ExpertProfile };
@@ -38,7 +43,7 @@ export async function getReportSnapshot(workspaceId: string, signal?: AbortSigna
 export async function startReportSnapshot(workspaceId: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}" })), workspaceId); }
 export async function saveReportSnapshot(workspaceId: string, envelope: ReportEnvelope, snapshot: ReportSnapshot) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, snapshot }) })), workspaceId); }
 export async function reviewReportSnapshot(workspaceId: string, envelope: ReportEnvelope, action: "MARK_REVIEWED" | "APPROVE" | "SUPERSEDE", reason: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot/reviews`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, action, professional_id: envelope.snapshot.expert_profile.profile_id, reason }) })), workspaceId); }
-export type ReportAmendment = "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE" | "ADD_REFERENCE" | "REMOVE_REFERENCE" | "SET_FINDINGS_TABLE" | "REMOVE_FINDINGS_TABLE" | "SET_SITE_LOCATION" | "REMOVE_SITE_LOCATION" | "SET_FIGURES" | "REMOVE_FIGURES";
+export type ReportAmendment = "SET_PROCESS_RECORD" | "SET_PROPERTY_RECORD" | "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE" | "ADD_REFERENCE" | "REMOVE_REFERENCE" | "SET_FINDINGS_TABLE" | "REMOVE_FINDINGS_TABLE" | "SET_SITE_LOCATION" | "REMOVE_SITE_LOCATION" | "SET_FIGURES" | "REMOVE_FIGURES";
 export type AIAssistantStatus = { available: boolean; mode: "LOCAL_ONLY" | null; reasons: Array<"NO_LOCAL_PROVIDER" | "PRIVATE_CASE_EGRESS_NOT_AUTHORIZED">; proposal_only: true };
 // Fail closed: anything but a well-formed "available" answer means unavailable.
 export async function getAIAssistantStatus(signal?: AbortSignal): Promise<AIAssistantStatus> {
