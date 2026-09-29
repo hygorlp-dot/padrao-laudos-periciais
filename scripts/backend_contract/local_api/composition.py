@@ -490,7 +490,10 @@ def build_local_api(
         local_ids,
     )
     get_site_location = GetSiteLocation(get_latest_artifact)
-    get_property_record = GetPropertyRecord(get_latest_artifact)
+    get_property_record = GetPropertyRecord(
+        get_latest_artifact,
+        ListCaseDocumentsWithPjeInventory(list_case_documents, store.revisions) if list_case_documents is not None else None,
+    )
     get_property_proposals = (
         GetPropertyProposals(
             list_case_documents, read_case_document, LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()),

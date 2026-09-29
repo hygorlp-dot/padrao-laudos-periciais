@@ -15,6 +15,8 @@ __all__ = ["GetPropertyRecord", "SavePropertyRecord", "GetPropertyProposals", "P
 @dataclass(frozen=True, slots=True)
 class GetPropertyRecord:
     get_latest_revision: object
+    # Leitor do inventario PJe vigente; ausente apenas sem armazenamento privado.
+    pje_documents: object | None = None
 
     def execute(self, workspace_id):
         record = self.get_latest_revision.execute(workspace_id, PROPERTY_RECORD_KIND, PROPERTY_RECORD_ID)
@@ -22,6 +24,28 @@ class GetPropertyRecord:
         if property_record.workspace_id != str(workspace_id):
             raise ValueError("property workspace mismatch")
         return record, property_record
+
+    def stale_fields(self, workspace_id, property_record) -> tuple[str, ...]:
+        """Campos confirmados cuja evidencia esta numa peca que o perito excluiu depois.
+
+        O registro persistido nao e reescrito: o valor foi uma decisao do perito e
+        continua auditavel. A exclusao posterior e projetada na LEITURA, como a Analise
+        do Caso faz com `project_effective_availability` -- quem consome o registro
+        passa a saber que aquela fonte saiu da analise, em vez de citar a pagina como
+        se ainda valesse.
+        """
+        cited = [value for value in property_record.values if value.evidence is not None]
+        if not cited:
+            return ()
+        if self.pje_documents is None:
+            # Sem o inventario nao ha como provar que a pagina citada continua
+            # admitida; afirmar que continua seria fabricar disponibilidade.
+            raise RepositoryIntegrityError("property source availability is unavailable")
+        excluded = _excluded_pages(self.pje_documents.execute(workspace_id))
+        return tuple(
+            value.field for value in cited
+            if value.evidence.page in excluded.get(str(value.evidence.document_id), frozenset())
+        )
 
 
 def _excluded_pages(indexed_documents) -> dict[str, frozenset[int]]:

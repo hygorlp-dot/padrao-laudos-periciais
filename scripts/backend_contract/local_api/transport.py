@@ -798,7 +798,8 @@ class LocalApi:
                         record, property_record = self._services.get_property_record.execute(workspace_id)
                         mapping = property_record_to_mapping(property_record)
                     except ArtifactRevisionNotFound:
-                        record, mapping = None, {"schema_version": "1.0.0", "workspace_id": str(workspace_id), "values": []}
+                        record, property_record = None, None
+                        mapping = {"schema_version": "1.0.0", "workspace_id": str(workspace_id), "values": []}
                 elif normalized_method == "PUT":
                     dto = self._request_dto(request_headers, body)
                     if set(dto) != {"expected_revision", "changes"}:
@@ -807,9 +808,15 @@ class LocalApi:
                     mapping = property_record_to_mapping(property_record)
                 else:
                     return _error(405, "METHOD_NOT_ALLOWED")
+                stale_fields = (
+                    list(self._services.get_property_record.stale_fields(workspace_id, property_record))
+                    if property_record is not None else []
+                )
                 return _json_response(200, {
                     "revision": record.revision if record else None, "updated_at": record.created_at if record else None,
                     "record": mapping, "fields": [{"field": field, "label": label, "kind": kind} for field, label, kind, _ in PROPERTY_FIELDS],
+                    # Campos cuja pagina de origem o perito excluiu depois de confirmar.
+                    "stale_fields": stale_fields,
                 })
 
             if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "site-location":
