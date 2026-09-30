@@ -25,6 +25,9 @@ def _request(runtime, method, path, *, value=None, body=None, headers=None):
     status, _headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
         headers={"X-Local-API-Token": TOKEN, **(headers or {})},
+        # Limite canonico do cliente de teste (teto do LocalServerConfig), o mesmo de
+        # test_pje_multisource_identity_v1: importar PJe passa de 5 s em runner carregado.
+        timeout=30.0,
     )
     return status, json.loads(raw) if raw else None
 

@@ -190,8 +190,18 @@ class ConstructionDefectAnalysisAdapter:
         observations = {item.observation_id: item for item in inspection.observations}
         measurements = {item.measurement_id: item for item in inspection.measurements}
         photos = {item.photo_id: item for item in inspection.photos}
-        claims = {item.item_id for item in case_analysis.claims}
-        questions = {item.item_id for item in case_analysis.questions}
+        # So entra no motor o que a Analise do Caso sustenta hoje: item nao rejeitado
+        # pelo perito e nao derivado de peca excluida. Sem isso, a saida que o produto
+        # orienta para uma exclusao ("rejeite o item") levava o texto rejeitado, da
+        # peca excluida, direto ao motor de patologias -- e ao laudo, via PAT.
+        def admissible(item):
+            return (
+                case_analysis.effective_reviewed_value(item.item_id) is not None
+                and not case_analysis.derived_from_unavailable(item)
+            )
+
+        claims = {item.item_id for item in case_analysis.claims if admissible(item)}
+        questions = {item.item_id for item in case_analysis.questions if admissible(item)}
         used_measurements: set[str] = set()
         used_photos: set[str] = set()
         for context in observation_contexts:

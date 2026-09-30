@@ -355,3 +355,47 @@ describe("construction defect analysis workbench", () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 });
+
+describe("construction defect analysis source parity", () => {
+  function caseFor(restored: boolean) {
+    const at = (documentId: string) => [{ ...provenance[0], source_document_id: documentId, occurrence_id: `OCC-${documentId}` }];
+    const item = (itemId: string, text: string, documentId: string) => ({ item_id: itemId, text, participant_refs: [], technical_subjects: [], provenance: at(documentId) });
+    const document = (documentId: string, available: boolean) => ({ document_id: documentId, source_sha256: "a".repeat(64), sequence: documentId === "DOC-001" ? 1 : 2, document_role: "OTHER", raw_type: "Petição", normalized_type: "OTHER", timestamp: null, participant_refs: [], page_count_or_span: "1", content_available: available, analysis_revision: 1 });
+    const review = (target: string, decision: string, revision: number) => ({ review_id: `R-${target}-${revision}`, target_item_id: target, decision, corrected_value: null, reviewer: "P", reason: "r", timestamp: "2026-09-08T09:00:00Z", revision, original_extraction: "x" });
+    return {
+      ...caseEnvelope,
+      snapshot: {
+        ...caseAnalysis,
+        documents: [document("DOC-001", true), document("DOC-002", restored)],
+        claims: [item("CLAIM-1", "Alegação efetiva", "DOC-001"), item("CLAIM-2", "Alegação da peça excluída", "DOC-002"), item("CLAIM-3", "Alegação rejeitada", "DOC-001")],
+        questions: [item("QUESTION-1", "Quesito efetivo", "DOC-001"), item("QUESTION-2", "Quesito da peça excluída", "DOC-002")],
+        human_reviews: restored
+          ? [review("CLAIM-3", "REJECT", 1), review("CLAIM-3", "CONFIRM", 2)]
+          : [review("CLAIM-3", "REJECT", 1)],
+      },
+    };
+  }
+
+  test.each([
+    ["exclusão e rejeição vigentes", false],
+    ["peça reabilitada e item reconfirmado", true],
+  ])("offers only what the pathology adapter accepts (%s)", async (_label, restored) => {
+    const current = caseFor(restored);
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/construction-defect-analysis")) return Promise.resolve(response(404, {}));
+      if (url.endsWith("/inspection-session")) return Promise.resolve(response(200, inspectEnvelope));
+      if (url.endsWith("/case-analysis")) return Promise.resolve(response(200, current));
+      return Promise.resolve(response(404, {}));
+    }));
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+    const values = (label: string) => Array.from((screen.getByLabelText(label) as HTMLSelectElement).querySelectorAll("option")).map((option) => option.getAttribute("value")).filter(Boolean);
+    await screen.findByLabelText("Alegação relacionada");
+
+    expect(values("Alegação relacionada")).toContain("CLAIM-1");
+    expect(values("Quesito relacionado")).toContain("QUESTION-1");
+    expect(values("Alegação relacionada").includes("CLAIM-2")).toBe(restored);
+    expect(values("Alegação relacionada").includes("CLAIM-3")).toBe(restored);
+    expect(values("Quesito relacionado").includes("QUESTION-2")).toBe(restored);
+  });
+});

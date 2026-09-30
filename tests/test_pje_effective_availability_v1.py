@@ -9,6 +9,9 @@ ja se fazia com hash de fonte -- o historico persistido continua respondendo
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+
+import pytest
 
 from scripts.planejamento_pericial.app_composition import build_pericial_local_api
 from tests.test_document_intake_v1 import provision_private_root
@@ -20,6 +23,9 @@ def _request(runtime, method, path, *, value=None, body=None, headers=None):
     status, _headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
         headers={"X-Local-API-Token": TOKEN, **(headers or {})},
+        # Limite canonico do cliente de teste (teto do LocalServerConfig), o mesmo de
+        # test_pje_multisource_identity_v1: importar PJe passa de 5 s em runner carregado.
+        timeout=30.0,
     )
     return status, json.loads(raw) if raw else None
 
@@ -493,3 +499,177 @@ def test_items_derived_from_an_excluded_document_lose_report_and_findings_author
     _validate_upstream_links(candidate, case, inspection)  # controle: peca disponivel
     with pytest.raises(ValueError, match="absent from bound upstream"):
         _validate_upstream_links(candidate, excluded, inspection)
+
+
+
+def _fixture_case_and_findings():
+    from pathlib import Path
+
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+    from tests.test_technical_findings_foundation_v1 import bound_snapshot, upstreams
+
+    root = Path(__file__).resolve().parents[1]
+    case = case_analysis_from_mapping(json.loads((root / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8")))
+    _case_record, _case, _inspection_record, inspection = upstreams()
+    return case, bound_snapshot(), inspection
+
+
+def _neutral_links(snapshot):
+    """Todos os vinculos viram MEDICAO: nenhum pode responder pela recusa sob teste."""
+    from dataclasses import replace
+
+    measurement = replace(
+        snapshot.source_links[0], source_kind="MEASUREMENT", source_id="MEASUREMENT-001",
+        source_revision=snapshot.source_snapshot.inspection_session_revision,
+    )
+    return tuple(replace(measurement, link_id=link.link_id, evidence_id=link.evidence_id) for link in snapshot.source_links)
+
+
+@pytest.mark.parametrize("kind,source_id", [
+    ("CASE_CLAIM", "CLAIM-001"),
+    ("CASE_QUESTION", "QUESTION-001"),
+    ("DOCUMENTED_ALLEGATION", "OCC-CLAIM-001"),
+])
+def test_findings_refuse_each_kind_derived_from_an_excluded_document(kind, source_id):
+    """Oraculo por conjunto de autoridade em Technical Findings (DOC-001 excluido).
+
+    Os demais vinculos sao neutralizados e os quesitos ligados ficam vazios: so o
+    vinculo sob teste pode causar a recusa, e o `match` aponta essa guarda.
+    """
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.technical_findings import _validate_upstream_links
+
+    case, snapshot, inspection = _fixture_case_and_findings()
+    excluded = case.project_effective_availability({"DOC-001": False})
+    links = _neutral_links(snapshot)
+    link = replace(links[0], source_kind=kind, source_id=source_id, source_revision=snapshot.source_snapshot.case_analysis_revision)
+    candidate = replace(snapshot, source_links=(link, *links[1:]), question_links=())
+    _validate_upstream_links(candidate, case, inspection)  # controle: peca disponivel
+    with pytest.raises(ValueError, match="absent from bound upstream"):
+        _validate_upstream_links(candidate, excluded, inspection)
+
+
+def test_findings_refuse_a_question_link_to_a_question_derived_from_an_excluded_document():
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.technical_findings import _validate_upstream_links
+
+    case, snapshot, inspection = _fixture_case_and_findings()
+    assert any(link.question_id == "QUESTION-001" for link in snapshot.question_links)
+    candidate = replace(snapshot, source_links=_neutral_links(snapshot))
+    _validate_upstream_links(candidate, case, inspection)  # controle
+    with pytest.raises(ValueError, match="question identity"):
+        _validate_upstream_links(candidate, case.project_effective_availability({"DOC-001": False}), inspection)
+
+
+def test_report_authority_and_source_picker_drop_items_derived_from_an_excluded_document():
+    """Oraculo por conjunto do laudo: ALLEGATION, CLAIM_AND_GROUNDS, REQUESTS e o seletor.
+
+    O seletor (`ListReportSources`) precisa oferecer exatamente o que o save aceita.
+    """
+    from types import SimpleNamespace
+
+    from scripts.backend_contract.application.report_foundation import ListReportSources, _claim_sources, _context_sources
+
+    case, snapshot, inspection = _fixture_case_and_findings()
+    empty = SimpleNamespace(observations=(), measurements=(), findings=(), decisions=(), question_links=())
+    binding = SimpleNamespace(case_analysis_revision=3, inspection_session_revision=2, construction_defect_analysis_revision=1, technical_snapshot_revision=4)
+
+    def offered(current):
+        listing = ListReportSources(
+            SimpleNamespace(execute=lambda _w: (None, current)),
+            SimpleNamespace(execute=lambda _w: (None, inspection)),
+            SimpleNamespace(execute=lambda _w: (None, snapshot)),
+        ).execute("workspace")
+        return json.dumps(listing, ensure_ascii=False, default=str)
+
+    for current, live in ((case, True), (case.project_effective_availability({"DOC-001": False}), False)):
+        claims = _claim_sources(binding, current, empty, empty, None)
+        context = _context_sources(current, empty)
+        assert ("CLAIM-001" in claims["ALLEGATION"][0]) is live
+        assert ("CLAIM-001" in context["CLAIM_AND_GROUNDS"]) is live
+        assert ("QUESTION-001" in context["REQUESTS"]) is live
+        picker = offered(current)
+        assert ('"CLAIM-001"' in picker) is live, "seletor e save divergem para a alegacao"
+        assert ('"QUESTION-001"' in picker) is live, "seletor e save divergem para o quesito"
+
+
+def test_review_command_response_shows_the_effective_state(tmp_path):
+    """O POST de revisao tambem devolve o read-model, nao a base de escrita."""
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-revisao")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        snapshot = _effective(runtime, workspace_id)
+        status, body = _add_item(runtime, workspace_id, "PERICIAL_OBJECT", "Objeto.", _find(snapshot, "DOC-PJE-001")["document_id"])
+        assert status == 200, body
+        target = body["snapshot"]["pericial_objects"][0]["item_id"]
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        status, reviewed = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", value={
+            "expected_revision": fresh["revision"], "target_item_id": target, "action": "CONFIRM",
+            "corrected_value": None, "reviewer": "PROFESSIONAL-001", "reason": "Revisao sintetica.",
+        })
+        assert status == 200, reviewed
+        assert _find(reviewed["snapshot"], "DOC-PJE-002")["content_available"] is False
+        assert reviewed["snapshot"]["coverage"]["status"] != "COMPLETE"
+    finally:
+        runtime.close()
+
+
+def test_planning_save_guard_refuses_on_its_own():
+    """A guarda do Save do Planejamento, isolada da do Start (o revisor mostrou que so
+    remover as duas deixava o teste vermelho). O plano salvo nem chega a ser validado:
+    a recusa vem antes, com a mensagem propria."""
+    from contextlib import nullcontext
+
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.application.pericial_planning import SavePericialPlanning
+    from tests.test_pericial_planning_v1 import FIXTURE_PATH
+    from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
+
+    case, _snapshot, _inspection = _fixture_case_and_findings()
+    plan = pericial_planning_from_mapping(json.loads(FIXTURE_PATH.read_text(encoding="utf-8")))
+    excluded = case.project_effective_availability({"DOC-001": False})
+    service = SavePericialPlanning(
+        SimpleNamespace(append_if_latest=lambda **_k: pytest.fail("nao pode gravar")),
+        SimpleNamespace(execute=lambda *_a: pytest.fail("nao pode chegar a revisao")),
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3), excluded)),
+        nullcontext, SimpleNamespace(now=lambda: None), SimpleNamespace(new_uuid=lambda: None),
+    )
+    with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
+        service.execute(WorkspaceId.parse(plan.workspace_id), plan, 1)
+
+
+
+def test_a_gap_extracted_from_a_document_later_excluded_blocks_planning_like_any_derived_item(tmp_path):
+    """Revisao da #251 (F3): a isencao de lacunas por TIPO reabria o P0 -- uma lacuna
+    criada enquanto a peca estava disponivel foi extraida do conteudo dela; excluida a
+    peca, a lacuna ainda guiava o plano.
+
+    So a lacuna que ja nasceu sobre documento ausente fica isenta (coberta pela fixture
+    dos testes de Planejamento). Esta e a outra metade: lacuna derivada bloqueia, e
+    rejeita-la libera o plano.
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-lacuna")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        snapshot = _effective(runtime, workspace_id)
+        excluded = _find(snapshot, "DOC-PJE-002")["document_id"]
+        status, body = _add_item(runtime, workspace_id, "EVIDENCE_GAP", "Lacuna extraida da peca 2.", excluded)
+        assert status == 200, body
+        gap = body["snapshot"]["gaps"][0]["item_id"]
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+        assert _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})[0] == 400
+
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        assert _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", value={
+            "expected_revision": fresh["revision"], "target_item_id": gap, "action": "REJECT",
+            "corrected_value": None, "reviewer": "PROFESSIONAL-001", "reason": "Fonte excluida.",
+        })[0] == 200
+        status, plan = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})
+        assert status == 201, plan
+    finally:
+        runtime.close()

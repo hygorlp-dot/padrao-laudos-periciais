@@ -241,7 +241,13 @@ class StartCaseAnalysis:
             # Nem export PJe bloqueado nem importacao interrompida podem declarar-se
             # analisados: antes, um import respondido como 500 deixava a fonte gravada
             # e a cobertura fechava COMPLETE sobre ela.
-            understood = not getattr(item, "pje_blocked", False) and not getattr(item, "import_incomplete", False)
+            # Nem ler um PDF ilegivel como "nao e PJe" pode fechar cobertura: a
+            # conversao para PdfIlegivel tira o 500, mas o documento segue sem leitura.
+            understood = not (
+                getattr(item, "pje_blocked", False)
+                or getattr(item, "import_incomplete", False)
+                or getattr(item, "content_unread", False)
+            )
             composed.append(CaseDocument(
                 document_id=f"DOC-{len(composed) + 1:03d}", storage_content_id=str(item.content_id),
                 source_sha256=item.checksum_sha256, sequence=len(composed) + 1,

@@ -362,11 +362,13 @@ class CaseAnalysisSnapshot:
         construa autoridade sobre este item" -- Planejamento, laudo e Constatacoes
         Tecnicas recusam, o perito resolve rejeitando o item ou reabilitando a peca.
         """
-        # Uma LACUNA que cita a peca indisponivel registra justamente a ausencia dela
-        # ("anexo indicado nao esta disponivel"); nao e construida sobre o conteudo.
-        # Trata-la como derivada recusaria o Planejamento de todo caso com lacuna
-        # documental -- que e exatamente o caso que a lacuna existe para registrar.
-        if isinstance(item, EvidenceGap):
+        # Uma LACUNA que ja nasceu citando documento indisponivel registra a ausencia
+        # dele ("anexo indicado nao esta disponivel") e nao se apoia em conteudo nenhum.
+        # Mas uma lacuna criada enquanto a peca estava disponivel foi extraida DO
+        # conteudo dela; se a peca e excluida depois, a lacuna e derivada como qualquer
+        # outro item. A projecao distingue os dois casos: ela marca `stale` justamente
+        # os itens que citam peca cuja disponibilidade mudou depois de citada.
+        if isinstance(item, EvidenceGap) and not item.stale:
             return False
         unavailable = self.unavailable_document_ids
         return any(source.source_document_id in unavailable for source in item.provenance)
