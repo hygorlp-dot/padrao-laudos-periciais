@@ -673,3 +673,31 @@ def test_a_gap_extracted_from_a_document_later_excluded_blocks_planning_like_any
         assert status == 201, plan
     finally:
         runtime.close()
+
+
+
+def test_a_gap_created_in_a_re_enable_window_blocks_planning_after_re_exclusion(tmp_path):
+    """Auditoria da #251, rodada 3 (SA251R3-01): excluir antes do bootstrap, reabilitar,
+    criar uma lacuna citando a peca, excluir de novo -- a lacuna escapava da isencao
+    por `stale` (a disponibilidade voltava ao valor congelado no bootstrap) e o plano
+    saia com 201 apoiado na peca excluida.
+
+    Sem isencao nenhuma, a lacuna e derivada como qualquer item.
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-janela")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        content_id = material["content_id"]
+        _set_available(runtime, workspace_id, content_id, "DOC-PJE-002", False)  # antes do bootstrap
+        snapshot = _effective(runtime, workspace_id)
+        assert _find(snapshot, "DOC-PJE-002")["content_available"] is False
+        _set_available(runtime, workspace_id, content_id, "DOC-PJE-002", True)  # janela de reabilitacao
+        reopened = _effective(runtime, workspace_id)
+        status, body = _add_item(runtime, workspace_id, "EVIDENCE_GAP", "Lacuna da janela.", _find(reopened, "DOC-PJE-002")["document_id"])
+        assert status == 200, body
+        _set_available(runtime, workspace_id, content_id, "DOC-PJE-002", False)  # nova exclusao
+        status, plan = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})
+        assert status == 400, f"plano montado sobre lacuna da peca excluida: {status} {plan}"
+    finally:
+        runtime.close()

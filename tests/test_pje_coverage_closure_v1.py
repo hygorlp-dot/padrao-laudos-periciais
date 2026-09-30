@@ -303,9 +303,22 @@ def test_SA251R_02_an_unreadable_pdf_never_counts_as_analysed(tmp_path):
     """
     from tests.test_pje_workspace_bridge_v1 import _encrypted_pdf
 
+    def _blank_pdf():
+        import io
+
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        for _ in range(2):
+            writer.add_blank_page(width=612, height=792)
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        return buffer.getvalue()
+
     for name, body, complete in (
         ("legivel", _distinct_pje_pdf(tmp_path / "ok.pdf", "legivel").read_bytes(), True),
-        ("cifrado", _encrypted_pdf(), False),
+        ("cifrado", _encrypted_pdf(), False),  # text_state ERROR
+        ("em_branco", _blank_pdf(), False),  # text_state TEXT_EXTRACTION_UNAVAILABLE
     ):
         runtime = _runtime(tmp_path, f"{name}.sqlite3")
         try:

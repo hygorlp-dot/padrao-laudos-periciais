@@ -1001,3 +1001,41 @@ def test_adapter_admits_only_effective_claims_from_available_sources(state):
     else:
         with pytest.raises(ValueError, match="unknown Case Analysis claim"):
             run()
+
+
+
+def test_an_approved_pat_loses_report_authority_when_its_claim_source_is_excluded_and_regains_it_on_re_enable():
+    """Auditoria da #251, rodada 3 (SA251R3-03): a exclusao so grava o inventario PJe; o
+    registro persistido da Analise do Caso nao muda, entao o vinculo por checksum da
+    Analise de Vicios nao a percebia -- um PAT aprovado ANTES da exclusao seguia
+    autoridade do laudo apoiado na peca retirada.
+
+    Agora a reconciliacao olha a disponibilidade das alegacoes/quesitos vinculados:
+    stale com motivo proprio enquanto a peca estiver fora; reabilitar desfaz, sem
+    reescrever nada.
+    """
+    from types import SimpleNamespace
+
+    from scripts.backend_contract.application.report_foundation import _claim_sources
+
+    services = _application_services()
+    record, _proposal = services.start.execute(WORKSPACE_ID, observation_contexts=(_application_context(),))
+    _r, reviewed = services.review.execute(
+        WORKSPACE_ID, pat_id="PAT-001", action="APPROVE", professional_id="PROFESSIONAL-001",
+        reason="Revisao profissional do PAT sintetico.", expected_revision=record.revision,
+    )
+    assert reviewed.effective_pat_ids == ("PAT-001",)
+    available = services.case.value
+    claim = next(item for item in available.claims if item.item_id == "CLAIM-001")
+    binding = SimpleNamespace(case_analysis_revision=3, inspection_session_revision=5, construction_defect_analysis_revision=2, technical_snapshot_revision=1)
+    empty = SimpleNamespace(observations=(), measurements=(), findings=(), decisions=(), question_links=())
+
+    services.case.value = available.project_effective_availability({claim.provenance[0].source_document_id: False})
+    _rec, excluded = services.get.execute(WORKSPACE_ID)
+    assert excluded.upstream_stale and "Case Analysis source excluded by the professional" in excluded.upstream_stale_reasons
+    assert "PAT-001" not in _claim_sources(binding, services.case.value, empty, empty, excluded)["PATHOLOGY"][0]
+
+    services.case.value = available
+    _rec, restored = services.get.execute(WORKSPACE_ID)
+    assert not restored.upstream_stale, restored.upstream_stale_reasons
+    assert "PAT-001" in _claim_sources(binding, available, empty, empty, restored)["PATHOLOGY"][0]
