@@ -259,3 +259,102 @@ def test_SA03_a_professional_exclusion_does_not_freeze_the_analysis(tmp_path):
         assert status == 400, f"um item novo citou documento que o perito excluiu: {refused}"
     finally:
         runtime.close()
+
+
+def test_exclusion_in_one_workspace_never_reaches_another_with_the_same_export(tmp_path):
+    """Mesmo PDF (mesmos bytes, mesmos DOC-PJE-*) em dois workspaces: a decisao de A
+    fica em A. B continua com a peca disponivel, cobertura propria e trabalho liberado.
+
+    Bytes identicos sao a pior colisao possivel: mesmo sha, mesmos ids locais. So o
+    workspace separa as duas autoridades.
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-unica")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_a, material_a = _setup(runtime, pdf)
+        workspace_b, material_b = _setup(runtime, pdf)
+        assert material_a["content_id"] != material_b["content_id"], "cada workspace e dono da sua fonte"
+        _effective(runtime, workspace_a)
+        _effective(runtime, workspace_b)
+
+        _set_available(runtime, workspace_a, material_a["content_id"], "DOC-PJE-002", False)
+
+        a, b = _effective(runtime, workspace_a), _effective(runtime, workspace_b)
+        assert _find(a, "DOC-PJE-002")["content_available"] is False
+        assert _find(b, "DOC-PJE-002")["content_available"] is True, "a exclusao de A vazou para B"
+        assert b["coverage"]["documents_unavailable"] == 0 and b["stale_document_ids"] == []
+        intake_b = _intake_for(runtime, workspace_b, material_b["content_id"])
+        assert all(row["available"] for row in intake_b["inventory"]["documents"])
+
+        # E B continua trabalhavel citando justamente a peca que A excluiu.
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_b}/case-analysis")
+        status, added = _request(runtime, "POST", f"/v1/workspaces/{workspace_b}/case-analysis/items", value={
+            "expected_revision": fresh["revision"], "item_kind": "PERICIAL_OBJECT", "text": "Objeto em B.",
+            "source_document_id": _find(b, "DOC-PJE-002")["document_id"], "page_or_span": "p. 1",
+            "technical_subjects": ["tema"], "values": {},
+        })
+        assert status == 200, added
+    finally:
+        runtime.close()
+
+
+def test_exclusion_survives_backup_verify_stage_promote_reopen_and_stays_workable(tmp_path):
+    """backup -> verify -> stage -> promote -> reopen, com uma exclusao profissional no meio.
+
+    Depois da recuperacao: a decisao continua la (nada reabilitado em silencio), a peca
+    excluida segue fora da autoridade, a analise continua trabalhavel (SA-03 tambem vale
+    no workspace recuperado) e reabilitar ainda funciona.
+    """
+    import os
+
+    import pytest
+
+    if os.name != "nt":
+        pytest.skip("a jornada completa de recuperacao mutavel e apenas Windows")
+    from tests.test_backup_recovery_reachability_v1 import _api, _json
+    from tests.test_backup_recovery_reachability_v1 import _runtime as _recovery_runtime
+
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-recuperada")
+    source = _recovery_runtime(tmp_path, "source")
+    try:
+        workspace_id, material = _setup(source, pdf)
+        content_id = material["content_id"]
+        _effective(source, workspace_id)
+        _set_available(source, workspace_id, content_id, "DOC-PJE-002", False)
+        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
+        assert _status == 200
+    finally:
+        source.close()
+
+    target = _recovery_runtime(tmp_path, "target")
+    try:
+        status, verified = _json(target, "POST", "/v1/recovery/verify", body=package, headers={"Content-Type": "application/octet-stream"})
+        assert status == 200, verified
+        status, staged = _json(target, "POST", "/v1/recovery/staging", body=package, headers={"Content-Type": "application/octet-stream"})
+        assert status in {200, 201} and staged["promotable"] is True, staged
+        status, promoted = _json(target, "POST", f"/v1/recovery/{staged['recovery_id']}/promote", value={"confirm": True})
+        assert status == 200 and promoted["workspace_id"] == workspace_id, promoted
+
+        # Reaberto: a decisao sobreviveu, sem reabilitacao silenciosa.
+        rows = {row["document_id"]: row["available"] for row in _intake_for(target, workspace_id, content_id)["inventory"]["documents"]}
+        assert rows["DOC-PJE-002"] is False and rows["DOC-PJE-001"] is True, rows
+        restored = _effective(target, workspace_id)
+        assert _find(restored, "DOC-PJE-002")["content_available"] is False
+        assert restored["stale_document_ids"] == [] and restored["coverage"]["status"] != "COMPLETE"
+
+        # Trabalhavel no workspace recuperado, e a peca excluida nao volta pela porta dos fundos.
+        def add(source_document_id, text):
+            status, fresh = _request(target, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+            return _request(target, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/items", value={
+                "expected_revision": fresh["revision"], "item_kind": "PERICIAL_OBJECT", "text": text,
+                "source_document_id": source_document_id, "page_or_span": "p. 1",
+                "technical_subjects": ["tema"], "values": {},
+            })[0]
+
+        assert add(_find(restored, "DOC-PJE-001")["document_id"], "Objeto apos recuperacao.") == 200
+        assert add(_find(restored, "DOC-PJE-002")["document_id"], "Objeto sobre excluido.") == 400
+
+        _set_available(target, workspace_id, content_id, "DOC-PJE-002", True)
+        assert _find(_effective(target, workspace_id), "DOC-PJE-002")["content_available"] is True
+    finally:
+        target.close()
