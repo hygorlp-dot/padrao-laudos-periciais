@@ -44,6 +44,24 @@ def validated_pericial_planning_from_mapping(value: object) -> PlanningSnapshot:
         raise ValueError("invalid Pericial Planning payload") from exc
 
 
+def _refuse_items_from_unavailable_documents(analysis) -> None:
+    """Nenhum plano e montado ou salvo sobre item derivado de peca fora da analise.
+
+    Filtrar em silencio faria um quesito sumir do plano sem aviso. Recusar deixa a
+    decisao com o perito: rejeitar o item na revisao da Analise do Caso (item
+    rejeitado nao e efetivo e deixa de contar) ou reabilitar a peca.
+    """
+    blocked = [
+        item.item_id for item in analysis.material_items
+        if analysis.effective_reviewed_value(item.item_id) is not None and analysis.derived_from_unavailable(item)
+    ]
+    if blocked:
+        raise ValueError(
+            "Pericial Planning cannot build on items derived from a document excluded by the professional: "
+            + ", ".join(blocked)
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class SavePericialPlanning:
     revisions: object
@@ -73,6 +91,7 @@ class SavePericialPlanning:
         analysis_record, analysis = self.get_case_analysis.execute(workspace_id)
         if analysis.stale_document_ids or analysis.source_inventory_stale:
             raise ValueError("stale Case Analysis cannot authorize Pericial Planning")
+        _refuse_items_from_unavailable_documents(analysis)
         validate_against_case_analysis(snapshot, analysis, artifact_revision=analysis_record.revision)
         if expected_revision is not None:
             previous_record = self.get_latest_revision.execute(
@@ -191,6 +210,7 @@ class StartPericialPlanning:
             raise ValueError("current reviewed Case Analysis is required to start planning")
         effective = [(item, analysis.effective_reviewed_value(item.item_id)) for item in analysis.material_items]
         effective = [(item, value) for item, value in effective if value is not None]
+        _refuse_items_from_unavailable_documents(analysis)
 
         def derivation(item):
             specialized = dict(question_ids=(), pericial_object_ids=(), court_decision_ids=(), technical_document_reference_ids=(), gap_or_conflict_ids=())

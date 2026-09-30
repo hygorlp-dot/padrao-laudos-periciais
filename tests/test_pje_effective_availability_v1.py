@@ -358,3 +358,138 @@ def test_exclusion_survives_backup_verify_stage_promote_reopen_and_stays_workabl
         assert _find(_effective(target, workspace_id), "DOC-PJE-002")["content_available"] is True
     finally:
         target.close()
+
+
+
+def _add_item(runtime, workspace_id, kind, text, source_document_id):
+    status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+    return _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/items", value={
+        "expected_revision": fresh["revision"], "item_kind": kind, "text": text,
+        "source_document_id": source_document_id, "page_or_span": "p. 1",
+        "technical_subjects": ["tema"], "values": {},
+    })
+
+
+def _plan_citations(plan):
+    return {
+        source["source_document_id"]
+        for collection in ("issues", "inspection_requirements", "question_links")
+        for item in plan["snapshot"][collection]
+        for source in item["derivation"]["source_provenance"]
+    }
+
+
+def test_planning_refuses_items_from_an_excluded_document_until_the_professional_resolves_them(tmp_path):
+    """Revisao da #251 (P0 do revisor, P1 do auditor): sem o canal de deriva, o
+    Planejamento montava o plano sobre quesito derivado da peca excluida.
+
+    Recusar, e nao filtrar em silencio: o quesito sumiria do plano sem aviso. As duas
+    saidas do perito precisam funcionar -- rejeitar o item, ou reabilitar a peca -- e
+    e isso que prova que a recusa se deve a exclusao e nao a outro motivo qualquer.
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-plano")
+    runtime = _runtime(tmp_path)
+    try:
+        # Saida 1: rejeitar o item derivado.
+        workspace_id, material = _setup(runtime, pdf)
+        snapshot = _effective(runtime, workspace_id)
+        excluded = _find(snapshot, "DOC-PJE-002")["document_id"]
+        kept = _find(snapshot, "DOC-PJE-001")["document_id"]
+        status, body = _add_item(runtime, workspace_id, "PERICIAL_QUESTION", "Quesito sobre a peca 2?", excluded)
+        assert status == 200, body
+        doomed = next(q["item_id"] for q in body["snapshot"]["questions"] if q["provenance"][0]["source_document_id"] == excluded)
+        assert _add_item(runtime, workspace_id, "PERICIAL_QUESTION", "Quesito sobre a peca 1?", kept)[0] == 200
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+
+        status, _refused = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})
+        assert status == 400, f"plano montado sobre peca excluida: {status}"
+
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        status, _ = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", value={
+            "expected_revision": fresh["revision"], "target_item_id": doomed, "action": "REJECT",
+            "corrected_value": None, "reviewer": "PROFESSIONAL-001", "reason": "Fonte excluida da analise.",
+        })
+        assert status == 200
+        status, plan = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})
+        assert status == 201, plan
+        assert excluded not in _plan_citations(plan) and kept in _plan_citations(plan)
+
+        # Saida 2: reabilitar a peca (outro workspace, mesmo export).
+        workspace_b, material_b = _setup(runtime, pdf)
+        excluded_b = _find(_effective(runtime, workspace_b), "DOC-PJE-002")["document_id"]
+        assert _add_item(runtime, workspace_b, "PERICIAL_QUESTION", "Quesito sobre a peca 2?", excluded_b)[0] == 200
+        _set_available(runtime, workspace_b, material_b["content_id"], "DOC-PJE-002", False)
+        assert _request(runtime, "POST", f"/v1/workspaces/{workspace_b}/pericial-planning", value={"title": "Plano"})[0] == 400
+        _set_available(runtime, workspace_b, material_b["content_id"], "DOC-PJE-002", True)
+        status, plan_b = _request(runtime, "POST", f"/v1/workspaces/{workspace_b}/pericial-planning", value={"title": "Plano"})
+        assert status == 201, plan_b
+        assert excluded_b in _plan_citations(plan_b)
+    finally:
+        runtime.close()
+
+
+def test_command_responses_show_the_effective_state_not_the_write_base(tmp_path):
+    """Revisao da #251 (F2, P1): o POST devolvia a base de escrita -- cobertura COMPLETE e
+    a peca excluida de volta como disponivel -- e a interface exibia isso ate recarregar."""
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-resposta")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        snapshot = _effective(runtime, workspace_id)
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+        status, response = _add_item(runtime, workspace_id, "PERICIAL_OBJECT", "Objeto.", _find(snapshot, "DOC-PJE-001")["document_id"])
+        assert status == 200, response
+        status, reread = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        assert _find(response["snapshot"], "DOC-PJE-002")["content_available"] is False
+        assert response["snapshot"]["coverage"]["status"] != "COMPLETE"
+        assert response["snapshot"]["coverage"] == reread["snapshot"]["coverage"]
+        assert response["snapshot"]["documents"] == reread["snapshot"]["documents"]
+    finally:
+        runtime.close()
+
+
+def test_items_derived_from_an_excluded_document_lose_report_and_findings_authority():
+    """Revisao da #251 (F4 do revisor, SA251-05 do auditor): filtrar so CASE_DOCUMENT
+    deixava a exclusao voltar pelos derivados -- decisao, quesito, participante.
+
+    Unidade direta sobre as funcoes de autoridade: nenhuma outra guarda pode responder
+    pela recusa. Controle positivo: derivados de peca disponivel seguem citaveis.
+    """
+    from dataclasses import replace
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import pytest
+
+    from scripts.backend_contract.application.report_foundation import _claim_sources, _context_sources
+    from scripts.backend_contract.application.technical_findings import _validate_upstream_links
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+    from tests.test_technical_findings_foundation_v1 import bound_snapshot, upstreams
+
+    root = Path(__file__).resolve().parents[1]
+    case = case_analysis_from_mapping(json.loads((root / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8")))
+    excluded = case.project_effective_availability({"DOC-002": False})
+    empty = SimpleNamespace(observations=(), measurements=(), findings=(), decisions=(), question_links=())
+    binding = SimpleNamespace(case_analysis_revision=3, inspection_session_revision=2, construction_defect_analysis_revision=1, technical_snapshot_revision=4)
+
+    for name, current in (("disponivel", case), ("excluida", excluded)):
+        claims = _claim_sources(binding, current, empty, empty, None)
+        context = _context_sources(current, empty)
+        live = name == "disponivel"
+        assert ("DECISION-001" in claims["COURT_DECISION"][0]) is live, name
+        assert ("PART-DEFENDANT" in context["PARTIES"]) is live, name
+        assert ("DECISION-001" in context["COURT"]) is live, name
+        # O proprio documento, no contexto (ADDRESSES so aceita documentos).
+        assert ("DOC-002" in context["ADDRESSES"]) is live, name
+        # Derivados de DOC-001 continuam citaveis nos dois estados.
+        assert "CLAIM-001" in claims["ALLEGATION"][0] and "QUESTION-001" in context["REQUESTS"], name
+
+    _case_record, _case, _inspection_record, inspection = upstreams()
+    snapshot = bound_snapshot()
+    link = replace(snapshot.source_links[0], source_kind="CASE_DECISION", source_id="DECISION-001",
+                   source_revision=snapshot.source_snapshot.case_analysis_revision)
+    # Mesmo link_id: continua pertencendo a sua avaliacao; so a fonte citada muda.
+    candidate = replace(snapshot, source_links=(link, *snapshot.source_links[1:]))
+    _validate_upstream_links(candidate, case, inspection)  # controle: peca disponivel
+    with pytest.raises(ValueError, match="absent from bound upstream"):
+        _validate_upstream_links(candidate, excluded, inspection)

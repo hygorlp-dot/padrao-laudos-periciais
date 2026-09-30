@@ -377,8 +377,10 @@ def validate_technical_findings_table(snapshot: ReportSnapshot, technical: Techn
 def _claim_sources(binding: ReportSourceSnapshot, case, inspection, technical, pathology) -> dict[str, tuple[set[str], int | None]]:
     """Every citable identity per source kind, with the revision the binding names."""
     return {
-        "ALLEGATION": ({item.item_id for item in case.claims}, binding.case_analysis_revision),
-        "COURT_DECISION": ({item.item_id for item in case.decisions}, binding.case_analysis_revision),
+        # Nao basta filtrar o documento: alegacao e decisao EXTRAIDAS dele tambem
+        # deixam de ser autoridade -- senao a exclusao volta pela porta dos derivados.
+        "ALLEGATION": ({item.item_id for item in case.claims if not case.derived_from_unavailable(item)}, binding.case_analysis_revision),
+        "COURT_DECISION": ({item.item_id for item in case.decisions if not case.derived_from_unavailable(item)}, binding.case_analysis_revision),
         # Documento excluido pelo perito continua inventariado, mas deixa de ser
         # autoridade documental: uma afirmacao do laudo apoiada nele tornaria a
         # exclusao meramente cosmetica na tela.
@@ -393,10 +395,13 @@ def _claim_sources(binding: ReportSourceSnapshot, case, inspection, technical, p
 
 def _context_sources(case, technical) -> dict[str, set[str]]:
     documents = {item.document_id for item in case.documents if item.content_available}
-    claims = {item.item_id for item in case.claims}
-    decisions = {item.item_id for item in case.decisions}
-    participants = {item.participant_id for item in case.judicial_context.participants}
-    questions = {item.item_id for item in case.questions} | {item.question_id for item in technical.question_links}
+    claims = {item.item_id for item in case.claims if not case.derived_from_unavailable(item)}
+    decisions = {item.item_id for item in case.decisions if not case.derived_from_unavailable(item)}
+    participants = {item.participant_id for item in case.judicial_context.participants if not case.derived_from_unavailable(item)}
+    excluded_questions = {item.item_id for item in case.questions if case.derived_from_unavailable(item)}
+    questions = (
+        {item.item_id for item in case.questions} | {item.question_id for item in technical.question_links}
+    ) - excluded_questions
     return {
         "PROCESS_NUMBER": documents | decisions,
         "COURT": documents | decisions,
@@ -996,8 +1001,8 @@ class ListReportSources:
             for item in case.documents if item.content_available
         ]
         sources = [
-            *({"kind": "ALLEGATION", "id": item.item_id, "label": item.text} for item in case.claims),
-            *({"kind": "COURT_DECISION", "id": item.item_id, "label": item.text} for item in case.decisions),
+            *({"kind": "ALLEGATION", "id": item.item_id, "label": item.text} for item in case.claims if not case.derived_from_unavailable(item)),
+            *({"kind": "COURT_DECISION", "id": item.item_id, "label": item.text} for item in case.decisions if not case.derived_from_unavailable(item)),
             *documents,
             *({"kind": "FIELD_OBSERVATION", "id": item.observation_id, "label": item.raw_observation} for item in inspection.observations),
             *({"kind": "MEASUREMENT", "id": item.measurement_id, "label": f"{item.quantity}: {item.raw_value} {item.raw_unit}"} for item in inspection.measurements),
@@ -1008,13 +1013,15 @@ class ListReportSources:
         entities = {item.entity_id: item for item in case.judicial_context.entities}
         participants = [
             {"id": item.participant_id, "label": getattr(entities.get(item.entity_id), "raw_name", item.participant_id)}
-            for item in case.judicial_context.participants
+            for item in case.judicial_context.participants if not case.derived_from_unavailable(item)
         ]
         document_options = [{"id": item["id"], "label": item["label"]} for item in documents]
-        decisions = [{"id": item.item_id, "label": item.text} for item in case.decisions]
-        claims = [{"id": item.item_id, "label": item.text} for item in case.claims]
+        # O seletor nao oferece o que o save recusaria: derivados de peca excluida.
+        decisions = [{"id": item.item_id, "label": item.text} for item in case.decisions if not case.derived_from_unavailable(item)]
+        claims = [{"id": item.item_id, "label": item.text} for item in case.claims if not case.derived_from_unavailable(item)]
         questions_text = {item.item_id: item.text for item in case.questions}
-        question_ids = list(dict.fromkeys(item.question_id for item in technical.question_links))
+        excluded_questions = {item.item_id for item in case.questions if case.derived_from_unavailable(item)}
+        question_ids = list(dict.fromkeys(item.question_id for item in technical.question_links if item.question_id not in excluded_questions))
         question_options = [{"id": question_id, "label": questions_text.get(question_id, question_id)} for question_id in question_ids]
         findings = {item.finding_id: item for item in technical.findings}
         questions = [

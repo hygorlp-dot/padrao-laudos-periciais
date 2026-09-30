@@ -47,7 +47,15 @@ class LeitorPdf:
             # para o que e, na verdade, um arquivo ilegivel. Pior, truncar para
             # o menor dos dois violaria a contagem exata de paginas. A unica
             # resposta honesta e recusar o arquivo.
-            paginas_pypdf, paginas_plumber = len(self.pypdf.pages), len(self.plumber.pages)
+            try:
+                paginas_pypdf, paginas_plumber = len(self.pypdf.pages), len(self.plumber.pages)
+            except PyPdfError:
+                raise
+            except Exception as falha:
+                # Arvore de paginas corrompida: o pypdf estoura com erros crus
+                # (AttributeError, KeyError...) ao percorre-la. Isso e "PDF ilegivel",
+                # nao falha interna; sem esta conversao escapava como 500.
+                raise PdfIlegivel(f"arvore de paginas ilegivel: {type(falha).__name__}") from falha
             if paginas_pypdf != paginas_plumber:
                 raise PdfIlegivel(
                     f"leitores divergem no total de paginas: "

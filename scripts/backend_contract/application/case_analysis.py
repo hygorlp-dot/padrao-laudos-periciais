@@ -169,7 +169,7 @@ class ReviewCaseAnalysisItem:
     def execute(self, workspace_id, *, target_item_id: str, action: str, corrected_value: str | None, reviewer: str, reason: str, expected_revision: int):
         if action not in {"CONFIRM", "CORRECT", "REJECT"}:
             raise ValueError("Case Analysis review action is invalid")
-        record, snapshot, _availability = self.get_analysis.execute_for_command(workspace_id)
+        record, snapshot, availability = self.get_analysis.execute_for_command(workspace_id)
         if record.revision != expected_revision or snapshot.stale_document_ids or snapshot.source_inventory_stale:
             raise RepositoryConflict("Case Analysis review source or revision is stale")
         item = next((candidate for candidate in snapshot.material_items if candidate.item_id == target_item_id), None)
@@ -194,7 +194,10 @@ class ReviewCaseAnalysisItem:
         )
         reviewed = replace(snapshot, human_reviews=(*snapshot.human_reviews, decision))
         saved = self.save_analysis.execute(workspace_id, reviewed, expected_revision, allow_review_transition=True)
-        return saved, reviewed
+        # Grava-se o persistido, mas devolve-se o read-model: devolver a base de escrita
+        # faria a interface mostrar a peca excluida de volta como disponivel e a
+        # cobertura como completa, ate a proxima leitura.
+        return saved, reviewed.project_effective_availability(availability)
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,7 +238,10 @@ class StartCaseAnalysis:
             # decomposto NAO foi entendida. Conta-la como analisada produziria
             # COMPLETE sobre um conjunto que sabidamente tem resto nao
             # processado -- terminar o processamento nao prova completude.
-            understood = not getattr(item, "pje_blocked", False)
+            # Nem export PJe bloqueado nem importacao interrompida podem declarar-se
+            # analisados: antes, um import respondido como 500 deixava a fonte gravada
+            # e a cobertura fechava COMPLETE sobre ela.
+            understood = not getattr(item, "pje_blocked", False) and not getattr(item, "import_incomplete", False)
             composed.append(CaseDocument(
                 document_id=f"DOC-{len(composed) + 1:03d}", storage_content_id=str(item.content_id),
                 source_sha256=item.checksum_sha256, sequence=len(composed) + 1,
@@ -369,7 +375,7 @@ class AddCaseAnalysisItem:
         field = field_by_kind[item_kind]
         amended = replace(snapshot, **{field: (*getattr(snapshot, field), item)})
         saved = self.save_analysis.execute(workspace_id, amended, expected_revision, allow_item_append=True)
-        return saved, amended
+        return saved, amended.project_effective_availability(availability)
 
 
 @dataclass(frozen=True, slots=True)

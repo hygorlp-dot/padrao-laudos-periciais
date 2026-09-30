@@ -807,6 +807,10 @@ class PjeIndexedCaseDocument:
     # sustentada. Ela continua sendo material legitimo, e nao pode ser
     # apresentada como plenamente analisada.
     pje_blocked: bool = False
+    # A importacao gravou os bytes mas nao chegou ao fim (sem a revisao de metadados
+    # que toda importacao concluida grava por ultimo). A fonte existe, mas nada nela
+    # foi analisado -- nao pode contar para cobertura completa.
+    import_incomplete: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -838,8 +842,12 @@ class ListCaseDocumentsWithPjeInventory:
             blocked = inventory is not None and inventory["status"] != "OK"
             if blocked:
                 inventory = None
+            completed = self.revisions.latest(
+                workspace_id, _PROCESS_METADATA_EXTRACTION_KIND, str(item.content_id)
+            )
             indexed.append(PjeIndexedCaseDocument(
                 item.content_id, item.checksum_sha256, item.original_filename, inventory, blocked,
+                import_incomplete=completed is None,
             ))
         return tuple(indexed)
 

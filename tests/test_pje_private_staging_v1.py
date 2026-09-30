@@ -254,3 +254,46 @@ def test_SA01_readers_that_disagree_on_page_count_are_refused(tmp_path):
     from pypdf.errors import PyPdfError
 
     assert issubclass(PdfIlegivel, PyPdfError)
+
+
+
+def test_SA251_03_a_corrupt_page_tree_is_an_unreadable_pdf_not_an_internal_error(tmp_path):
+    """Auditoria da #251 (SA251-03): percorrer uma arvore de paginas corrompida faz o
+    pypdf estourar com erro cru (AttributeError). Isso escapava como 500.
+
+    Erros proprios do pypdf continuam passando intactos (ja sao "PDF ilegivel"); o
+    resto vira `PdfIlegivel`, preservando a causa, e os dois leitores sao soltos.
+    """
+    from pypdf.errors import PdfReadError
+
+    import scripts.extracao_pje.leitor_pdf as modulo
+    from scripts.extracao_pje.leitor_pdf import LeitorPdf, PdfIlegivel
+
+    pdf = tmp_path / "arvore.pdf"
+    pdf_sintetico(pdf)
+    closed = []
+
+    class _ArvoreQuebrada:
+        def __init__(self, failure):
+            self._failure = failure
+
+        @property
+        def pages(self):
+            raise self._failure
+
+        def close(self):
+            closed.append("pypdf")
+
+    original = modulo.PdfReader
+    try:
+        modulo.PdfReader = lambda *_a, **_k: _ArvoreQuebrada(AttributeError("'NullObject' object has no attribute 'get'"))
+        with pytest.raises(PdfIlegivel, match="arvore de paginas ilegivel: AttributeError") as caught:
+            LeitorPdf(pdf)
+        assert isinstance(caught.value.__cause__, AttributeError)
+        assert "pypdf" in closed, "o handle do pypdf ficou aberto"
+
+        modulo.PdfReader = lambda *_a, **_k: _ArvoreQuebrada(PdfReadError("xref quebrado"))
+        with pytest.raises(PdfReadError, match="xref quebrado"):
+            LeitorPdf(pdf)
+    finally:
+        modulo.PdfReader = original

@@ -348,6 +348,29 @@ class CaseAnalysisSnapshot:
             *self.conflicts,
         )
 
+    @property
+    def unavailable_document_ids(self) -> frozenset[str]:
+        """Documentos logicos fora do estado efetivo (excluidos pelo perito ou nunca disponiveis)."""
+        return frozenset(document.document_id for document in self.documents if not document.content_available)
+
+    def derived_from_unavailable(self, item) -> bool:
+        """O item (ou participante do JDM) cita como fonte um documento fora do estado efetivo?
+
+        E o sinal que substitui, para os consumidores a jusante, o que antes vinha
+        misturado em `stale_document_ids`. Aquele canal e de DERIVA DE FONTE e, se
+        recebesse a exclusao, congelaria a analise inteira; este diz apenas "nao
+        construa autoridade sobre este item" -- Planejamento, laudo e Constatacoes
+        Tecnicas recusam, o perito resolve rejeitando o item ou reabilitando a peca.
+        """
+        # Uma LACUNA que cita a peca indisponivel registra justamente a ausencia dela
+        # ("anexo indicado nao esta disponivel"); nao e construida sobre o conteudo.
+        # Trata-la como derivada recusaria o Planejamento de todo caso com lacuna
+        # documental -- que e exatamente o caso que a lacuna existe para registrar.
+        if isinstance(item, EvidenceGap):
+            return False
+        unavailable = self.unavailable_document_ids
+        return any(source.source_document_id in unavailable for source in item.provenance)
+
     def effective_reviewed_value(self, item_id: str) -> str | None:
         """Return the reviewed semantic value without mutating source extraction."""
         item = next((candidate for candidate in self.material_items if candidate.item_id == item_id), None)

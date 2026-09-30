@@ -243,3 +243,48 @@ def test_SA02_a_manifest_error_is_recorded_as_BLOCKED_not_raised_as_internal_err
         assert _coverage(runtime, workspace_id)["status"] != "COMPLETE"
     finally:
         runtime.close()
+
+
+
+def test_SA251_02_an_import_that_fails_after_storing_bytes_never_yields_complete_coverage(tmp_path):
+    """Auditoria da #251 (SA251-02, P1; era o SA-06 de setembro, nunca reparado).
+
+    A importacao grava os bytes ANTES de extrair e derivar o inventario PJe. Uma falha
+    inesperada nesse intervalo respondia 500 -- correto -- mas a fonte ficava gravada e
+    a Analise do Caso fechava COMPLETE "analisando" algo que nunca foi lido.
+
+    O armazenamento privado nao tem descarte (e cria-lo mexeria na fronteira de
+    confianca), entao o reparo e na mentira, nao nos bytes: fonte cuja importacao nao
+    chegou ao fim nao conta como analisada. Controle: a mesma composicao com um adapter
+    que funciona fecha COMPLETE.
+    """
+    from scripts.backend_contract.local_api.composition import build_local_api
+    from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
+
+    class _Explodes:
+        def logical_inventory(self, *_args, **_kwargs):
+            raise RuntimeError("falha inesperada sintetica na derivacao PJe")
+
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-falha")
+    for name, adapter, expected_import, complete in (
+        ("controle", PjeIntakeAdapter(), 201, True),
+        ("falha", _Explodes(), 500, False),
+    ):
+        private = tmp_path / f"private-{name}"
+        provision_private_root(private)
+        runtime = build_local_api(tmp_path / f"{name}.sqlite3", private_root=private, token=TOKEN, pje_intake=adapter)
+        runtime.start()
+        try:
+            _s, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": name})
+            workspace_id = workspace["workspace_id"]
+            status, _material = _request(
+                runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+                headers={"Content-Type": "application/pdf", "X-Document-Filename": "a.pdf"},
+            )
+            assert status == expected_import, (name, status)
+            coverage = _coverage(runtime, workspace_id)
+            assert (coverage["status"] == "COMPLETE") is complete, (name, coverage)
+            if not complete:
+                assert coverage["documents_failed"] >= 1, coverage
+        finally:
+            runtime.close()

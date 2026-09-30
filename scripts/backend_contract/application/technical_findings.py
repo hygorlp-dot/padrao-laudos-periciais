@@ -112,11 +112,16 @@ def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnap
         # mas deixa de ser autoridade documental: uma constatacao nao pode citar
         # como fonte um documento que a decisao profissional excluiu da analise.
         "CASE_DOCUMENT": {item.document_id for item in case.documents if item.content_available},
-        "DOCUMENTED_ALLEGATION": {source.occurrence_id for item in case.claims for source in item.provenance},
-        "CASE_CLAIM": {item.item_id for item in case.claims},
-        "CASE_COUNTERARGUMENT": {item.item_id for item in case.counterarguments},
-        "CASE_DECISION": {item.item_id for item in case.decisions},
-        "CASE_QUESTION": {item.item_id for item in case.questions},
+        # Itens EXTRAIDOS de peca excluida tambem deixam de ser autoridade; filtrar so
+        # CASE_DOCUMENT deixaria a exclusao voltar pelos derivados.
+        "DOCUMENTED_ALLEGATION": {
+            source.occurrence_id for item in case.claims for source in item.provenance
+            if source.source_document_id not in case.unavailable_document_ids
+        },
+        "CASE_CLAIM": {item.item_id for item in case.claims if not case.derived_from_unavailable(item)},
+        "CASE_COUNTERARGUMENT": {item.item_id for item in case.counterarguments if not case.derived_from_unavailable(item)},
+        "CASE_DECISION": {item.item_id for item in case.decisions if not case.derived_from_unavailable(item)},
+        "CASE_QUESTION": {item.item_id for item in case.questions if not case.derived_from_unavailable(item)},
         "FIELD_RECORD": {item.item_id for item in inspection.items},
         "FIELD_OBSERVATION": {item.observation_id for item in inspection.observations},
         "FIELD_STATEMENT": {item.statement_id for item in inspection.statements},
@@ -136,7 +141,7 @@ def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnap
         )
         if link.source_revision != expected_revision:
             raise ValueError("Technical Snapshot source revision differs from bound upstream")
-    question_ids = {item.item_id for item in case.questions}
+    question_ids = {item.item_id for item in case.questions if not case.derived_from_unavailable(item)}
     if any(link.question_id not in question_ids for link in snapshot.question_links):
         raise ValueError("Technical Snapshot question identity is absent from Case Analysis")
 
