@@ -26,7 +26,7 @@ PROTECTED_TIMING_SURFACE_SHA256 = {
     "scripts/quality/capability_analyzer.py": "a082879716d75e2b35c271ab89b93b13b4e56163592cb4f522b924eace766303",
     # V7-4: a decisao temporal vive aqui; fixada junto do workflow que a executa.
     "scripts/quality/metrics.py": "ee747bc47a466dbbbb0a9e4236810f77a9307bfdde282183e93e8f496925c71c",
-    "scripts/quality/timing_attribution.py": "3d543bb33c6dfa04ccd98dde5d8161f0ff546c5258df76798de5760348092407",
+    "scripts/quality/timing_attribution.py": "fef7b00a5609a11c930e27964c2d0bfd6f7627ab1f3ff40cd64b9b32db3ad86f",
 }
 
 
