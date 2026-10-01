@@ -175,6 +175,28 @@ def test_incomplete_or_malformed_base_report_is_invalid(tmp_path, damage):
     assert _decide(tmp_path, str(path), 0) == attribution.EXIT_INVALID
 
 
+def test_reordered_check_set_is_invalid(tmp_path):
+    path = tmp_path / "b"
+    _base(path, 1250.0)
+    text = path.read_text(encoding="utf-8").replace("[PASS] invariants\n[PASS] fixtures\n",
+                                                    "[PASS] fixtures\n[PASS] invariants\n")
+    path.write_text(text, encoding="utf-8")
+    assert _decide(tmp_path, str(path), 0) == attribution.EXIT_INVALID
+
+
+@pytest.mark.parametrize("finding", [
+    "QUALITY_NON_REGRESSION | QUALITY_GATE | FULL_GATE_DURATION_REGRESSION | P1",
+    "QUALITY_NON_REGRESSION | QUALITY_GATE | FULL_GATE_DURATION_REGRESSION | x | P1 | extra",
+])
+def test_timing_finding_with_wrong_field_count_is_invalid(tmp_path, finding):
+    base = _base(tmp_path / "b", 1250.0, "FAIL", failing=("quality non-regression",), findings=(finding,))
+    assert _decide(tmp_path, base, 1) == attribution.EXIT_INVALID
+
+
+def test_pass_result_with_failed_timing_status_is_invalid(tmp_path):
+    assert _decide(tmp_path, _base(tmp_path / "b", 1250.0, "FAIL", result="PASS"), 0) == attribution.EXIT_INVALID
+
+
 def test_base_exit_code_is_mandatory_and_numeric(tmp_path):
     base = _base(tmp_path / "b", 1250.0)
     with pytest.raises(SystemExit):
