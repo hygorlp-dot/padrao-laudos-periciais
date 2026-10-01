@@ -302,7 +302,9 @@ def _coverage_sets(data_file: Path) -> tuple[set, set]:
         raise ShardError(f"coverage ausente: {data_file.name}")
     data = CoverageData(str(data_file))
     data.read()
-    if not data.has_arcs():
+    # Shard que não mede nenhum --source tem data vazio (nada a vazar); data
+    # com arquivos medidos, porém sem arcs, não prova branch coverage.
+    if data.measured_files() and not data.has_arcs():
         raise ShardError(f"coverage sem branch/arcs: {data_file.name}")
     lines = {(path, line) for path in data.measured_files() for line in (data.lines(path) or ())}
     arcs = {(path, arc) for path in data.measured_files() for arc in (data.arcs(path) or ())}
@@ -490,9 +492,6 @@ def aggregate(evidence_dir: Path, *, sha: str, needs: dict, root: Path = ROOT,
         covered += len(nodes)
     if overlaps:
         fail(f"NODE_INVENTORY_OVERLAP:{overlaps[:5]}")
-    unassigned = sorted(set(full_by_file) - set(expected_gate) - shard_file_set)
-    if unassigned:
-        mismatches.append(f"unassigned:{unassigned[:5]}")
     inventory_ok = bool(full_nodes) and not mismatches and not overlaps and covered == len(full_nodes) \
         and set(executed) == set(shard_ids) and bool(shard_ids)
     if not inventory_ok:

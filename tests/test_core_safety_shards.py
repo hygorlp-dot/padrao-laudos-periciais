@@ -354,6 +354,74 @@ def test_gate_partition_losing_a_node_still_fails_by_count(valid):
     _assert_fails(root, evidence, "NODE_INVENTORY_MISMATCH")
 
 
+def test_gate_partition_counts_shifted_between_files_fail(valid):
+    # Total preservado (A -1, E2E +1): a prova do gate é por arquivo, não só por soma.
+    root, evidence = valid
+
+    def shift(payload):
+        payload["gate"]["collected"].remove("tests/test_a.py::test_two")
+        payload["gate"]["collected"].append("tests/test_e2e.py::test_extra")
+        payload["gate"]["collected"].sort()
+    _edit(evidence / "inventory/inventory-evidence.json", shift)
+    _assert_fails(root, evidence, "NODE_INVENTORY_MISMATCH")
+
+
+def test_shard_branch_outside_gate_is_drift_even_with_same_lines(valid):
+    # Mesmas linhas do gate, arco novo (2 -> -1): a equivalência vale para branches.
+    root, evidence = valid
+    data = evidence / "shard-alpha/shard-alpha.data"
+    _coverage(data, root, GATE_ARCS[:3] + [(-1, 2), (2, -1)])
+    _edit(evidence / "shard-alpha/shard-evidence.json", lambda p: p.update(coverage_sha256=shards.sha256_file(data)))
+    _assert_fails(root, evidence, "PARTITION_COVERAGE_DRIFT:shard-alpha.data")
+
+
+def test_shard_coverage_without_branch_data_is_rejected(valid):
+    root, evidence = valid
+    data = evidence / "shard-alpha/shard-alpha.data"
+    data.unlink()
+    line_only = CoverageData(str(data))
+    line_only.add_lines({str(root / "src" / "mod.py"): [1, 7]})
+    line_only.write()
+    _edit(evidence / "shard-alpha/shard-evidence.json", lambda p: p.update(coverage_sha256=shards.sha256_file(data)))
+    _assert_fails(root, evidence, "COMBINED_COVERAGE_INVALID")
+
+
+def test_shard_node_report_with_failed_exitstatus_or_duplicates_is_rejected(valid):
+    root, evidence = valid
+    _edit(evidence / "shard-alpha/shard-evidence.json", lambda p: p["nodes"].update(exitstatus=1))
+    _assert_fails(root, evidence, "SHARD_EVIDENCE_INVALID:alpha")
+    _edit(evidence / "shard-alpha/shard-evidence.json", lambda p: p["nodes"].update(
+        exitstatus=0, collected=p["nodes"]["collected"] * 2))
+    _assert_fails(root, evidence, "SHARD_EVIDENCE_INVALID:alpha")
+
+
+def test_unexpected_job_in_needs_fails_closed(valid):
+    root, evidence = valid
+    _assert_fails(root, evidence, "JOB_UNEXPECTED:other",
+                  needs={**NEEDS_OK, "other": {"result": "success"}})
+
+
+@pytest.mark.parametrize("check", ["E2E negative", "regression", "privacy"])
+def test_semantic_failure_with_timing_finding_is_never_labelled_semantic_pass(check):
+    # A presença de FULL_GATE_DURATION_REGRESSION não pode rotular como só-temporal
+    # uma execução em que outro check falhou.
+    report = (GATE_REPORT.replace(f"[PASS] {check}\n", f"[FAIL] {check}\n")
+              .replace("[PASS] quality non-regression", "[FAIL] quality non-regression")
+              .replace("RESULT: PASS\n", "RESULT: FAIL\nQUALITY_NON_REGRESSION | QUALITY_GATE | "
+                       "FULL_GATE_DURATION_REGRESSION | x | P1\n"))
+    assert shards.semantic_status(shards.parse_gate_report(report)) == "FAIL"
+
+
+def test_semantic_label_requires_the_closed_check_set():
+    report = GATE_REPORT.replace("[PASS] schemas\n", "")
+    assert shards.semantic_status(shards.parse_gate_report(report)) == "FAIL"
+    timing_only = (GATE_REPORT.replace("[PASS] quality non-regression", "[FAIL] quality non-regression")
+                   .replace("RESULT: PASS\n", "RESULT: FAIL\nQUALITY_NON_REGRESSION | QUALITY_GATE | "
+                            "FULL_GATE_DURATION_REGRESSION | x | P1\n"))
+    assert shards.semantic_status(shards.parse_gate_report(timing_only)) == "PASS"
+    assert shards.semantic_status(shards.parse_gate_report(timing_only.replace("[PASS] schemas\n", ""))) == "FAIL"
+
+
 def test_clock_dependent_node_id_in_a_shard_fails_closed(valid):
     # Em shard a igualdade é por ID exato: um ID instável lá não é aceito.
     root, evidence = valid
