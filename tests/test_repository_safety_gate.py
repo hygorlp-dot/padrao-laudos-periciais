@@ -286,12 +286,12 @@ def test_pr_timing_observability_preserves_protected_execution_surface():
     assert observed == PROTECTED_TIMING_SURFACE_SHA256
 
 
-def test_full_gate_reference_is_the_explicitly_decided_value():
-    # V7-4 (decisao humana "2-III" na #256): a referencia de 60 s era historica e
-    # deixava a main vermelha em todo merge com a suite atual (~12-17 min). O valor
-    # e explicito e versionado; acima dele a atribuicao BASE x HEAD e obrigatoria.
+def test_pr_timing_observability_keeps_immutable_sixty_second_target():
+    # V7-4 (decisao humana "2-III" na #256) muda a consequencia de exceder a
+    # referencia (atribuicao BASE x HEAD), nao a referencia: 60 s permanece
+    # byte-identico (#259).
     baseline = json.loads((ROOT / "config/quality-baseline.json").read_text(encoding="utf-8"))
-    assert baseline["full_gate_max_seconds"] == 1200.0
+    assert baseline["full_gate_max_seconds"] == 60.0
 
 
 def test_full_gate_overlaps_independent_mutation_and_regression_suites():

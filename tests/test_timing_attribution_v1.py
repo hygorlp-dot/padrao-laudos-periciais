@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SHA = "a" * 40
 
 
-def _log(path: Path, seconds, status="ATTRIBUTION_REQUIRED", target=1200.0, extra=""):
+def _log(path: Path, seconds, status="ATTRIBUTION_REQUIRED", target=60.0, extra=""):
     path.write_text(f"CORE SAFETY GATE\nTARGET_SECONDS = {target}\nOBSERVED_SECONDS = {seconds}\nTIMING_STATUS = {status}\n{extra}RESULT: PASS\n", encoding="utf-8")
     return str(path)
 

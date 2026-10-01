@@ -20,8 +20,10 @@ candidate cost.
   only the protected workflow performs.
 - The semantic full gate is unchanged and blocking; timing never hides a semantic,
   coverage, hotspot or privacy finding.
-- `config/quality-baseline.json` `full_gate_max_seconds` is explicitly redefined to
-  **1200 s**. At or below it the timing status is `PASS`.
+- `config/quality-baseline.json` `full_gate_max_seconds` stays byte-identical at the
+  historical **60 s** reference (#259 keeps it out of scope). At or below it the timing
+  status is `PASS`. With the current suite every protected run is above it, so the BASE
+  attribution runs on every PR and every `main` push; reducing that cost is #259.
 - Above it the status is `ATTRIBUTION_REQUIRED` and the mandatory workflow step
   "Timing attribution BASE vs HEAD" measures the exact BASE commit (PR base SHA, or
   `github.event.before` on `main`) on the same runner and blocks only when
