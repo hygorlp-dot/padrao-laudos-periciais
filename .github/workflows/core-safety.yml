@@ -8,10 +8,31 @@ on:
 permissions:
   contents: read
 
+# V7-4A (#259) — runtime optimization without semantic change.
+#
+# scripts/quality/verify_core.py stays byte-identical (capability-protected).
+# The orchestration only spreads the SAME work across independent runners:
+#
+#   architecture      the architecture trust-boundary suite (as before, #63/#64)
+#   core-gate         verify_core --full, unchanged judge, whose "regression"
+#                     keeps the coverage-carrying partition (complement of the
+#                     manifest config/core-safety-shards-v1.json)
+#   regression-shard  the judge's own regression command over each manifest
+#                     shard, on its own runner, with coverage and node evidence
+#   inventory         exact reference node inventory of the unsharded regression
+#   core-safety       closed-set aggregator (the required check): every job
+#                     green, every shard present, exact SHA, node inventory
+#                     identical, shard coverage contained in the gate coverage,
+#                     combined coverage non-regression. Anything else = FAIL.
+#
+# The timing policy (60 s, STRICT/PR_ADVISORY) is untouched and still decided
+# inside verify_core; the aggregator reports SEMANTIC_STATUS and TIMING_STATUS
+# separately and never turns a red gate green.
+
 jobs:
-  core-safety:
+  architecture:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -30,13 +51,184 @@ jobs:
           uv pip sync --system --require-hashes requirements-dev.txt
       - name: Architecture trust-boundary suite
         run: python -m pytest -q tests/test_architecture_analyzer_v1.py
+
+  core-gate:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.6"
+          cache-dependency-glob: uv.lock
+      - name: Install test dependencies
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
       - name: Verify frozen Core V1
         # --ignore only prunes directory-walk collection; it cannot silently
         # zero out the explicit-path "Architecture trust-boundary suite" step
-        # above the way a -k/-m/--deselect filter would if this env block
-        # were ever hoisted to job/workflow level. Keep it step-scoped and
-        # keep using --ignore specifically (see the guard test in
-        # tests/test_repository_safety_gate.py).
+        # (or the explicit E2E / quality / mutation invocations inside
+        # verify_core) the way a -k/-m/--deselect filter would if this env
+        # block were ever hoisted to job/workflow level. Keep it step-scoped
+        # and keep using --ignore specifically (see the guard tests in
+        # tests/test_repository_safety_gate.py and tests/test_core_safety_shards.py).
+        # The offloaded shard files are appended from the versioned manifest;
+        # they run in the regression-shard jobs and are never silently dropped.
         env:
           PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
-        run: python -m scripts.quality.verify_core --full
+        shell: pwsh
+        run: |
+          $sha = git rev-parse HEAD
+          if ($sha -ne $env:GITHUB_SHA) { throw "checkout $sha is not $env:GITHUB_SHA" }
+          $offload = python -m scripts.quality.core_safety_shards gate-addopts
+          if ($LASTEXITCODE -ne 0 -or -not $offload) { throw "shard manifest invalid" }
+          $env:PYTEST_ADDOPTS = "$env:PYTEST_ADDOPTS $offload"
+          python -m scripts.quality.verify_core --full *> gate-report.txt
+          $code = $LASTEXITCODE
+          Get-Content gate-report.txt
+          New-Item -ItemType Directory -Force evidence/gate | Out-Null
+          if (Test-Path coverage-quality-v2.data) { Copy-Item coverage-quality-v2.data evidence/gate/ }
+          python -m scripts.quality.core_safety_shards gate-evidence --sha $sha --exit-code $code --report gate-report.txt --data-file evidence/gate/coverage-quality-v2.data --out evidence/gate/gate-evidence.json
+          exit $code
+      - name: Upload gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gate
+          path: evidence/gate/
+          if-no-files-found: error
+          retention-days: 7
+
+  inventory:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.6"
+          cache-dependency-glob: uv.lock
+      - name: Install test dependencies
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
+      - name: Exact regression node inventory
+        shell: pwsh
+        run: |
+          $sha = git rev-parse HEAD
+          if ($sha -ne $env:GITHUB_SHA) { throw "checkout $sha is not $env:GITHUB_SHA" }
+          New-Item -ItemType Directory -Force evidence/inventory | Out-Null
+          foreach ($partition in @('full', 'gate')) {
+            $argv = @(python -m scripts.quality.core_safety_shards collect-argv --partition $partition --nodes-file "evidence/inventory/$partition-nodes.json" | ConvertFrom-Json)
+            if ($LASTEXITCODE -ne 0) { throw "shard manifest invalid" }
+            & $argv[0] @($argv[1..($argv.Count - 1)]) *> "collect-$partition.log"
+            if ($LASTEXITCODE -ne 0) { Get-Content "collect-$partition.log" -Tail 40; throw "collection failed: $partition" }
+          }
+          python -m scripts.quality.core_safety_shards inventory-evidence --sha $sha --full-nodes evidence/inventory/full-nodes.json --gate-nodes evidence/inventory/gate-nodes.json --out evidence/inventory/inventory-evidence.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload inventory evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: inventory
+          path: evidence/inventory/
+          if-no-files-found: error
+          retention-days: 7
+
+  regression-shard:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [SHARDS_PLACEHOLDER]
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.6"
+          cache-dependency-glob: uv.lock
+      - name: Install test dependencies
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
+      - name: Regression shard
+        shell: pwsh
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          $sha = git rev-parse HEAD
+          if ($sha -ne $env:GITHUB_SHA) { throw "checkout $sha is not $env:GITHUB_SHA" }
+          $dir = "evidence/shard-$env:SHARD"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $data = "$dir/shard-$env:SHARD.data"
+          $argv = @(python -m scripts.quality.core_safety_shards shard-argv --shard $env:SHARD --data-file $data --nodes-file "$dir/nodes.json" | ConvertFrom-Json)
+          if ($LASTEXITCODE -ne 0) { throw "shard manifest invalid" }
+          $watch = [Diagnostics.Stopwatch]::StartNew()
+          & $argv[0] @($argv[1..($argv.Count - 1)])
+          $code = $LASTEXITCODE
+          $watch.Stop()
+          "SHARD_DURATION $env:SHARD {0:N3}" -f $watch.Elapsed.TotalSeconds
+          python -m scripts.quality.core_safety_shards shard-evidence --shard $env:SHARD --sha $sha --exit-code $code --seconds $watch.Elapsed.TotalSeconds --nodes-file "$dir/nodes.json" --data-file $data --out "$dir/shard-evidence.json"
+          exit $code
+      - name: Upload shard evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: shard-${{ matrix.shard }}
+          path: evidence/shard-${{ matrix.shard }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  core-safety:
+    needs: [architecture, core-gate, inventory, regression-shard]
+    if: always()
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.6"
+          cache-dependency-glob: uv.lock
+      - name: Install test dependencies
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
+      - name: Download this run's evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: evidence
+      - name: Closed-set aggregation
+        shell: pwsh
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+        run: |
+          $sha = git rev-parse HEAD
+          if ($sha -ne $env:GITHUB_SHA) { throw "checkout $sha is not $env:GITHUB_SHA" }
+          python -m scripts.quality.core_safety_shards aggregate --evidence-dir evidence --sha $sha --needs-env NEEDS_JSON
+          exit $LASTEXITCODE

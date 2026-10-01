@@ -47,6 +47,12 @@
   cronometrado de 60s (via `PYTEST_ADDOPTS` no workflow, sem alterar
   `scripts/quality/verify_core.py`); localmente, `verify_core --full` sem
   essa variável continua executando essa suíte normalmente, como sempre.
+  Na CI, o `regression` do `verify_core` cobre a partição que carrega
+  coverage e os shards de `config/core-safety-shards-v1.json` rodam o mesmo
+  comando em runners próprios; o job requerido `core-safety` é o agregador
+  closed-set (`scripts/quality/core_safety_shards.py`) que falha fechado por
+  shard ausente/vermelho, SHA divergente, inventário de node IDs incompleto ou
+  coverage parcial (ver `docs/padroes/repository-safety-gate.md`).
 - Para code review, usar subagente independente quando disponível. Se estiver
   indisponível, gerar `review package` com requisitos, diff, testes e riscos e
   exigir revisão externa do PR antes do merge. Nunca declarar revisão

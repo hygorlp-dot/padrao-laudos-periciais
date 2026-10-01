@@ -73,6 +73,44 @@ mecanismo de escopo/support-artifact equivalente ao construído para
 arquitetura. Manter o script intacto evita essa segunda autorização para
 uma mudança que é puramente de orquestração de CI.
 
+## Sharding do regression (V7-4A, #259)
+
+O job requerido `core-safety` passou a ser um agregador closed-set sobre jobs
+independentes do mesmo SHA, sem alterar `scripts/quality/verify_core.py`
+(byte-idêntico, artefato capability-protected) nem a política temporal:
+
+- `architecture`: a suíte de arquitetura, como antes, em runner próprio;
+- `core-gate`: `verify_core --full` inalterado; seu `regression` cobre a
+  partição que carrega coverage (complemento do manifest);
+- `regression-shard`: o MESMO comando `regression` do juiz (extraído por
+  `scripts.quality.core_safety_plan`, nunca copiado) sobre cada shard de
+  `config/core-safety-shards-v1.json`, em runner próprio, com coverage e
+  inventário de node IDs (`scripts.quality.core_safety_nodes`);
+- `inventory`: coleta de referência do regression integral (sem shards) e da
+  partição do gate;
+- `core-safety`: `python -m scripts.quality.core_safety_shards aggregate`.
+
+O agregador falha fechado quando qualquer job não termina em `success`
+(inclusive `skipped`/`cancelled`), quando falta ou sobra shard, quando a
+evidência tem SHA, manifest ou schema divergentes, quando um node falha ou não
+executa, quando `gate ∪ shards ≠ regression integral` ou há sobreposição,
+quando o coverage de um shard não está contido no do gate
+(`PARTITION_COVERAGE_DRIFT`) ou quando o coverage combinado regride contra
+`config/quality-baseline.json`. Ele reconstrói a lista fechada de 16 checks do
+`verify_core` e reporta `SEMANTIC_STATUS` e `TIMING_STATUS` separadamente; uma
+falha só temporal continua vermelha exatamente como antes.
+
+Arquivo de teste novo cai automaticamente na partição do gate (complemento):
+nada some silenciosamente. Mover um arquivo para um shard exige que seu
+coverage medido já esteja contido no do gate — o que é provado a cada execução,
+não presumido. A partição é escolhida por tempo medido
+(`.github/workflows/core-safety-profile.yml`, não-dispositivo).
+
+Shards rodam em runners separados (sem `pytest-xdist`, sem workspace
+compartilhado). Os testes de Word nativo continuam `skip` nos runners GitHub
+sem Microsoft Word/pywin32, como antes; isso não substitui a matriz Word nativa
+do Human RC.
+
 ## Evolução
 
 Para adicionar boundary, invariante ou fixture:

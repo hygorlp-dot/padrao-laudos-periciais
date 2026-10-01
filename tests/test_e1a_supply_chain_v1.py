@@ -13,6 +13,9 @@ APPROVED_ACTIONS = {
     ("actions", "checkout"): "11d5960a326750d5838078e36cf38b85af677262",
     ("actions", "setup-python"): "a26af69be951a213d495a4c3e4e4022e16d87065",
     ("astral-sh", "setup-uv"): "c771a70e6277c0a99b617c7a806ffedaca235ff9",
+    # V7-4A (#259): evidence handoff between core-safety jobs of the same run.
+    ("actions", "upload-artifact"): "ea165f8d65b6e75b540449e92b4886f43607fa02",
+    ("actions", "download-artifact"): "d3f86a106a0bac45b974a628896c90dbdf5c8093",
 }
 
 
@@ -48,7 +51,7 @@ def test_dependency_workflows_use_locked_uv_and_exports_are_generated_only():
     workflows = _workflow_texts()
     uv_workflows = {path: text for path, text in workflows.items() if "uv pip sync" in text}
     assert {path.name for path in uv_workflows} == {
-        "core-safety.yml", "lint.yml", "quality-depth.yml"
+        "core-safety.yml", "core-safety-profile.yml", "lint.yml", "quality-depth.yml"
     }
     for path, workflow in uv_workflows.items():
         assert "uv lock --check" in workflow, path
