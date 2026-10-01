@@ -57,6 +57,8 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
         "/v1/workspaces/{workspace_id}/technical-snapshot/method-selections",
         "/v1/workspaces/{workspace_id}/technical-snapshot/finding-proposals",
         "/v1/workspaces/{workspace_id}/technical-snapshot/finding-reviews",
+        "/v1/workspaces/{workspace_id}/technical-snapshot/successor",
+        "/v1/workspaces/{workspace_id}/construction-defect-analysis/successor",
         "/v1/workspaces/{workspace_id}/expert-profile",
         "/v1/workspaces/{workspace_id}/site-location",
         "/v1/workspaces/{workspace_id}/photo-library",

@@ -87,12 +87,14 @@ from ..application.technical_findings import (
     SaveTechnicalSnapshot,
     SelectTechnicalMethod,
     StartTechnicalSnapshot,
+    StartSuccessorTechnicalSnapshot,
 )
 from ..application.construction_defect_analysis import (
     GetConstructionDefectAnalysis,
     ReviewPathology,
     SaveConstructionDefectAnalysis,
     StartConstructionDefectAnalysis,
+    StartSuccessorConstructionDefectAnalysis,
 )
 from ..application.report_foundation import (
     StartReportVersion,
@@ -484,6 +486,13 @@ def build_local_api(
         if construction_defect_analysis is not None
         else None
     )
+    start_successor_construction_defect_analysis = (
+        StartSuccessorConstructionDefectAnalysis(
+            get_construction_defect_analysis, start_construction_defect_analysis, save_construction_defect_analysis,
+        )
+        if start_construction_defect_analysis is not None
+        else None
+    )
     review_pathology = ReviewPathology(
         get_construction_defect_analysis,
         save_construction_defect_analysis,
@@ -769,6 +778,7 @@ def build_local_api(
         save_technical_snapshot=save_technical_snapshot,
         get_technical_snapshot=get_technical_snapshot,
         start_technical_snapshot=StartTechnicalSnapshot(get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids),
+        start_successor_technical_snapshot=StartSuccessorTechnicalSnapshot(get_technical_snapshot, StartTechnicalSnapshot(get_case_analysis, get_inspection_session, save_technical_snapshot, local_ids), save_technical_snapshot),
         add_technical_evidence_proposal=AddEvidenceProposal(get_technical_snapshot, save_technical_snapshot, local_ids),
         review_technical_evidence=ReviewTechnicalEvidence(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids, resolve_technical_professional),
         select_technical_method=SelectTechnicalMethod(get_technical_snapshot, save_technical_snapshot, local_ids, resolve_technical_professional),
@@ -776,6 +786,7 @@ def build_local_api(
         review_technical_finding=ReviewTechnicalFinding(get_technical_snapshot, save_technical_snapshot, local_clock, local_ids, resolve_technical_professional),
         get_construction_defect_analysis=get_construction_defect_analysis,
         start_construction_defect_analysis=start_construction_defect_analysis,
+        start_successor_construction_defect_analysis=start_successor_construction_defect_analysis,
         review_pathology=review_pathology,
         save_expert_profile=save_expert_profile,
         get_expert_profile=get_expert_profile,

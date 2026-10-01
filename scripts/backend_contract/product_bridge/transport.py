@@ -150,7 +150,7 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/offline-device/replace"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "technical-snapshot" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
-        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "technical-snapshot" and remainder[2] in {"evidence-proposals", "evidence-reviews", "method-selections", "finding-proposals", "finding-reviews"} and method == "POST":
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "technical-snapshot" and remainder[2] in {"evidence-proposals", "evidence-reviews", "method-selections", "finding-proposals", "finding-reviews", "successor"} and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/technical-snapshot/{remainder[2]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "construction-defect-analysis" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
@@ -186,8 +186,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/pericial-planning/{remainder[2]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "reviews"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/report-snapshot/reviews"
-        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["construction-defect-analysis", "pathology-reviews"] and method == "POST":
-            return f"/v1/workspaces/{remainder[0]}/construction-defect-analysis/pathology-reviews"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "construction-defect-analysis" and remainder[2] in {"pathology-reviews", "successor"} and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/construction-defect-analysis/{remainder[2]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "versions"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/report-snapshot/versions"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "draft-amendments"] and method == "POST":

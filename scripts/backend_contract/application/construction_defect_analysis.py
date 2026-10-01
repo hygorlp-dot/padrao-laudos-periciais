@@ -281,8 +281,12 @@ class SaveConstructionDefectAnalysis:
             type(expected_revision) is not int or expected_revision < 1
         ):
             raise ValueError("Construction Defect Analysis expected revision is invalid")
-        if expected_revision is None:
-            if mutation_authority != "START" or snapshot.reviews:
+        if mutation_authority == "SUCCESSION" and expected_revision is None:
+            raise ValueError(
+                "Construction Defect Analysis succession requires the stale predecessor revision"
+            )
+        if expected_revision is None or mutation_authority == "SUCCESSION":
+            if mutation_authority not in {"START", "SUCCESSION"} or snapshot.reviews:
                 raise ValueError(
                     "initial Construction Defect Analysis requires the start command"
                 )
@@ -308,6 +312,23 @@ class SaveConstructionDefectAnalysis:
                 predecessor = validated_construction_defect_analysis_from_mapping(
                     thaw_payload(predecessor_record.payload)
                 )
+            if expected_revision is not None and mutation_authority == "SUCCESSION":
+                # A analise anterior continua como revisao imutavel, com as revisoes de
+                # PAT do perito. So uma analise stale contra as autoridades lidas nesta
+                # transacao pode ser sucedida; a sucessora nasce sem revisoes.
+                current_authorities = _authorities(
+                    workspace_id,
+                    get_latest_revision=self.get_latest_revision,
+                    get_process_case=self.get_process_case,
+                    get_case_analysis=self.get_case_analysis,
+                    get_planning=self.get_planning,
+                    get_inspection=self.get_inspection,
+                )
+                if not _reconcile(predecessor, current=_binding(workspace_id, current_authorities), case=current_authorities.case_analysis).upstream_stale:
+                    raise ValueError("only a stale Construction Defect Analysis can be succeeded")
+                if snapshot.snapshot_id == predecessor.snapshot_id:
+                    raise ValueError("Construction Defect Analysis successor requires a new identity")
+            elif expected_revision is not None:
                 immutable = (
                     "schema_version",
                     "snapshot_id",
@@ -400,6 +421,14 @@ class StartConstructionDefectAnalysis:
     ids: object
 
     def execute(self, workspace_id, *, observation_contexts: tuple):
+        snapshot = self.propose(workspace_id, observation_contexts=observation_contexts)
+        record = self.save_snapshot.execute(
+            workspace_id, snapshot, None, mutation_authority="START"
+        )
+        return record, snapshot
+
+    def propose(self, workspace_id, *, observation_contexts: tuple):
+        """Proposta do motor sobre as autoridades vigentes, sem revisao profissional."""
         if not callable(getattr(self.runner, "execute", None)):
             raise RepositoryIntegrityError(
                 "Construction Defect Analysis runner is unavailable"
@@ -444,10 +473,31 @@ class StartConstructionDefectAnalysis:
             upstream_stale=False,
             upstream_stale_reasons=(),
         )
-        record = self.save_snapshot.execute(
-            workspace_id, snapshot, None, mutation_authority="START"
-        )
-        return record, snapshot
+        return snapshot
+
+
+@dataclass(frozen=True, slots=True)
+class StartSuccessorConstructionDefectAnalysis:
+    """Nova analise de vicios quando a atual ficou para tras (F7, #252).
+
+    A anterior continua no historico com as revisoes de PAT do perito; a sucessora
+    e uma nova proposta do motor sobre as autoridades vigentes e exige revisao
+    profissional atual. Nenhuma revisao anterior e transportada.
+    """
+
+    get_snapshot: object
+    start_snapshot: StartConstructionDefectAnalysis
+    save_snapshot: object
+
+    def execute(self, workspace_id, *, expected_revision: int, observation_contexts: tuple):
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Construction Defect Analysis expected revision is invalid")
+        record, _current = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Construction Defect Analysis revision is not latest")
+        snapshot = self.start_snapshot.propose(workspace_id, observation_contexts=observation_contexts)
+        saved = self.save_snapshot.execute(workspace_id, snapshot, expected_revision, mutation_authority="SUCCESSION")
+        return saved, snapshot
 
 
 @dataclass(frozen=True, slots=True)

@@ -155,6 +155,18 @@ export async function startConstructionDefectAnalysis(workspaceId: string, obser
   }), workspaceId);
 }
 
+// A análise anterior e as revisões de PAT permanecem no histórico; a nova é proposta pendente.
+export async function startSuccessorConstructionDefectAnalysis(workspaceId: string, expectedRevision: number, observationContexts: ObservationContext[]) {
+  if (!observationContexts.length) invalid();
+  return decode(await fetch(`${endpoint(workspaceId)}/successor`, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({ expected_revision: expectedRevision, observation_contexts: observationContexts }),
+  }), workspaceId);
+}
+
 export async function reviewPathology(
   workspaceId: string,
   envelope: ConstructionDefectAnalysisEnvelope,

@@ -183,8 +183,10 @@ class SaveTechnicalSnapshot:
             raise ValueError("stale Technical Snapshot cannot be persisted")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("Technical Snapshot expected revision is invalid")
-        if expected_revision is None:
-            if mutation_authority != "START" or any((
+        if mutation_authority == "SUCCESSION" and expected_revision is None:
+            raise ValueError("Technical Snapshot succession requires the stale predecessor revision")
+        if expected_revision is None or mutation_authority == "SUCCESSION":
+            if mutation_authority not in {"START", "SUCCESSION"} or any((
                 snapshot.evidence_items, snapshot.source_links, snapshot.evidence_assessments, snapshot.method_applications,
                 snapshot.method_inputs, snapshot.method_outputs, snapshot.finding_proposals, snapshot.findings,
                 snapshot.dependencies, snapshot.conflicts, snapshot.limitations, snapshot.uncertainties,
@@ -204,6 +206,23 @@ class SaveTechnicalSnapshot:
                 if predecessor_record.revision != expected_revision:
                     raise RepositoryConflict("expected Technical Snapshot revision is not latest")
                 predecessor = validated_technical_snapshot_from_mapping(thaw_payload(predecessor_record.payload))
+            if expected_revision is not None and mutation_authority == "SUCCESSION":
+                # A analise anterior nao e reescrita: continua como revisao imutavel do
+                # mesmo artefato, com evidencias, metodos, constatacoes e decisoes. So uma
+                # analise que deixou de refletir as autoridades vigentes (lidas nesta
+                # transacao) pode ser sucedida, e a sucessora nasce vazia.
+                case_record, case = self.get_case_analysis.execute(workspace_id)
+                inspection_record, inspection = self.get_inspection_session.execute(workspace_id)
+                current = _binding(
+                    workspace_id=workspace_id, case_record=case_record, case=case,
+                    inspection_record=inspection_record, inspection=inspection,
+                )
+                if not _reconcile(predecessor, current=current).upstream_stale:
+                    raise ValueError("only a stale Technical Snapshot can be succeeded")
+                if snapshot.snapshot_id == predecessor.snapshot_id:
+                    raise ValueError("Technical Snapshot successor requires a new identity")
+                predecessor = None
+            elif expected_revision is not None:
                 if snapshot.snapshot_id != predecessor.snapshot_id or snapshot.source_snapshot != predecessor.source_snapshot:
                     raise ValueError("Technical Snapshot immutable identity changed")
                 append_only = (
@@ -308,6 +327,12 @@ class StartTechnicalSnapshot:
     ids: object
 
     def execute(self, workspace_id):
+        snapshot = self.propose(workspace_id)
+        record = self.save_snapshot.execute(workspace_id, snapshot, None, mutation_authority="START")
+        return record, snapshot
+
+    def propose(self, workspace_id) -> TechnicalSnapshot:
+        """Analise tecnica vazia, vinculada as autoridades vigentes."""
         case_record, case = self.get_case_analysis.execute(workspace_id)
         inspection_record, inspection = self.get_inspection_session.execute(workspace_id)
         if case.source_inventory_stale or inspection.upstream_stale:
@@ -331,8 +356,33 @@ class StartTechnicalSnapshot:
             ),
             upstream_stale=False, upstream_stale_reasons=(),
         )
-        record = self.save_snapshot.execute(workspace_id, snapshot, None, mutation_authority="START")
-        return record, snapshot
+        return snapshot
+
+
+@dataclass(frozen=True, slots=True)
+class StartSuccessorTechnicalSnapshot:
+    """Nova analise tecnica quando a atual ficou para tras (F7, #252).
+
+    Uma mudanca legitima na Vistoria ou na Analise do Caso (confirmar a visita,
+    registrar uma foto esquecida) deixa a analise tecnica stale, e ela nao aceita
+    mais escrita. A sucessora nasce vazia sobre as autoridades vigentes; a anterior
+    continua no historico com tudo o que o perito decidiu. Nenhuma avaliacao,
+    metodo ou constatacao e transportada: a nova analise exige julgamento atual.
+    """
+
+    get_snapshot: object
+    start_snapshot: StartTechnicalSnapshot
+    save_snapshot: object
+
+    def execute(self, workspace_id, *, expected_revision: int):
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("Technical Snapshot expected revision is invalid")
+        record, _current = self.get_snapshot.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Technical Snapshot revision is not latest")
+        snapshot = self.start_snapshot.propose(workspace_id)
+        saved = self.save_snapshot.execute(workspace_id, snapshot, expected_revision, mutation_authority="SUCCESSION")
+        return saved, snapshot
 
 
 @dataclass(frozen=True, slots=True)
