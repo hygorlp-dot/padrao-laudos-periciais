@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for Issue #113.
+Accepted for Issue #113. Event-specific timing disposition superseded by `ADR-hybrid-timing-attribution-v1.md` (V7-4).
 
 ## Context
 

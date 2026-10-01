@@ -44,84 +44,49 @@ def test_quality_baseline_requires_fresh_coverage_measurement():
     assert {item["code"] for item in findings} == {"COVERAGE_MEASUREMENT_MISSING"}
 
 
-def test_quality_baseline_rejects_full_gate_duration_regression():
-    baseline = {"coverage":{"line_percent":80.0,"branch_percent":70.0},"hotspots":[],"full_gate_max_seconds":30.0}
-    findings = validate_quality_baseline(
-        baseline,
-        {"line_percent":80.0,"branch_percent":70.0},
-        [],
-        duration_seconds=30.1,
-        timing_policy="STRICT",
-    )
-    assert {item["code"] for item in findings} == {"FULL_GATE_DURATION_REGRESSION"}
-
-
-def test_pull_request_duration_overrun_is_structured_advisory_only(monkeypatch, capsys):
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
-    baseline = {
-        "coverage": {"line_percent": 80.0, "branch_percent": 70.0},
-        "hotspots": [],
-        "full_gate_max_seconds": 60.0,
-    }
-
-    findings = validate_quality_baseline(
-        baseline,
-        {"line_percent": 80.0, "branch_percent": 70.0},
-        [],
-        duration_seconds=60.1,
+def _timed(duration, *, coverage=None, complexity=None, hotspots=None, limit=60.0, policy=None):
+    baseline = {"coverage": {"line_percent": 80.0, "branch_percent": 70.0}, "hotspots": hotspots or [], "full_gate_max_seconds": limit}
+    return validate_quality_baseline(
+        baseline, coverage or {"line_percent": 80.0, "branch_percent": 70.0}, complexity or [],
+        duration_seconds=duration, timing_policy=policy,
     )
 
-    assert findings == []
-    assert capsys.readouterr().out.splitlines() == [
-        "TARGET_SECONDS = 60.0",
-        "OBSERVED_SECONDS = 60.1",
-        "TIMING_STATUS = WARNING",
-    ]
+
+def test_duration_within_reference_passes_with_structured_evidence(capsys):
+    assert _timed(59.9) == []
+    assert capsys.readouterr().out.splitlines() == ["TARGET_SECONDS = 60.0", "OBSERVED_SECONDS = 59.9", "TIMING_STATUS = PASS"]
 
 
-def test_strict_duration_overrun_remains_blocking(monkeypatch, capsys):
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "push")
-    baseline = {
-        "coverage": {"line_percent": 80.0, "branch_percent": 70.0},
-        "hotspots": [],
-        "full_gate_max_seconds": 60.0,
-    }
+def test_duration_over_reference_requires_attribution_identically_on_pr_and_main(monkeypatch, capsys):
+    # V7-4: a mesma evidencia nao pode ser verde no PR e vermelha na main.
+    outputs = []
+    for event in ("pull_request", "push", None):
+        if event is None:
+            monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+        else:
+            monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+        assert _timed(60.1) == []
+        outputs.append(capsys.readouterr().out.splitlines())
+    assert outputs == [["TARGET_SECONDS = 60.0", "OBSERVED_SECONDS = 60.1", "TIMING_STATUS = ATTRIBUTION_REQUIRED"]] * 3
 
-    findings = validate_quality_baseline(
-        baseline,
-        {"line_percent": 80.0, "branch_percent": 70.0},
-        [],
-        duration_seconds=60.1,
+
+def test_timing_never_hides_semantic_quality_findings():
+    findings = _timed(
+        61.0, coverage={"line_percent": 79.9, "branch_percent": 69.9},
+        hotspots=[{"path": "sample.py", "function": "f", "complexity": 4}],
+        complexity=[{"path": "sample.py", "function": "f", "complexity": 5}],
     )
-
-    assert {item["code"] for item in findings} == {"FULL_GATE_DURATION_REGRESSION"}
-    assert capsys.readouterr().out.splitlines() == [
-        "TARGET_SECONDS = 60.0",
-        "OBSERVED_SECONDS = 60.1",
-        "TIMING_STATUS = FAIL",
-    ]
-
-
-def test_pull_request_advisory_never_hides_semantic_quality_findings(monkeypatch):
-    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
-    baseline = {
-        "coverage": {"line_percent": 80.0, "branch_percent": 70.0},
-        "hotspots": [{"path": "sample.py", "function": "f", "complexity": 4}],
-        "full_gate_max_seconds": 60.0,
-    }
-
-    findings = validate_quality_baseline(
-        baseline,
-        {"line_percent": 79.9, "branch_percent": 69.9},
-        [{"path": "sample.py", "function": "f", "complexity": 5}],
-        duration_seconds=61.0,
-    )
-
     assert {item["code"] for item in findings} == {
         "COVERAGE_LINE_REGRESSION",
         "COVERAGE_BRANCH_REGRESSION",
         "HOTSPOT_COMPLEXITY_REGRESSION",
     }
+
+
+def test_legacy_event_specific_policies_are_no_longer_accepted(capsys):
+    for policy in ("STRICT", "PR_ADVISORY"):
+        assert {item["code"] for item in _timed(10.0, policy=policy)} == {"TIMING_EVIDENCE_INVALID"}
+    assert capsys.readouterr().out.count("TIMING_STATUS = INVALID") == 2
 
 
 def test_timing_evidence_is_fail_closed_when_explicitly_requested(capsys):
@@ -138,7 +103,7 @@ def test_timing_evidence_is_fail_closed_when_explicitly_requested(capsys):
             {"line_percent": 80.0, "branch_percent": 70.0},
             [],
             duration_seconds=duration,
-            timing_policy="PR_ADVISORY",
+            timing_policy="HYBRID",
         )
         assert {item["code"] for item in findings} == {"TIMING_EVIDENCE_INVALID"}
 

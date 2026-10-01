@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 PROTECTED_TIMING_SURFACE_SHA256 = {
-    ".github/workflows/core-safety.yml": "562112d80c289e60cca9da898b987df948b851c67fbee3ffb09ab993b52a0b49",
+    ".github/workflows/core-safety.yml": "b23b1fb74ce72390b006195f18bf5736ab0d5efa4427f7c966223ab7787ac50d",
     "scripts/quality/__init__.py": "b3824e776de859b9a48131b04cfc738c925badc4d42c0475eaf919e4e1665e5b",
     "scripts/quality/verify_core.py": "ae2e5928db5917fd4d9f4e9ad8ec9c13e65ebd4ade9f533ab0235b3440275598",
     "scripts/quality/architecture_analyzer.py": "2b7863088b9958818e94d2ed854d265378c80caa218b84e0a4903b0370c30a5e",
@@ -227,14 +227,16 @@ def _run_timed_pull_request_gate(monkeypatch, tmp_path, runner=_successful_gate_
     )
 
 
-def test_pull_request_timing_warning_does_not_fail_an_otherwise_green_gate(monkeypatch, tmp_path, capsys):
+def test_over_reference_timing_defers_to_mandatory_attribution_without_failing_semantics(monkeypatch, tmp_path, capsys):
+    # A decisao temporal sobre a duracao acima da referencia e do passo de
+    # atribuicao BASE x HEAD do workflow, igual em PR e em main (V7-4).
     result = _run_timed_pull_request_gate(monkeypatch, tmp_path)
 
     assert result.result == "PASS"
     assert result.exit_code == 0
     assert ("quality non-regression", True) in result.checks
     assert result.findings == ()
-    assert "TIMING_STATUS = WARNING" in capsys.readouterr().out
+    assert "TIMING_STATUS = ATTRIBUTION_REQUIRED" in capsys.readouterr().out
 
 
 def test_pull_request_timing_warning_never_masks_semantic_command_failure(monkeypatch, tmp_path):
@@ -281,9 +283,12 @@ def test_pr_timing_observability_preserves_protected_execution_surface():
     assert observed == PROTECTED_TIMING_SURFACE_SHA256
 
 
-def test_pr_timing_observability_keeps_immutable_sixty_second_target():
+def test_full_gate_reference_is_the_explicitly_decided_value():
+    # V7-4 (decisao humana "2-III" na #256): a referencia de 60 s era historica e
+    # deixava a main vermelha em todo merge com a suite atual (~12-17 min). O valor
+    # e explicito e versionado; acima dele a atribuicao BASE x HEAD e obrigatoria.
     baseline = json.loads((ROOT / "config/quality-baseline.json").read_text(encoding="utf-8"))
-    assert baseline["full_gate_max_seconds"] == 60.0
+    assert baseline["full_gate_max_seconds"] == 1200.0
 
 
 def test_full_gate_overlaps_independent_mutation_and_regression_suites():

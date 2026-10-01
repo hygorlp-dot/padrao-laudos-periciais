@@ -11,7 +11,7 @@ permissions:
 jobs:
   core-safety:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -39,4 +39,25 @@ jobs:
         # tests/test_repository_safety_gate.py).
         env:
           PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
-        run: python -m scripts.quality.verify_core --full
+        run: |
+          python -m scripts.quality.verify_core --full | Tee-Object -FilePath $env:RUNNER_TEMP/core-safety-head-timing.log
+          exit $LASTEXITCODE
+      - name: Timing attribution BASE vs HEAD
+        # V7-4 (decisao humana "2-III", #256): mesma politica em PR e em main.
+        # Dentro da referencia passa; acima dela a BASE e medida neste mesmo
+        # runner e so regressao material atribuivel ao candidato bloqueia.
+        # Evidencia ausente ou invalida falha fechada.
+        env:
+          PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          python -m scripts.quality.timing_attribution requires-base --head-log $env:RUNNER_TEMP/core-safety-head-timing.log
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          if ($LASTEXITCODE -ne 3) { exit 1 }
+          git worktree add --detach $env:RUNNER_TEMP/core-safety-base $env:BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Push-Location $env:RUNNER_TEMP/core-safety-base
+          python -m scripts.quality.verify_core "--full" | Tee-Object -FilePath $env:RUNNER_TEMP/core-safety-base-timing.log
+          Pop-Location
+          python -m scripts.quality.timing_attribution decide --head-log $env:RUNNER_TEMP/core-safety-head-timing.log --base-log $env:RUNNER_TEMP/core-safety-base-timing.log --base-sha $env:BASE_SHA
+          exit $LASTEXITCODE
