@@ -43,7 +43,9 @@ def test_dedicated_confirmation_uses_profile_clock_and_revision():
     service = ConfirmInspectionVisit(SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=2), session)), SimpleNamespace(execute=persist), SimpleNamespace(execute=lambda _w: (None, SimpleNamespace(profile_id="EXPERT-PROFILE-001"))), SimpleNamespace(now=lambda: datetime.fromisoformat("2026-09-28T12:00:00+00:00")))
     _, updated = service.execute(session.workspace_id, values=visit_values(), expected_revision=2)
     assert updated.visit_context.confirmed_by == "EXPERT-PROFILE-001"
-    assert not updated.reviews and saved[0][2] == {"allow_visit_confirmation": True}
+    assert updated.reviews == session.reviews
+    assert saved[0][0].reviews == session.reviews
+    assert saved[0][2] == {"allow_visit_confirmation": True}
     with pytest.raises(RepositoryConflict):
         service.execute(session.workspace_id, values=visit_values(), expected_revision=1)
 
