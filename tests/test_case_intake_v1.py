@@ -195,3 +195,131 @@ def test_intake_never_opens_a_document_excluded_by_the_professional():
     assert not any(d.content_available for d in projected.documents)
     _record, base, availability, _proposals = intake.execute_for_command(case.workspace_id)
     assert base is case and availability == excluded  # a escrita parte do persistido
+
+
+def _paged_text_pdf(pages):
+    """PDF sintetico com uma lista de linhas por pagina (pypdf, sem pymupdf)."""
+    import io
+
+    from pypdf import PdfWriter
+    from pypdf.generic import DictionaryObject, NameObject, StreamObject
+
+    def literal(text):
+        return "(" + "".join(chr(b) if 32 <= b < 127 and b not in b"()\\" else "\%03o" % b for b in text.encode("cp1252")) + ")"
+
+    writer = PdfWriter()
+    for lines in pages:
+        page = writer.add_blank_page(width=612, height=792)
+        font = DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+                                 NameObject("/BaseFont"): NameObject("/Helvetica"), NameObject("/Encoding"): NameObject("/WinAnsiEncoding")})
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)})})
+        stream = StreamObject()
+        stream.set_data(("BT /F1 10 Tf 40 760 Td " + " ".join(f"{literal(line)} Tj 0 -14 Td" for line in lines) + " ET").encode("ascii"))
+        page[NameObject("/Contents")] = writer._add_object(stream)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def _intake_workspace(tmp_path, data):
+    from scripts.backend_contract.local_api.composition import build_local_api
+    from tests.test_local_api_v1 import http_request
+    from tests.test_product_integration_oracle_v1 import TOKEN
+
+    def _http(runtime, method, path, value=None, raw_body=None, headers=None):
+        # Limite canonico do cliente de teste: o intake le e faz OCR de todas as paginas.
+        status, _headers, body = http_request(runtime.server, method, path, value=value, raw_body=raw_body,
+                                              headers={"X-Local-API-Token": TOKEN, **(headers or {})}, timeout=30.0)
+        return status, json.loads(body) if body else None
+
+    runtime = build_local_api(tmp_path / "intake.db", token=TOKEN, private_root=tmp_path / "private")
+    runtime.start()
+    status, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Limites sinteticos"})
+    assert status == 201
+    root = f"/v1/workspaces/{workspace['workspace_id']}"
+    profile = json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8"))["expert_profile"]
+    assert _http(runtime, "PUT", root + "/expert-profile", {"expected_revision": None, "profile": profile})[0] == 200
+    assert _http(runtime, "POST", root + "/materials", raw_body=data, headers={"Content-Type": "application/pdf", "X-Document-Filename": "quesitos.pdf"})[0] == 201
+    status, case = _http(runtime, "POST", root + "/case-analysis", {})
+    assert status == 201
+    return runtime, root, case, _http
+
+
+def test_question_proposal_limit_is_the_published_case_analysis_text_limit():
+    from scripts.backend_contract.case_intake import QUESTION_TEXT_MAX
+
+    schema = json.loads((Path(__file__).resolve().parents[1] / "schemas/case-analysis-snapshot-v1.schema.json").read_text(encoding="utf-8"))
+    assert QUESTION_TEXT_MAX == schema["$defs"]["text"]["maxLength"]
+
+
+def test_an_oversized_question_block_is_not_proposed_and_the_analysis_stays_readable(tmp_path):
+    """Revisao da PR #255 (P1): um bloco de quesito sem linha em branco atravessava paginas
+    e passava do limite do schema. O aceite respondia 200 e TODA leitura seguinte da Analise
+    do Caso falhava (revisao append-only, sem desfazer). O bloco acima do limite nao e
+    oferecido; o quesito curto do mesmo documento continua."""
+    filler = "continuacao sintetica do mesmo quesito sem linha em branco"
+    pages = [["QUESITOS DA PARTE AUTORA", "01) Quesito longo sintetico?", *(f"linha {i:03d} {filler}" for i in range(45))],
+             *([f"pagina {n} linha {i:03d} {filler}" for i in range(45)] for n in (2, 3)),
+             ["QUESITOS DA PARTE RE", "02) Quesito curto sintetico?"]]
+    runtime, root, _case, http = _intake_workspace(tmp_path, _paged_text_pdf(pages))
+    try:
+        status, intake = http(runtime, "GET", root + "/case-analysis/intake")
+        assert status == 200
+        assert [item["text"] for item in intake["questions"]] == ["Quesito curto sintetico?"]
+        status, accepted = http(runtime, "POST", root + "/case-analysis/questions",
+                                {"proposal_ids": [intake["questions"][0]["proposal_id"]], "expected_revision": intake["revision"]})
+        assert status == 200, accepted
+        assert http(runtime, "GET", root + "/case-analysis")[0] == 200
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("vector", ["inventory_reason", "manual_item_text"])
+def test_an_oversized_text_is_refused_at_write_and_never_bricks_the_analysis(tmp_path, vector):
+    """A causa-raiz: o Save da Analise do Caso gravava sem validar o schema que a leitura
+    valida. Agora a escrita falha fechada (400) e a analise segue legivel e editavel.
+    `manual_item_text` e o vetor ANTERIOR a PR (POST /items), fechado pela mesma causa."""
+    from tests.test_property_record_v1 import _text_pdf
+
+    runtime, root, case, http = _intake_workspace(tmp_path, _text_pdf(["QUESITOS DA PARTE AUTORA", "01) A parede apresenta umidade?"]))
+    try:
+        oversized = "x" * 4097
+        if vector == "inventory_reason":
+            status, _ = http(runtime, "POST", root + "/case-analysis/document-inventory", {"expected_revision": case["revision"], "values": {
+                "category": "HABITE_SE", "status": "PROFESSIONALLY_CONFIRMED_ABSENT_FROM_CASE", "source_document_ids": [], "reason": oversized}})
+        else:
+            status, _ = http(runtime, "POST", root + "/case-analysis/items", {"expected_revision": case["revision"], "item_kind": "PERICIAL_OBJECT", "text": oversized,
+                             "source_document_id": case["snapshot"]["documents"][0]["document_id"], "page_or_span": "p. 1", "technical_subjects": ["x"], "values": {}})
+        assert status == 400
+        status, current = http(runtime, "GET", root + "/case-analysis")
+        assert status == 200 and current["revision"] == case["revision"]
+        status, _ = http(runtime, "POST", root + "/case-analysis/document-inventory", {"expected_revision": current["revision"], "values": {
+            "category": "HABITE_SE", "status": "PROFESSIONALLY_CONFIRMED_ABSENT_FROM_CASE", "source_document_ids": [], "reason": "Conferencia sintetica."}})
+        assert status == 200  # segue editavel
+    finally:
+        runtime.close()
+
+
+def test_question_origin_never_leaks_past_its_own_heading():
+    """Revisao da PR #255 (P1, auditor): a origem so mudava com "QUESITOS DO/DA <x>".
+    "QUESITOS FORMULADOS PELA PARTE RE" nao era reconhecido, o quesito da re herdava
+    "Juizo" (gravado sem como corrigir) e um despacho numerado virava quesito do Juizo.
+    Agora a origem vale so dentro da secao que a declara; o que nao e explicito nao e
+    proposto."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, "\n".join([
+        "QUESITOS DO JUIZO", "1. Ha fissuras na fachada?",
+        "QUESITOS FORMULADOS PELA PARTE RE", "1. A obra seguiu o projeto aprovado?",
+        "Determino:", "1. Intimem-se as partes para manifestacao.",
+    ]))
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == [
+        ("COURT", "Ha fissuras na fachada?"), ("DEFENDANT", "A obra seguiu o projeto aprovado?"),
+    ]
+    unknown = PdfTextPage(1, "QUESITOS DA PARTE AUTORA\n1. Ha umidade?\nQUESITOS DAS PARTES\n2. Quem responde?")
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (unknown,))] == [("CLAIMANT", "Ha umidade?")]
+    unrecognized = PdfTextPage(1, "QUESITOS DO JUIZO\n1. Ha umidade?\nQUESITOS COMPLEMENTARES APRESENTADOS NA REPLICA\n2. Quem responde?")
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (unrecognized,))] == [("COURT", "Ha umidade?")]
+    supplementary = PdfTextPage(1, "QUESITOS SUPLEMENTARES DOS REUS\n3) Houve manutencao?")
+    assert [(p.source.origin, p.source.original_number) for p in extract_questions(doc, (supplementary,))] == [("DEFENDANT", "3)")]

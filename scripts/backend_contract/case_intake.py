@@ -54,9 +54,32 @@ class QuestionProposal:
     source: QuestionSource
 
 
-_ORIGINS = {"JUIZO": "COURT", "PARTE AUTORA": "CLAIMANT", "AUTOR": "CLAIMANT", "AUTORA": "CLAIMANT", "PARTE RE": "DEFENDANT", "REU": "DEFENDANT", "RE": "DEFENDANT"}
-_HEADING = re.compile(r"(?:\d+(?:\.\d+)*\.?\s+)?QUESITOS\s+(?:DO|DA)\s+(.+?)\s*:?")
+_ORIGINS = {
+    "JUIZO": "COURT",
+    "PARTE AUTORA": "CLAIMANT", "AUTOR": "CLAIMANT", "AUTORA": "CLAIMANT", "AUTORES": "CLAIMANT", "AUTORAS": "CLAIMANT",
+    "PARTE REQUERENTE": "CLAIMANT", "REQUERENTE": "CLAIMANT",
+    "PARTE RE": "DEFENDANT", "REU": "DEFENDANT", "RE": "DEFENDANT", "REUS": "DEFENDANT", "RES": "DEFENDANT",
+    "PARTE REQUERIDA": "DEFENDANT", "REQUERIDA": "DEFENDANT", "REQUERIDO": "DEFENDANT",
+}
+_HEADING = re.compile(
+    r"(?:\d+(?:\.\d+)*\.?\s+)?QUESITOS\s+"
+    r"(?:(?:FORMULADOS|APRESENTADOS)\s+PEL[OA]S?\s+|SUPLEMENTARES\s+D[OA]S?\s+|D[OA]S?\s+)(.+?)\s*:?"
+)
+_SECTION = re.compile(r"(?:\d+(?:\.\d+)*\.?\s+)?QUESITOS\b.*")
 _NUMBER = re.compile(r"^\s*(\d+(?:\.\d+)*\s*[.)º°-])\s+(.+)$")
+
+
+def _ends_section(line):
+    """Rotulo curto que abre outra parte do ato ("Determino:", "Ante o exposto:").
+
+    A origem de um quesito so vale dentro da secao "QUESITOS ..." que a declara;
+    sem isso, um despacho numerado seria proposto como quesito da ultima origem vista.
+    """
+    stripped = line.strip()
+    return stripped.endswith(":") and not _NUMBER.match(line) and len(stripped.rstrip(":").split()) <= 3
+# Limite de `$defs/text` em schemas/case-analysis-snapshot-v1.schema.json: um bloco
+# maior nao cabe na Analise do Caso, entao nao e oferecido como proposta.
+QUESTION_TEXT_MAX = 4096
 
 
 def extract_questions(document, pages):
@@ -71,6 +94,9 @@ def extract_questions(document, pages):
             excerpt = "\n".join(line for _page, line in active)
             match = _NUMBER.match(active[0][1])
             text = "\n".join([match[2], *(line for _page, line in active[1:])]).rstrip()
+            if len(excerpt) > QUESTION_TEXT_MAX or len(text) > QUESTION_TEXT_MAX:
+                active, number = [], None
+                return
             method = "NUMBERED_OCR_V1" if any("OCR" in str(page.extraction_mode) for page, _line in active) else "NUMBERED_NATIVE_TEXT_V1"
             source = QuestionSource(origin, number, active[0][0].number, active[-1][0].number, excerpt, method)
             identity = json.dumps([document.document_id, document.source_sha256, text, asdict(source)], ensure_ascii=False, sort_keys=True)
@@ -79,9 +105,11 @@ def extract_questions(document, pages):
     for page in selected:
         for line in page.text.splitlines():
             heading = _HEADING.fullmatch(folded(line))
-            if heading:
+            if heading or _SECTION.fullmatch(folded(line)) or _ends_section(line):
+                # Cabecalho de quesitos nao reconhecido ou outra secao: a origem anterior
+                # NAO se estende a ela -- sem origem explicita, nada e proposto.
                 flush()
-                origin = _ORIGINS.get(heading[1].rstrip(":"))
+                origin = _ORIGINS.get(heading[1].rstrip(":")) if heading else None
                 continue
             if not line.strip() or folded(line).startswith(("NESTES TERMOS", "TERMOS EM QUE", "PEDE DEFERIMENTO")):
                 flush()

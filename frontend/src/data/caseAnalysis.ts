@@ -1,4 +1,6 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// `$defs/text` do schema da Analise do Caso: o servidor recusa texto maior.
+export const CASE_ANALYSIS_TEXT_MAX = 4096;
 
 export type Provenance = {
   workspace_id: string;

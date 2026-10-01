@@ -150,13 +150,21 @@ class SaveCaseAnalysis:
         created_at = self.clock.now()
         if created_at.tzinfo is None or created_at.utcoffset() is None:
             raise ValueError("Case Analysis clock requires timezone")
+        # A leitura valida o schema publicado; a escrita tem de validar o MESMO
+        # schema. Sem isso, um texto acima do limite era gravado com sucesso e
+        # toda leitura seguinte falhava -- revisao append-only, analise perdida.
+        payload = case_analysis_to_mapping(snapshot)
+        try:
+            _VALIDATOR.validate(payload)
+        except ValidationError as exc:
+            raise ValueError("Case Analysis payload violates its published schema") from exc
         return self.revisions.append_if_latest(
             workspace_id=workspace_id,
             artifact_kind=CASE_ANALYSIS_ARTIFACT_KIND,
             artifact_id=CASE_ANALYSIS_ARTIFACT_ID,
             revision_id=str(self.ids.new_uuid()),
             created_at=created_at.isoformat(),
-            payload=case_analysis_to_mapping(snapshot),
+            payload=payload,
             expected_revision=expected_revision,
         )
 
