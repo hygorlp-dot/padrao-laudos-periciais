@@ -658,3 +658,21 @@ def test_node_plugin_records_exact_outcomes(tmp_path):
         "test_sample.py::test_bad": "failed", "test_sample.py::test_ok": "passed",
         "test_sample.py::test_skip": "skipped", "test_sample.py::test_teardown": "failed",
     }
+
+
+def test_hybrid_timing_attribution_runs_in_core_gate_over_the_same_measured_scope():
+    # #263 (V7-4 "2-III") sobre o desenho sharded: a atribuição BASE x HEAD vive
+    # no job que executa o verify_core e mede a BASE com a partição do próprio
+    # manifest da BASE, nunca com a do candidato.
+    gate = _job_block(_workflow(), "core-gate")
+    attribution = gate.split("- name: Timing attribution BASE vs HEAD", 1)
+    assert len(attribution) == 2
+    step = attribution[1].split("\n      - ", 1)[0]
+    assert "timing_attribution requires-base --head-log gate-report.txt" in step
+    assert "timing_attribution decide --head-log gate-report.txt" in step
+    assert "Push-Location $env:RUNNER_TEMP/core-safety-base" in step
+    base_side = step.split("Push-Location", 1)[1].split("Pop-Location\n", 1)[0]
+    assert "core_safety_shards gate-addopts" in base_side
+    assert "\n        if:" not in step
+    for job in ("architecture", "inventory", "regression-shard", "core-safety"):
+        assert "timing_attribution" not in _job_block(_workflow(), job)

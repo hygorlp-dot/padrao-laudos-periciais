@@ -18,12 +18,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 PROTECTED_TIMING_SURFACE_SHA256 = {
     # V7-4A (#259): workflow re-orchestrated into sharded jobs + closed-set
-    # aggregator; verify_core.py and the other timing-surface bytes unchanged.
-    ".github/workflows/core-safety.yml": "e00a2546a09c3c26525002cd68404fad9c7526a9cb4d11da25515c38707a4d44",
+    # aggregator; V7-4 (#256 "2-III"): hybrid BASE x HEAD attribution in core-gate.
+    ".github/workflows/core-safety.yml": "baebaea5b8d0cf4b3e7b16278596fa7ae58f71793fcda54dcdb74776e855389e",
     "scripts/quality/__init__.py": "b3824e776de859b9a48131b04cfc738c925badc4d42c0475eaf919e4e1665e5b",
     "scripts/quality/verify_core.py": "ae2e5928db5917fd4d9f4e9ad8ec9c13e65ebd4ade9f533ab0235b3440275598",
     "scripts/quality/architecture_analyzer.py": "2b7863088b9958818e94d2ed854d265378c80caa218b84e0a4903b0370c30a5e",
     "scripts/quality/capability_analyzer.py": "a082879716d75e2b35c271ab89b93b13b4e56163592cb4f522b924eace766303",
+    # V7-4: a decisao temporal vive aqui; fixada junto do workflow que a executa.
+    "scripts/quality/metrics.py": "ee747bc47a466dbbbb0a9e4236810f77a9307bfdde282183e93e8f496925c71c",
+    "scripts/quality/timing_attribution.py": "3d543bb33c6dfa04ccd98dde5d8161f0ff546c5258df76798de5760348092407",
 }
 
 
@@ -229,14 +232,16 @@ def _run_timed_pull_request_gate(monkeypatch, tmp_path, runner=_successful_gate_
     )
 
 
-def test_pull_request_timing_warning_does_not_fail_an_otherwise_green_gate(monkeypatch, tmp_path, capsys):
+def test_over_reference_timing_defers_to_mandatory_attribution_without_failing_semantics(monkeypatch, tmp_path, capsys):
+    # A decisao temporal sobre a duracao acima da referencia e do passo de
+    # atribuicao BASE x HEAD do workflow, igual em PR e em main (V7-4).
     result = _run_timed_pull_request_gate(monkeypatch, tmp_path)
 
     assert result.result == "PASS"
     assert result.exit_code == 0
     assert ("quality non-regression", True) in result.checks
     assert result.findings == ()
-    assert "TIMING_STATUS = WARNING" in capsys.readouterr().out
+    assert "TIMING_STATUS = ATTRIBUTION_REQUIRED" in capsys.readouterr().out
 
 
 def test_pull_request_timing_warning_never_masks_semantic_command_failure(monkeypatch, tmp_path):
@@ -284,6 +289,9 @@ def test_pr_timing_observability_preserves_protected_execution_surface():
 
 
 def test_pr_timing_observability_keeps_immutable_sixty_second_target():
+    # V7-4 (decisao humana "2-III" na #256) muda a consequencia de exceder a
+    # referencia (atribuicao BASE x HEAD), nao a referencia: 60 s permanece
+    # byte-identico (#259).
     baseline = json.loads((ROOT / "config/quality-baseline.json").read_text(encoding="utf-8"))
     assert baseline["full_gate_max_seconds"] == 60.0
 

@@ -25,9 +25,10 @@ permissions:
 #                     identical, shard coverage contained in the gate coverage,
 #                     combined coverage non-regression. Anything else = FAIL.
 #
-# The timing policy (60 s, STRICT/PR_ADVISORY) is untouched and still decided
-# inside verify_core; the aggregator reports SEMANTIC_STATUS and TIMING_STATUS
-# separately and never turns a red gate green.
+# Timing: the 60 s reference is untouched; above it, core-gate runs the hybrid
+# BASE x HEAD attribution (#256 "2-III", #109) over the same measured scope.
+# The aggregator reports SEMANTIC_STATUS and TIMING_STATUS separately and never
+# turns a red gate green.
 
 jobs:
   architecture:
@@ -54,7 +55,7 @@ jobs:
 
   core-gate:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -97,6 +98,38 @@ jobs:
           if (Test-Path coverage-quality-v2.data) { Copy-Item coverage-quality-v2.data evidence/gate/ }
           python -m scripts.quality.core_safety_shards gate-evidence --sha $sha --exit-code $code --report gate-report.txt --data-file evidence/gate/coverage-quality-v2.data --out evidence/gate/gate-evidence.json
           exit $code
+      - name: Timing attribution BASE vs HEAD
+        # V7-4 (decisao humana "2-III", #256): mesma politica em PR e em main.
+        # Dentro da referencia passa; acima dela a BASE e medida neste mesmo
+        # runner e so regressao material atribuivel ao candidato bloqueia.
+        # Evidencia ausente ou invalida falha fechada; a BASE so vale como
+        # referencia se for semanticamente valida (exit code incluido).
+        # Com o sharding (#259) o
+        # HEAD cronometra a particao do gate; a BASE e medida com a particao
+        # do PROPRIO manifest dela (ou integral, se a BASE nao tiver shards),
+        # para comparar o mesmo escopo de medicao.
+        env:
+          PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        shell: pwsh
+        run: |
+          python -m scripts.quality.timing_attribution requires-base --head-log gate-report.txt
+          if ($LASTEXITCODE -eq 0) { exit 0 }
+          if ($LASTEXITCODE -ne 3) { exit 1 }
+          git worktree add --detach $env:RUNNER_TEMP/core-safety-base $env:BASE_SHA
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Push-Location $env:RUNNER_TEMP/core-safety-base
+          if (Test-Path config/core-safety-shards-v1.json) {
+            $offload = python -m scripts.quality.core_safety_shards gate-addopts
+            if ($LASTEXITCODE -ne 0 -or -not $offload) { Pop-Location; exit 1 }
+            $env:PYTEST_ADDOPTS = "$env:PYTEST_ADDOPTS $offload"
+          }
+          python -m scripts.quality.verify_core "--full" *> $env:RUNNER_TEMP/core-safety-base-timing.log
+          $baseCode = $LASTEXITCODE
+          Pop-Location
+          Get-Content $env:RUNNER_TEMP/core-safety-base-timing.log -Tail 30
+          python -m scripts.quality.timing_attribution decide --head-log gate-report.txt --base-log $env:RUNNER_TEMP/core-safety-base-timing.log --base-exit-code $baseCode --base-sha $env:BASE_SHA
+          exit $LASTEXITCODE
       - name: Upload gate evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

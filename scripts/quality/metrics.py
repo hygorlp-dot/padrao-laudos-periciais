@@ -3,20 +3,24 @@ from __future__ import annotations
 
 import ast
 import math
-import os
 from pathlib import Path
 
 
 BRANCH_NODES = (ast.If, ast.For, ast.AsyncFor, ast.While, ast.IfExp, ast.Match, ast.comprehension)
-TIMING_POLICY_STRICT = "STRICT"
-TIMING_POLICY_PR_ADVISORY = "PR_ADVISORY"
-_TIMING_POLICIES = {TIMING_POLICY_STRICT, TIMING_POLICY_PR_ADVISORY}
+# Politica temporal hibrida (V7-4, decisao humana "2-III" registrada na #256).
+# A mesma evidencia tem a mesma leitura em PR e em main: dentro da referencia
+# passa; acima dela a duracao sozinha nao prova regressao do candidato (o runner
+# varia), entao o gate exige atribuicao BASE x HEAD no mesmo runner, feita por
+# `scripts.quality.timing_attribution`. Evidencia invalida falha fechada sempre.
+TIMING_POLICY_HYBRID = "HYBRID"
+TIMING_STATUS_ATTRIBUTION_REQUIRED = "ATTRIBUTION_REQUIRED"
+_TIMING_POLICIES = {TIMING_POLICY_HYBRID}
 
 
 def _timing_policy(explicit: str | None) -> str | None:
     if explicit is not None:
         return explicit if explicit in _TIMING_POLICIES else None
-    return TIMING_POLICY_PR_ADVISORY if os.environ.get("GITHUB_EVENT_NAME") == "pull_request" else TIMING_POLICY_STRICT
+    return TIMING_POLICY_HYBRID
 
 
 def _emit_timing(target: float | None, observed: float | None, status: str) -> None:
@@ -111,15 +115,9 @@ def validate_quality_baseline(
         return findings
 
     if duration > limit:
-        status = "WARNING" if policy == TIMING_POLICY_PR_ADVISORY else "FAIL"
-        _emit_timing(limit, duration, status)
-        if policy == TIMING_POLICY_STRICT:
-            findings.append({
-                "code": "FULL_GATE_DURATION_REGRESSION",
-                "severity": "P1",
-                "expected": baseline["full_gate_max_seconds"],
-                "actual": duration_seconds,
-            })
+        # Nao e aprovacao: o passo de atribuicao do workflow e obrigatorio e bloqueia
+        # regressao material do candidato (ou evidencia ausente) contra a BASE.
+        _emit_timing(limit, duration, TIMING_STATUS_ATTRIBUTION_REQUIRED)
     else:
         _emit_timing(limit, duration, "PASS")
     return findings
