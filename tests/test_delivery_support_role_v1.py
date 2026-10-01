@@ -7,6 +7,7 @@ nao incorporada, e adicionar item respondia 409 -- a analise congelava.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 
@@ -18,7 +19,7 @@ from scripts.backend_contract.application.content_roles import (
     private_content_role_payload,
     PrivateContentRole,
 )
-from scripts.backend_contract.application.models import WorkspaceId
+from scripts.backend_contract.application.models import WorkspaceId, canonical_payload_json
 from scripts.backend_contract.application.ports import RepositoryIntegrityError
 from scripts.backend_contract.application.services import ListCaseDocuments, ListPrivateContents
 from tests.test_document_intake_v1 import (
@@ -114,8 +115,16 @@ def test_delivery_supporting_role_travels_in_the_backup_bound_to_its_exact_bytes
     for item in transplanted["artifact_revisions"]:
         if item["artifact_kind"] == PRIVATE_CONTENT_ROLE_KIND:
             item["payload"]["checksum_sha256"] = source["checksum_sha256"]
-    for damaged in (missing, transplanted):
-        with pytest.raises(RepositoryIntegrityError):
+    # Papel com os bytes exatos da peca dos autos, que a Analise do Caso cita como
+    # fonte: restaurar esse pacote esconderia a fonte e congelaria a analise.
+    hidden = json.loads(backup)
+    role = next(item for item in hidden["artifact_revisions"] if item["artifact_kind"] == PRIVATE_CONTENT_ROLE_KIND)
+    role["artifact_id"] = role["payload"]["content_id"] = source["content_id"]
+    role["payload"]["checksum_sha256"] = source["checksum_sha256"]
+    role["checksum_sha256"] = hashlib.sha256(canonical_payload_json(role["payload"]).encode("utf-8")).hexdigest()
+    hidden["artifact_revisions"].sort(key=lambda item: (item["artifact_kind"], item["artifact_id"], item["revision"]))
+    for damaged, message in ((missing, "role authority"), (transplanted, "role authority"), (hidden, "contradicts case source")):
+        with pytest.raises(RepositoryIntegrityError, match=message):
             VerifyWorkspaceBackup().execute(_reseal(damaged))
 
 

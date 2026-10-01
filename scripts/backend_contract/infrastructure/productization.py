@@ -1000,6 +1000,20 @@ class VerifyWorkspaceBackup:
                             validate_delivery_artifact(content, artifact.format.value)
                     except (KeyError, TypeError, ValueError) as exc:
                         raise RepositoryIntegrityError("backup delivery artifact is invalid") from exc
+        # Um papel tira o conteudo do inventario de fontes do caso. Se o pacote cita
+        # esse mesmo conteudo como fonte (Analise do Caso, inventario PJe, extracao de
+        # metadados), as duas afirmacoes sao contraditorias e restaurar o pacote
+        # congelaria a Analise do Caso. Nenhum fluxo do produto produz esse estado.
+        role_ids = {record.artifact_id for record in revisions if record.artifact_kind == "PRIVATE_CONTENT_ROLE_V1"}
+        if role_ids:
+            source_ids = set()
+            for record in revisions:
+                if record.artifact_kind == "CASE_ANALYSIS_SNAPSHOT_V1":
+                    source_ids.update(item.storage_content_id for item in case_analysis_from_mapping(thaw_payload(record.payload)).documents)
+                elif record.artifact_kind in {"PJE_INTAKE_V1", "PROCESS_METADATA_EXTRACTION"}:
+                    source_ids.add(record.artifact_id)
+            if role_ids & source_ids:
+                raise RepositoryIntegrityError("backup private content role contradicts case source authority")
         return value
 
 

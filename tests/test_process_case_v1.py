@@ -332,6 +332,7 @@ def test_application_rejects_a_misrouted_process_case_record(tmp_path):
         ("PROCESS_METADATA_CONFIRMATION", "PROCESS_METADATA_CONFIRMATION"),
         ("PROCESS_METADATA_SOURCE_CONFIRMATION", "parte_requerente"),
         ("OCR_PAGE_CACHE_V1", "cache-key"),
+        ("PRIVATE_CONTENT_ROLE_V1", "content-id"),
     ),
 )
 def test_generic_append_cannot_bypass_reserved_typed_writers(
