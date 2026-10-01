@@ -56,12 +56,26 @@ def _refuse_new_references_to_unavailable_documents(analysis, snapshot, previous
     plano (sem predecessor) continua exigindo que nenhuma referencia seja derivada;
     numa atualizacao, so as referencias NOVAS sao julgadas.
     """
+    # O predecessor so serve de baseline se o plano continua autorizado pela MESMA analise.
+    # Revincular o plano (trocar digest/revisao da Analise do Caso) e uma nova autorizacao:
+    # tudo volta a ser julgado, como numa criacao.
+    if previous is not None and (
+        previous.plan.case_analysis_digest != snapshot.plan.case_analysis_digest
+        or previous.plan.case_analysis_revision != snapshot.plan.case_analysis_revision
+    ):
+        previous = None
+
     def referenced(planning):
-        return {item_id for item in planning.material_items for item_id in item.derivation.case_analysis_item_ids}
+        # Pares (item do plano, item da analise): um item NOVO que cita um derivado ja
+        # citado por outro item tambem e uma referencia nova.
+        return {
+            (item.item_id, item_id)
+            for item in planning.material_items for item_id in item.derivation.case_analysis_item_ids
+        }
 
     derived = {item.item_id for item in analysis.material_items if analysis.derived_from_unavailable(item)}
     introduced = referenced(snapshot) - (referenced(previous) if previous is not None else set())
-    offending = sorted(derived & introduced)
+    offending = sorted({item_id for _plan_item, item_id in introduced if item_id in derived})
     if offending:
         raise ValueError(
             "Pericial Planning cannot build on items derived from a document excluded by the professional: "

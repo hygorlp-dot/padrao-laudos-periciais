@@ -803,3 +803,156 @@ def test_planning_save_update_refuses_only_newly_introduced_references():
     service(plan).execute(workspace, plan, 1)  # nada novo: passa, mesmo com derivados ja referenciados
     with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
         service(without).execute(workspace, plan, 1)  # o item derivado entra agora: recusado
+
+
+
+def _plan_and_save_service(previous_plan, excluded):
+    """Servico de Save cujo predecessor gravado e `previous_plan` e cuja analise vigente e `excluded`."""
+    import datetime
+    import uuid
+    from contextlib import nullcontext
+
+    from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+    from scripts.backend_contract.application.pericial_planning import SavePericialPlanning
+    from scripts.backend_contract.pericial_planning import pericial_planning_to_mapping
+
+    workspace = WorkspaceId.parse(previous_plan.workspace_id)
+    record = ArtifactRevision(workspace, "PERICIAL_PLANNING_V1", "PERICIAL-PLANNING", str(uuid.uuid4()), 1,
+                              "2026-09-30T12:00:00+00:00", "0" * 64, pericial_planning_to_mapping(previous_plan))
+    return SavePericialPlanning(
+        SimpleNamespace(append_if_latest=lambda **_k: SimpleNamespace(revision=2)),
+        SimpleNamespace(execute=lambda *_a: record),
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3, artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+                                                             artifact_id="CASE-ANALYSIS", checksum_sha256="c" * 64), excluded)),
+        nullcontext, SimpleNamespace(now=lambda: datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.UTC)),
+        SimpleNamespace(new_uuid=uuid.uuid4),
+    ), workspace
+
+
+def _proposal_over(case):
+    import uuid
+
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.application.pericial_planning import StartPericialPlanning
+
+    captured = []
+    StartPericialPlanning(
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3), case)),
+        SimpleNamespace(execute=lambda _w, snapshot, *_a, **_k: captured.append(snapshot) or SimpleNamespace(revision=1)),
+        SimpleNamespace(new_uuid=uuid.uuid4),
+    ).execute(WorkspaceId.parse(case.workspace_id), title="Plano sintetico")
+    return captured[0]
+
+
+def test_rebinding_a_plan_to_an_analysis_with_an_excluded_source_is_judged_like_a_creation():
+    """Revisao da #251, rodada 5 (SA251R5-01): um PUT trocava so o vinculo do plano (digest da
+    Analise do Caso) para a analise COM a peca excluida e passava -- a tolerancia a "so
+    referencias novas" olhava os IDs e ignorava sob qual analise eles foram autorizados.
+    Depois disso o plano aprovava item derivado da peca excluida.
+
+    O predecessor so vale como baseline se o vinculo de autoridade e o mesmo; revincular
+    e uma nova autorizacao e tudo volta a ser julgado. Unidade direta: pela API o 400 e
+    generico, e aqui o `match` prova que a recusa vem desta guarda.
+    """
+    from dataclasses import replace
+
+    from scripts.backend_contract.pericial_planning import case_analysis_digest
+
+    case, _snapshot, _inspection = _fixture_case_and_findings()
+    legitimate = _proposal_over(case)  # criado com a peca disponivel
+    excluded = case.project_effective_availability({"DOC-001": False})
+    rebound = replace(legitimate, plan=replace(legitimate.plan, case_analysis_digest=case_analysis_digest(excluded)))
+    service, workspace = _plan_and_save_service(legitimate, excluded)
+    with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
+        service.execute(workspace, rebound, 1)
+
+
+def test_a_new_plan_item_citing_an_already_referenced_derived_item_is_refused():
+    """Revisao da #251, rodada 5 (SA251R5-02): "novo" era calculado sobre o conjunto de IDs,
+    entao num plano legado dava para acrescentar itens apoiados num derivado ja citado.
+    Agora a referencia e o par (item do plano, item da analise)."""
+    import uuid
+    from dataclasses import replace
+
+    from scripts.backend_contract.pericial_planning import case_analysis_digest
+
+    case, _snapshot, _inspection = _fixture_case_and_findings()
+    excluded = case.project_effective_availability({"DOC-001": False})
+    proposal = _proposal_over(case)
+    legacy = replace(proposal, plan=replace(proposal.plan, case_analysis_digest=case_analysis_digest(excluded)))
+    derived = {item.item_id for item in excluded.material_items if excluded.derived_from_unavailable(item)}
+    source = next(item for item in legacy.issues if set(item.derivation.case_analysis_item_ids) & derived)
+    extra = replace(source, item_id=f"PLAN-ISSUE-{uuid.uuid4().hex.upper()}", title="Tema novo sobre item derivado")
+    coverage = legacy.coverage
+    grown = replace(legacy, issues=(*legacy.issues, extra), coverage=replace(
+        coverage, material_items_total=coverage.material_items_total + 1, pending_items=coverage.pending_items + 1,
+    ))
+    service, workspace = _plan_and_save_service(legacy, excluded)
+    service.execute(workspace, legacy, 1)  # controle: o legado sem item novo segue gravavel
+    with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
+        service.execute(workspace, grown, 1)
+
+
+@pytest.mark.parametrize("kind,source_id", [
+    ("CASE_CLAIM", "CLAIM-001"),
+    ("CASE_QUESTION", "QUESTION-001"),
+    ("DOCUMENTED_ALLEGATION", "OCC-CLAIM-001"),
+])
+def test_findings_links_recorded_before_an_exclusion_stay_valid_and_new_ones_are_refused(kind, source_id):
+    """Revisao da #251, rodada 5 (SA251R5-01, auditor): o filtro de disponibilidade julgava
+    o snapshot tecnico INTEIRO. Como vinculos sao append-only, uma Constatacao gravada
+    antes da exclusao (ou na era main) ficava congelada: toda mutacao, mesmo sem relacao,
+    era recusada. Agora o vinculo ja gravado no predecessor so tem a identidade conferida;
+    o que entra novo continua julgado pela disponibilidade."""
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.technical_findings import _validate_upstream_links
+
+    case, snapshot, inspection = _fixture_case_and_findings()
+    excluded = case.project_effective_availability({"DOC-001": False})
+    links = _neutral_links(snapshot)
+    link = replace(links[0], source_kind=kind, source_id=source_id, source_revision=snapshot.source_snapshot.case_analysis_revision)
+    recorded = replace(snapshot, source_links=(link, *links[1:]))
+    assert any(item.question_id == "QUESTION-001" for item in recorded.question_links)
+    _validate_upstream_links(recorded, excluded, inspection, recorded)  # legado: tudo ja gravado
+    with pytest.raises(ValueError, match="absent from bound upstream"):  # vinculo de fonte novo
+        _validate_upstream_links(recorded, excluded, inspection, replace(recorded, source_links=links))
+    with pytest.raises(ValueError, match="question identity"):  # vinculo de quesito novo
+        _validate_upstream_links(recorded, excluded, inspection, replace(recorded, question_links=()))
+    with pytest.raises(ValueError, match="absent from bound upstream"):  # identidade segue conferida
+        ghost = replace(link, source_id="ITEM-INEXISTENTE")
+        _validate_upstream_links(replace(recorded, source_links=(ghost, *links[1:])), excluded, inspection,
+                                 replace(recorded, source_links=(ghost, *links[1:])))
+
+
+def test_a_legacy_technical_snapshot_stays_mutable_after_its_source_is_excluded(monkeypatch):
+    """Ponta a ponta pelo Save, no estado legado do auditor: Analise do Caso ja com a peca
+    excluida e Constatacao gravada na era main com evidencia CASE_QUESTION sobre o quesito
+    derivado (o harness grava sem passar pelo Save, como a main aceitava). Uma evidencia
+    nova SEM relacao precisa passar; uma nova sobre o quesito derivado segue recusada."""
+    import tests.test_technical_findings_foundation_v1 as tf
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.application.technical_findings import AddEvidenceProposal
+
+    real = tf.upstreams
+    excluded = real()[1].project_effective_availability({"DOC-001": False})
+    monkeypatch.setattr(tf, "upstreams", lambda: (real()[0], excluded, real()[2], real()[3]))
+    ids = tf.SequentialIds()
+
+    def add(harness, kind, source_id, revision):
+        AddEvidenceProposal(harness.get(), harness.save(), ids).execute(
+            WorkspaceId.parse(harness.snapshot.workspace_id), source_kind=kind, source_id=source_id,
+            proposition=f"Proposicao {kind}.", why_relevant="Relevancia.", expected_revision=revision,
+        )
+
+    harness = tf.CommandHarness(tf.empty_bound_snapshot())
+    add(harness, "CASE_QUESTION", "QUESTION-001", 1)  # registro legado
+    predecessor = harness.snapshot
+    workspace = WorkspaceId.parse(predecessor.workspace_id)
+    unrelated = tf.CommandHarness(predecessor)
+    add(unrelated, "MEASUREMENT", "MEASUREMENT-001", 1)
+    tf.save_service(predecessor).execute(workspace, unrelated.snapshot, 3, mutation_authority="PROPOSAL")
+    derived = tf.CommandHarness(predecessor)
+    add(derived, "CASE_QUESTION", "QUESTION-001", 1)
+    with pytest.raises(ValueError, match="absent from bound upstream"):
+        tf.save_service(predecessor).execute(workspace, derived.snapshot, 3, mutation_authority="PROPOSAL")

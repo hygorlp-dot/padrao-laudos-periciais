@@ -105,7 +105,7 @@ def _reconcile(snapshot: TechnicalSnapshot, *, current: TechnicalSourceSnapshot)
     return replace(snapshot, coverage=coverage, upstream_stale=bool(reasons), upstream_stale_reasons=tuple(reasons))
 
 
-def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnapshot, inspection: InspectionSession) -> None:
+def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnapshot, inspection: InspectionSession, predecessor: TechnicalSnapshot | None = None) -> None:
     case_kinds = {"CASE_DOCUMENT", "DOCUMENTED_ALLEGATION", "CASE_CLAIM", "CASE_COUNTERARGUMENT", "CASE_DECISION", "CASE_QUESTION"}
     authority_by_kind = {
         # Um documento que o perito marcou indisponivel continua inventariado,
@@ -130,8 +130,23 @@ def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnap
         "ACCESS_OCCURRENCE": {item.occurrence_id for item in inspection.access_occurrences},
         "FIELD_LIMITATION": {item.limitation_id for item in inspection.limitations},
     }
+    # Vinculos ja gravados no predecessor (iguais por inteiro: a lista e append-only e o
+    # vinculo upstream e imutavel) so tem a IDENTIDADE conferida. O filtro de disponibilidade
+    # vale para o que entra AGORA: julgar o snapshot inteiro congelava Constatacoes legadas
+    # cuja evidencia ja citava um item depois tornado indisponivel -- toda mutacao, mesmo sem
+    # relacao com o item, era recusada, e a main seguia mutavel.
+    recorded_authority = {
+        **authority_by_kind,
+        "CASE_DOCUMENT": {item.document_id for item in case.documents},
+        "DOCUMENTED_ALLEGATION": {source.occurrence_id for item in case.claims for source in item.provenance},
+        "CASE_CLAIM": {item.item_id for item in case.claims},
+        "CASE_COUNTERARGUMENT": {item.item_id for item in case.counterarguments},
+        "CASE_DECISION": {item.item_id for item in case.decisions},
+        "CASE_QUESTION": {item.item_id for item in case.questions},
+    }
+    recorded_links = set(predecessor.source_links) if predecessor is not None else set()
     for link in snapshot.source_links:
-        authority = authority_by_kind.get(link.source_kind, set())
+        authority = (recorded_authority if link in recorded_links else authority_by_kind).get(link.source_kind, set())
         if link.source_id not in authority:
             raise ValueError("Technical Snapshot source identity is absent from bound upstream")
         expected_revision = (
@@ -142,7 +157,12 @@ def _validate_upstream_links(snapshot: TechnicalSnapshot, case: CaseAnalysisSnap
         if link.source_revision != expected_revision:
             raise ValueError("Technical Snapshot source revision differs from bound upstream")
     question_ids = {item.item_id for item in case.questions if not case.derived_from_unavailable(item)}
-    if any(link.question_id not in question_ids for link in snapshot.question_links):
+    recorded_question_links = set(predecessor.question_links) if predecessor is not None else set()
+    all_question_ids = {item.item_id for item in case.questions}
+    if any(
+        link.question_id not in (all_question_ids if link in recorded_question_links else question_ids)
+        for link in snapshot.question_links
+    ):
         raise ValueError("Technical Snapshot question identity is absent from Case Analysis")
 
 
@@ -176,6 +196,7 @@ class SaveTechnicalSnapshot:
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Technical Snapshot authority guard is unavailable")
         with self.authority_guard():
+            predecessor = None
             if expected_revision is not None:
                 predecessor_record = self.get_latest_revision.execute(
                     workspace_id, TECHNICAL_SNAPSHOT_ARTIFACT_KIND, TECHNICAL_SNAPSHOT_ARTIFACT_ID
@@ -235,7 +256,7 @@ class SaveTechnicalSnapshot:
             )
             if _reconcile(snapshot, current=current).upstream_stale:
                 raise ValueError("Technical Snapshot upstream authority is stale")
-            _validate_upstream_links(snapshot, case, inspection)
+            _validate_upstream_links(snapshot, case, inspection, predecessor)
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("Technical Snapshot clock requires timezone")
