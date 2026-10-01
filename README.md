@@ -1,7 +1,8 @@
 # Padrão de laudos periciais
 
-Repositório privado para padronização, redação, revisão e controle de
-qualidade de laudos periciais judiciais.
+Repositório para padronização, redação, revisão e controle de qualidade de
+laudos periciais judiciais. A visibilidade no GitHub é uma decisão humana
+pendente; dados reais nunca são versionados, qualquer que seja ela.
 
 ## Escopo
 
@@ -36,7 +37,14 @@ Stage 10 possui gateway e propostas de IA com provider e contexto explícitos,
 saída estruturada, revalidação da aplicação, auditoria append-only e limites
 de tokens/custo. `AI_PROPOSAL` nunca se torna autoridade efetiva sozinho.
 
-Human RC e execução de caso real continuam pendentes.
+O Roadmap V7 (#256) fechou as etapas automáticas pré-RC: sucessão explícita de
+planejamento, vistoria (reaproveitamento só por escolha do perito), análise
+técnica e análise de vícios; anexo de apoio à entrega fora das fontes do caso;
+política temporal híbrida; e o oráculo final sobre o processo real do produto
+(`tests/test_v7_final_rc_oracle_v1.py`). `HUMAN_RC_READY = TRUE`.
+
+A aceitação humana no Windows (`HUMAN_RC_WINDOWS_V2`, #238), a execução de caso
+real e o instalador continuam pendentes.
 
 ## Histórico de escopo inicial
 
