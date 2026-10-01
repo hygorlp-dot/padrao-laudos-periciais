@@ -151,7 +151,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [SHARDS_PLACEHOLDER]
+        shard: [recovery-transaction, word-trust-rebind, product-oracle, capability-routing]
     runs-on: windows-latest
     timeout-minutes: 25
     steps:

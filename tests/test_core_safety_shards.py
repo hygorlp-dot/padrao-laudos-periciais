@@ -497,3 +497,56 @@ def test_every_core_safety_job_binds_evidence_to_the_exact_checkout_sha():
         assert "git rev-parse HEAD" in block and "GITHUB_SHA" in block, job
         assert "upload-artifact@" in block, job
     assert "download-artifact@" in _job_block(workflow, "core-safety")
+
+
+# ------------------------------------------------------------------ plan / node plugin
+
+def test_plan_is_extracted_from_the_judge_and_matches_its_real_commands():
+    captured = []
+
+    def runner(command, **_):
+        captured.append(tuple(command))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    from scripts.quality.verify_core import run_gate
+    run_gate("full", ROOT, runner=runner, tracked_files=[])
+    plan = gate_plan("full", ROOT)
+    assert sorted(item.argv for item in plan) == sorted(captured)
+    assert [item.name for item in plan] == [
+        name for name in shards.EXPECTED_GATE_CHECKS
+        if name not in {"invariants", "fixtures", "privacy", "quality non-regression"}
+    ]
+
+
+def test_sharding_tooling_never_acquires_process_capability():
+    # Ferramentas não-dispositivas: nenhuma executa processo (a execução é do
+    # workflow e do verify_core protegido).
+    for name in ("core_safety_plan", "core_safety_shards", "core_safety_nodes"):
+        source = (ROOT / f"scripts/quality/{name}.py").read_text(encoding="utf-8")
+        assert not re.search(r"^\s*(import|from)\s+(subprocess|multiprocessing|os\.system)", source, re.MULTILINE), name
+
+
+def test_node_plugin_records_exact_outcomes(tmp_path):
+    (tmp_path / "test_sample.py").write_text(
+        "import pytest\n"
+        "def test_ok():\n    pass\n"
+        "def test_bad():\n    assert False\n"
+        "@pytest.mark.skip(reason='x')\ndef test_skip():\n    pass\n"
+        "@pytest.fixture\ndef broken():\n    yield\n    raise RuntimeError('teardown')\n"
+        "def test_teardown(broken):\n    pass\n",
+        encoding="utf-8",
+    )
+    report = tmp_path / "nodes.json"
+    completed = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", shards.NODES_PLUGIN,
+         f"--core-safety-nodes={report}", "test_sample.py"],
+        cwd=tmp_path, capture_output=True, text=True,
+        env={**__import__("os").environ, "PYTHONPATH": str(ROOT)},
+    )
+    assert completed.returncode == 1
+    payload = json.loads(report.read_text(encoding="utf-8"))
+    assert payload["exitstatus"] == 1 and payload["collect_only"] is False
+    assert payload["outcomes"] == {
+        "test_sample.py::test_bad": "failed", "test_sample.py::test_ok": "passed",
+        "test_sample.py::test_skip": "skipped", "test_sample.py::test_teardown": "failed",
+    }
