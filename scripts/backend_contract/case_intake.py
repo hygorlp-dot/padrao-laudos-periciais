@@ -61,16 +61,23 @@ _ORIGINS = {
     "PARTE RE": "DEFENDANT", "REU": "DEFENDANT", "RE": "DEFENDANT", "REUS": "DEFENDANT", "RES": "DEFENDANT",
     "PARTE REQUERIDA": "DEFENDANT", "REQUERIDA": "DEFENDANT", "REQUERIDO": "DEFENDANT",
 }
+# Linhas ESTRUTURAIS (cabecalho, dispositivo, espaco de resposta) comecam com maiuscula
+# ou enumerador. A linha de continuacao que o PDF quebrou comeca com minuscula ("quesitos
+# do juizo", "aos quesitos da re:", "ante o exposto na contestacao") e nunca muda a secao.
+_STRUCTURAL_START = re.compile(r"\s*(?:[A-ZÀ-Ý0-9]|(?:[ivxlcdm]+|[a-z])\s*[.)\-–—]\s)")
 # Cabecalho de quesitos: enumerador opcional ("II -", "III.", "b)", "1.") e, so quando a
 # linha termina em ":", ate tres palavras de introducao ("Seguem os quesitos da re:").
-# Sem o ":" final, uma linha de continuacao que mencione "quesitos" nao vira cabecalho.
 _ENUMERATOR = r"(?:(?:[IVXLCDM]+|\d+(?:\.\d+)*|[A-Z])\s*[.)\-–—]\s*)?"
 _DESIGNATION = r"QUESITOS\s+(?:(?:FORMULADOS|APRESENTADOS)\s+PEL[OA]S?\s+|SUPLEMENTARES\s+D[OA]S?\s+|D[OA]S?\s+)(.+?)"
 _HEADING = re.compile(
     rf"{_ENUMERATOR}{_DESIGNATION}\s*:?"
     rf"|{_ENUMERATOR}(?:[A-Z]+\s+){{1,3}}{_DESIGNATION}\s*:"
 )
-_SECTION = re.compile(rf"{_ENUMERATOR}QUESITOS\b.*|{_ENUMERATOR}(?:[A-Z]+\s+){{1,3}}QUESITOS\b.*:")
+# Linha estrutural, nao numerada, que fala de quesitos sem ser cabecalho reconhecido
+# ("A re, por sua vez, apresenta os seguintes quesitos"): a origem e zerada. Falha
+# fechada -- os quesitos seguintes deixam de ser propostos (a UI avisa que a lista pode
+# estar incompleta), em vez de herdarem a origem da secao anterior.
+_MENTIONS_QUESTIONS = re.compile(r".*\bQUESITOS\b.*")
 _NUMBER = re.compile(r"^\s*(\d+(?:\.\d+)*\s*[.)º°-])\s+(.+)$")
 
 
@@ -80,12 +87,19 @@ _NUMBER = re.compile(r"^\s*(\d+(?:\.\d+)*\s*[.)º°-])\s+(.+)$")
 # genericos ("o seguinte:", "Dos vicios construtivos:") NAO encerram -- sao parte
 # do quesito ou da propria secao.
 _DISPOSITIVE = re.compile(
-    r"(?:ANTE O EXPOSTO|DIANTE DO EXPOSTO|PELO EXPOSTO|ISTO POSTO|ISSO POSTO|POSTO ISSO"
-    r"|DETERMINO|DECIDO|INTIMEM-SE|CUMPRA-SE|PUBLIQUE-SE)\b.*"
+    r"(?:ANTE O EXPOSTO|DIANTE DO EXPOSTO|PELO EXPOSTO|POR TODO O EXPOSTO|ISTO POSTO|ISSO POSTO|POSTO ISSO"
+    r"|DETERMINO|DECIDO|DEFIRO|INDEFIRO|INTIMEM-SE|INTIME-SE|CUMPRA-SE|PUBLIQUE-SE|PROVIDENCIAS|DISPOSITIVO)\b.*"
     r"|.*\b(?:DETERMINO|DECIDO)\s*:?\s*"
 )
-# Fecham o quesito em curso sem encerrar a secao: espaco de resposta e rodape PJe.
-_QUESTION_BREAKS = ("NESTES TERMOS", "TERMOS EM QUE", "PEDE DEFERIMENTO", "RESPOSTA", "NUMERO DO DOCUMENTO", "ASSINADO ELETRONICAMENTE")
+# Fecham o quesito em curso sem encerrar a secao: fecho da peca e espaco de resposta.
+_QUESTION_BREAKS = ("NESTES TERMOS", "TERMOS EM QUE", "PEDE DEFERIMENTO", "RESPOSTA")
+# Rodape/cabecalho de pagina do PJe: nao e texto do quesito NEM o encerra -- um quesito
+# que atravessa a quebra de pagina continua na pagina seguinte. Inclui a linha so de
+# digitos do numero do documento e o "Num. N - Pag. N".
+_PJE_PAGE_MARK = re.compile(
+    r"(?:ASSINADO ELETRONICAMENTE|NUMERO DO DOCUMENTO|HTTPS?://\S*PJE)\b.*"
+    r"|NUM\.\s*\d+\s*-\s*PAG\.?\s*\d+.*|\d{10,}"
+)
 # Limite de `$defs/text` em schemas/case-analysis-snapshot-v1.schema.json: um bloco
 # maior nao cabe na Analise do Caso, entao nao e oferecido como proposta.
 QUESTION_TEXT_MAX = 4096
@@ -113,15 +127,25 @@ def extract_questions(document, pages):
         active, number = [], None
     for page in selected:
         for line in page.text.splitlines():
-            heading = _HEADING.fullmatch(folded(line))
-            if heading or _SECTION.fullmatch(folded(line)) or _DISPOSITIVE.fullmatch(folded(line)):
+            text_line = folded(line)
+            if _PJE_PAGE_MARK.fullmatch(text_line):
+                continue
+            structural = _STRUCTURAL_START.match(line) is not None
+            # O dispositivo prevalece sobre o cabecalho: "Indefiro os seguintes quesitos
+            # da re:" encerra a secao, nao abre uma secao da re.
+            dispositive = structural and _DISPOSITIVE.fullmatch(text_line)
+            heading = _HEADING.fullmatch(text_line) if structural and not dispositive else None
+            unrecognized = structural and not _NUMBER.match(line) and _MENTIONS_QUESTIONS.fullmatch(text_line)
+            if heading or dispositive or unrecognized:
                 # Cabecalho de quesitos nao reconhecido ou parte dispositiva: a origem
                 # anterior NAO se estende a ela -- sem origem explicita, nada e proposto.
                 flush()
                 designation = next((group for group in heading.groups() if group), "") if heading else ""
-                origin = _ORIGINS.get(designation.rstrip(":").strip())
+                # "Quesitos da re (fls. 120):" -- o complemento entre parenteses nao e parte
+                # da designacao da parte.
+                origin = _ORIGINS.get(re.sub(r"\s*\(.*\)\s*$", "", designation.rstrip(":").strip()))
                 continue
-            if not line.strip() or folded(line).startswith(_QUESTION_BREAKS):
+            if not line.strip() or (structural and text_line.startswith(_QUESTION_BREAKS)):
                 flush()
                 continue
             match = _NUMBER.match(line)

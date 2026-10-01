@@ -389,3 +389,73 @@ def test_a_continuation_line_that_mentions_questions_is_not_a_heading():
     page = PdfTextPage(1, "QUESITOS DA PARTE AUTORA\n1. Queira o perito responder, com base\nnos quesitos do juizo\n2. Ha umidade?")
     assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == [
         ("CLAIMANT", "Queira o perito responder, com base\nnos quesitos do juizo"), ("CLAIMANT", "Ha umidade?")]
+
+
+_PJE_FOOTER = ("Assinado eletronicamente por: PESSOA SINTETICA - 01/10/2026\n"
+               "https://pje.tjxx.jus.br/pje/Processo/ConsultaDocumento/listView.seam\n"
+               "Número do documento: 21051315224400000000000")
+
+
+@pytest.mark.parametrize("pages", [
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. Queira o Sr. Perito informar se as infiltrações verificadas na parede\n" + _PJE_FOOTER,
+                  "Num. 12345 - Pág. 2\nda cozinha decorrem de falha de impermeabilização ou de uso inadequado?\n2. Qual o custo de reparo?"),
+                 id="rodape_no_fim_da_pagina"),
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. Queira o Sr. Perito informar se as infiltrações verificadas na parede",
+                  _PJE_FOOTER + "\nda cozinha decorrem de falha de impermeabilização ou de uso inadequado?\n2. Qual o custo de reparo?"),
+                 id="rodape_no_topo_da_pagina_seguinte"),
+])
+def test_a_question_that_crosses_a_pje_page_footer_is_kept_whole(pages):
+    """Revisao da PR #255 (P1, revisor, rodada 3): o rodape PJe fechava o quesito em curso;
+    a continuacao na pagina seguinte era descartada e o texto truncado (e o trecho, que o
+    perito usaria para conferir) era aceito com 200. O rodape nao e texto do quesito nem o
+    encerra."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    proposals = extract_questions(doc, tuple(PdfTextPage(number, text) for number, text in enumerate(pages, 1)))
+    assert [(p.text, p.source.page_start, p.source.page_end) for p in proposals] == [
+        ("Queira o Sr. Perito informar se as infiltrações verificadas na parede\n"
+         "da cozinha decorrem de falha de impermeabilização ou de uso inadequado?", 1, 2),
+        ("Qual o custo de reparo?", 2, 2),
+    ]
+    assert "Assinado" not in proposals[0].source.excerpt and "21051315224400000000000" not in proposals[0].text
+
+
+@pytest.mark.parametrize("continuation", [
+    "quesitos do juizo", "aos quesitos da re:", "quesitos anteriores?", "respostas anteriores estao corretas?",
+    "ante o exposto na contestacao?", "nao decido",
+])
+def test_a_wrapped_continuation_line_never_changes_the_section(continuation):
+    """Revisao da PR #255 (P1, auditor, rodada 3): a linha que o PDF quebrou ("...aos\n
+    quesitos do juizo") virava cabecalho e os quesitos seguintes eram rotulados com outra
+    origem. Linha estrutural comeca com maiuscula ou enumerador; continuacao, nao."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, f"QUESITOS DA PARTE AUTORA\n1. O perito confirma as respostas dadas\n{continuation}\n2. Ha umidade?")
+    proposals = extract_questions(doc, (page,))
+    assert [(p.source.origin, p.source.original_number) for p in proposals] == [("CLAIMANT", "1."), ("CLAIMANT", "2.")]
+    assert proposals[0].text == f"O perito confirma as respostas dadas\n{continuation}"
+
+
+@pytest.mark.parametrize("boundary,expected", [
+    ("A re, por sua vez, apresenta os seguintes quesitos", None),
+    ("A parte re apresentou os seguintes quesitos:", None),
+    ("Seguem os quesitos da re", None),  # introducao sem ":" nao e cabecalho: falha fechada
+    ("Quesitos da re (fls. 120):", "DEFENDANT"),
+    ("Intime-se o perito:", None),
+    ("Providências:", None),
+    ("Por todo o exposto, fixo:", None),
+    ("DISPOSITIVO", None),
+    ("Indefiro os seguintes quesitos da re:", None),
+])
+def test_prose_and_dispositive_boundaries_never_inherit_the_previous_origin(boundary, expected):
+    """Introducao em prosa nao reconhecida zera a origem: os quesitos seguintes deixam de
+    ser propostos (a UI avisa que a lista pode estar incompleta) em vez de herdarem a
+    origem anterior. O dispositivo prevalece sobre um aparente cabecalho ("Indefiro...")."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, f"QUESITOS DA PARTE AUTORA\n1. Ha umidade?\n{boundary}\n1. Houve manutencao?")
+    expected_rows = [("CLAIMANT", "Ha umidade?")] + ([(expected, "Houve manutencao?")] if expected else [])
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == expected_rows
