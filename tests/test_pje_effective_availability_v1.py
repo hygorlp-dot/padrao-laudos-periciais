@@ -956,3 +956,148 @@ def test_a_legacy_technical_snapshot_stays_mutable_after_its_source_is_excluded(
     add(derived, "CASE_QUESTION", "QUESTION-001", 1)
     with pytest.raises(ValueError, match="absent from bound upstream"):
         tf.save_service(predecessor).execute(workspace, derived.snapshot, 3, mutation_authority="PROPOSAL")
+
+
+def _legacy_report_world():
+    """Estado legado do auditor (SA251R6-01): Constatacao gravada na era main com vinculo
+    QUESTION-001 -> FINDING-001, e QUESTION-001 derivado de peca indisponivel desde o
+    bootstrap (DOC-003). Laudo ligado a esse caso; REQUESTS isolado em DOC-001."""
+    from dataclasses import replace
+    from pathlib import Path
+
+    import tests.test_report_foundation_v1 as rf
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+
+    root = Path(__file__).resolve().parents[1]
+    data = json.loads((root / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
+    for index, source in enumerate(data["questions"][0]["provenance"]):
+        source.update(occurrence_id=f"OCC-LEGACY-Q-{index}", source_document_id="DOC-003", source_document_sha256="c" * 64)
+    case = case_analysis_from_mapping(data)
+    assert case.derived_from_unavailable(case.questions[0])
+    records, _case, inspection, technical, profile = rf.upstreams()
+    approved = rf.bound_report()
+    approved = replace(
+        approved,
+        source_snapshot=replace(approved.source_snapshot, case_analysis_digest=app.report_upstream_digest(case)),
+        context_matrix=tuple(replace(item, source_id="DOC-001") if item.field == "REQUESTS" else item for item in approved.context_matrix),
+    )
+    return records, case, inspection, technical, profile, approved
+
+
+def _report_save_service(records, case, inspection, technical, profile, predecessor):
+    import datetime
+    import uuid
+    from contextlib import nullcontext
+
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+    from scripts.backend_contract.report_foundation import report_snapshot_to_mapping
+
+    def ns(value):
+        return SimpleNamespace(execute=lambda *_a, **_k: value)
+
+    workspace = WorkspaceId.parse(technical.workspace_id)
+    record = ArtifactRevision(workspace, "REPORT_SNAPSHOT_V1", "REPORT-SNAPSHOT", str(uuid.uuid4()), 4,
+                              "2026-09-30T12:00:00+00:00", "e" * 64, report_snapshot_to_mapping(predecessor))
+    return app.SaveReportSnapshot(
+        SimpleNamespace(append_if_latest=lambda **_k: SimpleNamespace(revision=5)),
+        ns((records[0], case)), ns((records[1], inspection)), ns((records[2], technical)), ns((records[3], profile)),
+        SimpleNamespace(execute=lambda *_a: record), nullcontext,
+        SimpleNamespace(now=lambda: datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.UTC)),
+        SimpleNamespace(new_uuid=uuid.uuid4),
+    ), workspace
+
+
+def test_report_never_answers_a_question_derived_from_an_excluded_document():
+    """Revisao da #251, rodada 6 (SA251R6-01, auditor): a UI do laudo escondia o quesito
+    derivado de peca excluida, mas o backend o EXIGIA para aprovar e ACEITAVA responde-lo.
+    Regra unica nos dois lados: o quesito excluido nao e exigido nem recebe resposta nova.
+    A resposta ja gravada sob o mesmo vinculo (laudo legado aprovado) segue regravavel."""
+    import uuid
+    from dataclasses import replace
+
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.report_foundation import ReportState
+
+    records, case, inspection, technical, profile, approved = _legacy_report_world()
+    draft = replace(approved, state=ReportState.DRAFT, review_decisions=(), answers=(), coverage=app._draft_coverage(approved, answers=()))
+    ns = lambda value: SimpleNamespace(execute=lambda *_a, **_k: value)  # noqa: E731
+    sources = app.ListReportSources(ns((records[0], case)), ns((records[1], inspection)), ns((records[2], technical))).execute(SimpleNamespace())
+    assert sources["questions"] == []  # a UI nao oferece
+
+    service, workspace = _report_save_service(records, case, inspection, technical, profile, draft)
+    amend = app.AmendReportDraft(ns((SimpleNamespace(revision=4), draft)), service, SimpleNamespace(new_uuid=uuid.uuid4),
+                                 get_case_analysis=ns((records[0], case)), get_technical_snapshot=ns((records[2], technical)))
+    with pytest.raises(ValueError, match="Report answer cannot cite a question derived"):  # o proprio comando, nao o Save
+        amend.execute(workspace, expected_revision=4, action="ANSWER_QUESTION",
+                      values={"question_id": "QUESTION-001", "finding_id": "FINDING-001", "text": "Resposta."})
+    answered = replace(draft, answers=approved.answers, coverage=app._draft_coverage(draft, answers=approved.answers))
+    with pytest.raises(ValueError, match="cannot answer a question derived"):  # resposta nova pelo Save
+        service.execute(workspace, answered, 4)
+    legacy, _workspace = _report_save_service(records, case, inspection, technical, profile, approved)
+    legacy.execute(workspace, approved, 4)  # laudo legado aprovado: mesma resposta, mesmo vinculo
+    rebound = replace(approved.source_snapshot, case_analysis_revision=approved.source_snapshot.case_analysis_revision + 1)
+    with pytest.raises(ValueError, match="cannot answer a question derived"):  # revinculo julga tudo
+        app._refuse_new_answers_to_excluded_questions(replace(approved, source_snapshot=rebound), case, approved)
+
+
+def test_report_approval_requires_only_the_questions_the_ui_offers():
+    """Com um quesito vigente e um excluido, aprovar respondendo so o vigente passa --
+    exatamente o que a UI conta como 'quesitos respondidos'."""
+    from dataclasses import replace
+
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping, case_analysis_to_mapping
+
+    records, case, inspection, technical, profile, approved = _legacy_report_world()
+    data = case_analysis_to_mapping(case)
+    effective = json.loads(json.dumps(data["questions"][0]))
+    effective["item_id"] = "QUESTION-002"
+    for index, source in enumerate(effective["provenance"]):
+        source.update(occurrence_id=f"OCC-EFFECTIVE-Q-{index}", source_document_id="DOC-001", source_document_sha256="a" * 64)
+    data["questions"].append(effective)
+    mixed = case_analysis_from_mapping(data)
+    link = technical.question_links[0]
+    technical = replace(technical, question_links=(*technical.question_links, replace(link, link_id=f"{link.link_id}-2", question_id="QUESTION-002")))
+    answer = approved.answers[0]
+    only_effective = replace(approved, answers=(replace(answer, answer_id=f"{answer.answer_id}-2", question_id="QUESTION-002"),))
+    app._validate_claim_provenance(only_effective, mixed, inspection, technical, None)
+    with pytest.raises(ValueError, match="must answer every bound technical question"):  # controle: o vigente segue exigido
+        app._validate_claim_provenance(approved, mixed, inspection, technical, None)
+
+
+def test_a_new_report_version_drops_the_answer_to_an_excluded_question_and_still_opens():
+    """A nova versao revincula o laudo (nova autorizacao): a resposta legada ao quesito
+    excluido e descartada e reportada, como uma afirmacao sem fonte -- sem isso o Save
+    recusava o rascunho inteiro e o laudo legado ficava sem proxima versao."""
+    import datetime
+    import uuid
+    from contextlib import nullcontext
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.models import _freeze_payload
+    from scripts.backend_contract.application.report_foundation import SaveReportSnapshot, StartReportVersion
+    from scripts.backend_contract.report_foundation import ReportReviewDecision, ReportState, ReviewAction, report_snapshot_to_mapping
+
+    records, case, inspection, technical, profile, approved = _legacy_report_world()
+    decision = ReportReviewDecision("REPORT-REVIEW-003", ReviewAction.SUPERSEDE, approved.expert_profile.profile_id,
+                                    "Correcao pedida pelo juizo.", "2026-08-31T12:00:00+00:00", "REPORT-REVIEW-002")
+    stored = replace(approved, review_decisions=(*approved.review_decisions, decision), state=ReportState.SUPERSEDED,
+                     coverage=replace(approved.coverage, complete=False, reasons=("Superseded.",)))
+    latest = SimpleNamespace(execute=lambda *_a: SimpleNamespace(revision=4, payload=_freeze_payload(report_snapshot_to_mapping(stored))))
+    readers = tuple(SimpleNamespace(execute=lambda _w, value=value: value) for value in (
+        (records[0], case), (records[1], inspection), (records[2], technical), (records[3], profile)))
+    ids = SimpleNamespace(new_uuid=uuid.uuid4)
+    save = SaveReportSnapshot(
+        SimpleNamespace(append_if_latest=lambda **k: SimpleNamespace(revision=5, created_at=k["created_at"])), *readers, latest, nullcontext,
+        SimpleNamespace(now=lambda: datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.UTC)), ids,
+    )
+    _record, draft, dropped = StartReportVersion(latest, *readers, save, ids).execute(stored.workspace_id, expected_revision=4)
+    assert dropped["answers"] == 1 and draft.answers == ()
+    assert draft.state is ReportState.DRAFT
+    from scripts.backend_contract.application.report_foundation import _draft_coverage
+
+    carried = replace(draft, answers=stored.answers, coverage=_draft_coverage(draft, answers=stored.answers))
+    with pytest.raises(ValueError, match="cannot answer a question derived"):  # nova versao nao herda baseline
+        save.execute(stored.workspace_id, carried, 4, allow_new_version=True)

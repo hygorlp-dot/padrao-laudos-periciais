@@ -304,6 +304,25 @@ def _with_property_staleness(snapshot, get_property_record, workspace_id):
     return replace(snapshot, state=ReportState.DRAFT, review_decisions=(), coverage=replace(snapshot.coverage, complete=False), upstream_stale=True, upstream_stale_reasons=(*snapshot.upstream_stale_reasons, *reasons))
 
 
+def _refuse_new_answers_to_excluded_questions(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, predecessor: ReportSnapshot | None) -> None:
+    """Resposta a quesito derivado de peca excluida nao entra como autoridade nova.
+
+    A resposta ja gravada no predecessor, sob o MESMO vinculo de fontes, segue (laudo
+    legado continua revisavel e substituivel); nova versao e revinculo e julga tudo.
+    """
+    if predecessor is not None and predecessor.source_snapshot != snapshot.source_snapshot:
+        predecessor = None
+    recorded = predecessor.answers if predecessor is not None else ()
+    excluded = _excluded_questions(case)
+    if any(answer.question_id in excluded and answer not in recorded for answer in snapshot.answers):
+        raise ValueError("Report Snapshot cannot answer a question derived from a document excluded by the professional")
+
+
+def _excluded_questions(case: CaseAnalysisSnapshot) -> set[str]:
+    """Quesitos derivados de peca excluida pelo perito: nao sao exigidos nem respondidos."""
+    return {item.item_id for item in case.questions if case.derived_from_unavailable(item)}
+
+
 def _validate_answer_chains(snapshot: ReportSnapshot, technical: TechnicalSnapshot) -> None:
     findings = {item.finding_id: item for item in technical.findings}
     proposals = {item.proposal_id: item for item in technical.finding_proposals}
@@ -352,7 +371,11 @@ def _validate_claim_provenance(
     for item in snapshot.context_matrix:
         if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field]:
             raise ValueError("Report Snapshot context provenance is not present in bound upstream authority")
-    if snapshot.state is ReportState.APPROVED and {item.question_id for item in snapshot.answers} != {item.question_id for item in technical.question_links}:
+    # Exige-se o mesmo conjunto que o seletor oferece: quesito derivado de peca excluida
+    # sai da exigencia (a UI o esconde). Resposta legada a ele nao impede a aprovacao.
+    excluded_questions = _excluded_questions(case)
+    required_questions = {item.question_id for item in technical.question_links if item.question_id not in excluded_questions}
+    if snapshot.state is ReportState.APPROVED and not required_questions <= {item.question_id for item in snapshot.answers}:
         raise ValueError("approved Report Snapshot must answer every bound technical question")
 
 
@@ -487,6 +510,7 @@ class SaveReportSnapshot:
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Report Snapshot authority guard is unavailable")
         with self.authority_guard():
+            predecessor = None
             current = _current(
                 workspace_id,
                 (
@@ -517,6 +541,7 @@ class SaveReportSnapshot:
                 material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table", "site_location", "figures", "property_record", "process_record")
                 if not allow_new_version and predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
                     raise ValueError("Report Snapshot material change requires a new draft before professional review")
+            _refuse_new_answers_to_excluded_questions(snapshot, current[1], None if allow_new_version else predecessor)
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("Report Snapshot clock requires timezone")
@@ -897,6 +922,8 @@ class StartReportVersion:
                     raise ValueError("answer lost its cited table")
                 if not set(answer.claim_ids) <= {item.claim_id for item in kept_claims}:
                     raise ValueError("answer lost its cited claims")
+                if answer.question_id in _excluded_questions(case):
+                    raise ValueError("answer cites a question derived from an excluded document")
                 # The chain check reads only the claims and the answer.
                 _validate_answer_chains(SimpleNamespace(claims=kept_claims, answers=(answer,)), technical)
             except ValueError:
@@ -942,6 +969,8 @@ def _answer_for_question(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, t
     the cited claims are the report paragraphs that cite that finding or its
     decision.  Nothing here is inferred: a link that does not exist is refused.
     """
+    if question_id in _excluded_questions(case):
+        raise ValueError("Report answer cannot cite a question derived from a document excluded by the professional")
     if (question_id, finding_id) not in {(item.question_id, item.finding_id) for item in technical.question_links}:
         raise ValueError("Report answer requires an effective finding linked to the question")
     finding = next((item for item in technical.findings if item.finding_id == finding_id), None)
