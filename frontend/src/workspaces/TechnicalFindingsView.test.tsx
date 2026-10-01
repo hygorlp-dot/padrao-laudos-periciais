@@ -174,3 +174,58 @@ describe("technical findings workbench", () => {
     expect(JSON.stringify(body)).not.toMatch(/decision_id|finding_id|reviewed_at|APPROVED/);
   });
 });
+
+function caseWithExclusion(docTwoAvailable: boolean) {
+  const provenance = (documentId: string) => [{ workspace_id: ID, source_document_id: documentId, source_document_sha256: "a".repeat(64), page_or_span: "p. 1", source_revision: 1, occurrence_id: `OCC-${documentId}` }];
+  const item = (itemId: string, text: string, documentId: string) => ({ item_id: itemId, text, participant_refs: [], technical_subjects: [], provenance: provenance(documentId) });
+  const document = (documentId: string, sequence: number, available: boolean) => ({ document_id: documentId, source_sha256: "a".repeat(64), sequence, document_role: "OTHER", raw_type: "Petição", normalized_type: "OTHER", timestamp: null, participant_refs: [], page_count_or_span: "1", content_available: available, analysis_revision: 1 });
+  return {
+    revision: 1, updated_at: "2026-08-31T09:00:00Z",
+    snapshot: {
+      schema_version: "1.0.0", snapshot_id: "CASE-001", workspace_id: ID, source_revision: 1, participant_refs: [], judicial_context_workspace_id: ID,
+      judicial_context: { provenance: [], entities: [], participants: [], representation_links: [], access_relations: [] },
+      documents: [document("DOC-001", 1, true), document("DOC-002", 2, docTwoAvailable)],
+      claims: [item("CLAIM-1", "Alegação da peça 1", "DOC-001"), item("CLAIM-2", "Alegação da peça 2", "DOC-002")],
+      counterarguments: [], decisions: [], pericial_objects: [],
+      questions: [item("QUESTION-1", "Quesito da peça 1", "DOC-001"), item("QUESTION-2", "Quesito da peça 2", "DOC-002")],
+      events: [], technical_document_references: [], gaps: [], conflicts: [],
+      coverage: { status: docTwoAvailable ? "COMPLETE" : "PARTIAL", documents_total: 2, documents_analyzed: docTwoAvailable ? 2 : 1, documents_unavailable: docTwoAvailable ? 0 : 1, documents_failed: 0, source_revision: 1 },
+      human_reviews: [], stale_document_ids: [], source_inventory_stale: false, unindexed_source_count: 0,
+    },
+  };
+}
+
+describe("technical findings source parity", () => {
+  async function offered(user: ReturnType<typeof userEvent.setup>, kind: string) {
+    await user.selectOptions(screen.getByLabelText("Tipo canônico da fonte"), kind);
+    const picker = screen.getByLabelText("Fonte") as HTMLSelectElement;
+    return Array.from(picker.querySelectorAll("option")).map((option) => option.getAttribute("value")).filter(Boolean);
+  }
+
+  test.each([
+    ["excluída", false],
+    ["reabilitada", true],
+  ])("never offers a source the backend refuses (peça %s)", async (_label, docTwoAvailable) => {
+    const analysis = caseWithExclusion(docTwoAvailable);
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/case-analysis")) return Promise.resolve(response(200, analysis));
+      if (url.endsWith("/inspection-session")) return Promise.resolve(response(200, inspection));
+      if (url.endsWith("/expert-profile")) return Promise.resolve(response(404, {}));
+      return Promise.resolve(response(200, envelope));
+    }));
+    const user = userEvent.setup();
+    render(<TechnicalFindingsView workspaceId={ID} />);
+    await screen.findByLabelText("Tipo canônico da fonte");
+    await waitFor(async () => expect(await offered(user, "CASE_DOCUMENT")).toContain("DOC-001"));
+
+    // A peça não afetada continua oferecida em todos os tipos.
+    expect(await offered(user, "CASE_DOCUMENT")).toContain("DOC-001");
+    expect(await offered(user, "CASE_QUESTION")).toContain("QUESTION-1");
+    expect(await offered(user, "DOCUMENTED_ALLEGATION")).toContain("OCC-DOC-001");
+    // A peça excluída some de todos; reabilitada, volta.
+    expect((await offered(user, "CASE_DOCUMENT")).includes("DOC-002")).toBe(docTwoAvailable);
+    expect((await offered(user, "CASE_QUESTION")).includes("QUESTION-2")).toBe(docTwoAvailable);
+    expect((await offered(user, "DOCUMENTED_ALLEGATION")).includes("OCC-DOC-002")).toBe(docTwoAvailable);
+  });
+});

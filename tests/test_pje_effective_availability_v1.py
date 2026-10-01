@@ -9,6 +9,9 @@ ja se fazia com hash de fonte -- o historico persistido continua respondendo
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
+
+import pytest
 
 from scripts.planejamento_pericial.app_composition import build_pericial_local_api
 from tests.test_document_intake_v1 import provision_private_root
@@ -20,6 +23,9 @@ def _request(runtime, method, path, *, value=None, body=None, headers=None):
     status, _headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
         headers={"X-Local-API-Token": TOKEN, **(headers or {})},
+        # Limite canonico do cliente de teste (teto do LocalServerConfig), o mesmo de
+        # test_pje_multisource_identity_v1: importar PJe passa de 5 s em runner carregado.
+        timeout=30.0,
     )
     return status, json.loads(raw) if raw else None
 
@@ -85,7 +91,14 @@ def test_S07_exclusion_can_be_reversed_and_the_history_stays_auditable(tmp_path)
         excluded = _effective(runtime, workspace_id)
         target = _find(excluded, "DOC-PJE-002")
         assert target["content_available"] is False
-        assert target["document_id"] in excluded["stale_document_ids"]
+        # AUDITOR_TEST_CHANGED | INVALID_PREMISE
+        # A afirmacao anterior era `in excluded["stale_document_ids"]`, e era ela
+        # que fixava o defeito: `stale_document_ids` e o canal de DERIVA DE
+        # FONTE, e todo comando a jusante o trata como fatal. Exigir que a
+        # decisao profissional entrasse ali tornava verde a paralisia da analise.
+        assert target["document_id"] not in excluded["stale_document_ids"], (
+            "decisao profissional nao e deriva de fonte; conflatar as duas paralisa a analise"
+        )
         assert excluded["coverage"]["documents_unavailable"] == 1
         assert excluded["coverage"]["status"] != "COMPLETE"
 
@@ -187,3 +200,1019 @@ def test_S07_raw_artifact_route_never_serves_case_analysis(tmp_path):
         )
     finally:
         runtime.close()
+
+
+def test_SA03_a_professional_exclusion_does_not_freeze_the_analysis(tmp_path):
+    """Excluir um documento nao pode parar a analise inteira.
+
+    Era o desfecho anterior: apos uma exclusao, `POST /case-analysis/items` e
+    `POST /case-analysis/reviews` respondiam 409 -- inclusive para itens que
+    citavam OUTRO documento -- e a unica forma de voltar a trabalhar era o
+    perito desfazer a propria decisao. O sistema coagia ao abandono do juizo
+    profissional que esta funcionalidade existe para registrar.
+
+    Duas causas somadas: a decisao entrava no canal de deriva de fonte, e o
+    caminho de ESCRITA partia do snapshot projetado, que por construcao diverge
+    do predecessor persistido (`source extraction is immutable`).
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-a")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        analysis = _effective(runtime, workspace_id)
+        documents = analysis["documents"]
+        assert len(documents) >= 2, "a cena precisa de outro documento para citar"
+        kept = next(d for d in documents if d["document_id"].startswith("DOC-PJE-001"))
+
+        def add_item(revision, text, source_document_id):
+            return _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/items", value={
+                "expected_revision": revision, "item_kind": "PERICIAL_OBJECT", "text": text,
+                "source_document_id": source_document_id, "page_or_span": "p. 1",
+                "technical_subjects": ["tema sintetico"], "values": {},
+            })
+
+        status, current = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        status, created = add_item(current["revision"], "Objeto anterior.", kept["document_id"])
+        assert status == 200, created
+
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+
+        status, after = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        assert after["snapshot"]["stale_document_ids"] == []
+        assert after["snapshot"]["coverage"]["status"] != "COMPLETE"
+
+        # 1. O trabalho continua possivel sobre o que permanece disponivel.
+        status, appended = add_item(after["revision"], "Objeto posterior.", kept["document_id"])
+        assert status == 200, f"a exclusao congelou a captura de itens: {appended}"
+
+        # 2. A revisao humana tambem.
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        status, reviewed = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", value={
+                "expected_revision": fresh["revision"],
+                "target_item_id": fresh["snapshot"]["pericial_objects"][0]["item_id"],
+                "action": "CONFIRM", "corrected_value": None,
+                "reviewer": "PROFESSIONAL-001", "reason": "Revisao humana sintetica.",
+            })
+        assert status == 200, f"a exclusao congelou a revisao humana: {reviewed}"
+
+        # 3. Mas o documento excluido nao volta pela porta dos fundos.
+        status, latest = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        excluded_id = next(
+            d["document_id"] for d in latest["snapshot"]["documents"] if not d["content_available"]
+        )
+        status, refused = add_item(latest["revision"], "Objeto sobre excluido.", excluded_id)
+        assert status == 400, f"um item novo citou documento que o perito excluiu: {refused}"
+    finally:
+        runtime.close()
+
+
+def test_exclusion_in_one_workspace_never_reaches_another_with_the_same_export(tmp_path):
+    """Mesmo PDF (mesmos bytes, mesmos DOC-PJE-*) em dois workspaces: a decisao de A
+    fica em A. B continua com a peca disponivel, cobertura propria e trabalho liberado.
+
+    Bytes identicos sao a pior colisao possivel: mesmo sha, mesmos ids locais. So o
+    workspace separa as duas autoridades.
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-unica")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_a, material_a = _setup(runtime, pdf)
+        workspace_b, material_b = _setup(runtime, pdf)
+        assert material_a["content_id"] != material_b["content_id"], "cada workspace e dono da sua fonte"
+        _effective(runtime, workspace_a)
+        _effective(runtime, workspace_b)
+
+        _set_available(runtime, workspace_a, material_a["content_id"], "DOC-PJE-002", False)
+
+        a, b = _effective(runtime, workspace_a), _effective(runtime, workspace_b)
+        assert _find(a, "DOC-PJE-002")["content_available"] is False
+        assert _find(b, "DOC-PJE-002")["content_available"] is True, "a exclusao de A vazou para B"
+        assert b["coverage"]["documents_unavailable"] == 0 and b["stale_document_ids"] == []
+        intake_b = _intake_for(runtime, workspace_b, material_b["content_id"])
+        assert all(row["available"] for row in intake_b["inventory"]["documents"])
+
+        # E B continua trabalhavel citando justamente a peca que A excluiu.
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_b}/case-analysis")
+        status, added = _request(runtime, "POST", f"/v1/workspaces/{workspace_b}/case-analysis/items", value={
+            "expected_revision": fresh["revision"], "item_kind": "PERICIAL_OBJECT", "text": "Objeto em B.",
+            "source_document_id": _find(b, "DOC-PJE-002")["document_id"], "page_or_span": "p. 1",
+            "technical_subjects": ["tema"], "values": {},
+        })
+        assert status == 200, added
+    finally:
+        runtime.close()
+
+
+def test_exclusion_survives_backup_verify_stage_promote_reopen_and_stays_workable(tmp_path):
+    """backup -> verify -> stage -> promote -> reopen, com uma exclusao profissional no meio.
+
+    Depois da recuperacao: a decisao continua la (nada reabilitado em silencio), a peca
+    excluida segue fora da autoridade, a analise continua trabalhavel (SA-03 tambem vale
+    no workspace recuperado) e reabilitar ainda funciona.
+    """
+    import os
+
+    import pytest
+
+    if os.name != "nt":
+        pytest.skip("a jornada completa de recuperacao mutavel e apenas Windows")
+    from tests.test_backup_recovery_reachability_v1 import _api, _json
+    from tests.test_backup_recovery_reachability_v1 import _runtime as _recovery_runtime
+
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-recuperada")
+    source = _recovery_runtime(tmp_path, "source")
+    try:
+        workspace_id, material = _setup(source, pdf)
+        content_id = material["content_id"]
+        _effective(source, workspace_id)
+        _set_available(source, workspace_id, content_id, "DOC-PJE-002", False)
+        _status, _headers, package = _api(source, "POST", f"/v1/workspaces/{workspace_id}/backup")
+        assert _status == 200
+    finally:
+        source.close()
+
+    target = _recovery_runtime(tmp_path, "target")
+    try:
+        status, verified = _json(target, "POST", "/v1/recovery/verify", body=package, headers={"Content-Type": "application/octet-stream"})
+        assert status == 200, verified
+        status, staged = _json(target, "POST", "/v1/recovery/staging", body=package, headers={"Content-Type": "application/octet-stream"})
+        assert status in {200, 201} and staged["promotable"] is True, staged
+        status, promoted = _json(target, "POST", f"/v1/recovery/{staged['recovery_id']}/promote", value={"confirm": True})
+        assert status == 200 and promoted["workspace_id"] == workspace_id, promoted
+
+        # Reaberto: a decisao sobreviveu, sem reabilitacao silenciosa.
+        rows = {row["document_id"]: row["available"] for row in _intake_for(target, workspace_id, content_id)["inventory"]["documents"]}
+        assert rows["DOC-PJE-002"] is False and rows["DOC-PJE-001"] is True, rows
+        restored = _effective(target, workspace_id)
+        assert _find(restored, "DOC-PJE-002")["content_available"] is False
+        assert restored["stale_document_ids"] == [] and restored["coverage"]["status"] != "COMPLETE"
+
+        # Trabalhavel no workspace recuperado, e a peca excluida nao volta pela porta dos fundos.
+        def add(source_document_id, text):
+            status, fresh = _request(target, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+            return _request(target, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/items", value={
+                "expected_revision": fresh["revision"], "item_kind": "PERICIAL_OBJECT", "text": text,
+                "source_document_id": source_document_id, "page_or_span": "p. 1",
+                "technical_subjects": ["tema"], "values": {},
+            })[0]
+
+        assert add(_find(restored, "DOC-PJE-001")["document_id"], "Objeto apos recuperacao.") == 200
+        assert add(_find(restored, "DOC-PJE-002")["document_id"], "Objeto sobre excluido.") == 400
+
+        _set_available(target, workspace_id, content_id, "DOC-PJE-002", True)
+        assert _find(_effective(target, workspace_id), "DOC-PJE-002")["content_available"] is True
+    finally:
+        target.close()
+
+
+
+def _add_item(runtime, workspace_id, kind, text, source_document_id):
+    status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+    return _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/items", value={
+        "expected_revision": fresh["revision"], "item_kind": kind, "text": text,
+        "source_document_id": source_document_id, "page_or_span": "p. 1",
+        "technical_subjects": ["tema"], "values": {},
+    })
+
+
+def _plan_citations(plan):
+    return {
+        source["source_document_id"]
+        for collection in ("issues", "inspection_requirements", "question_links")
+        for item in plan["snapshot"][collection]
+        for source in item["derivation"]["source_provenance"]
+    }
+
+
+def test_planning_refuses_items_from_an_excluded_document_until_the_professional_resolves_them(tmp_path):
+    """Revisao da #251 (P0 do revisor, P1 do auditor): sem o canal de deriva, o
+    Planejamento montava o plano sobre quesito derivado da peca excluida.
+
+    Recusar, e nao filtrar em silencio: o quesito sumiria do plano sem aviso. As duas
+    saidas do perito precisam funcionar -- rejeitar o item, ou reabilitar a peca -- e
+    e isso que prova que a recusa se deve a exclusao e nao a outro motivo qualquer.
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-plano")
+    runtime = _runtime(tmp_path)
+    try:
+        # Saida 1: rejeitar o item derivado.
+        workspace_id, material = _setup(runtime, pdf)
+        snapshot = _effective(runtime, workspace_id)
+        excluded = _find(snapshot, "DOC-PJE-002")["document_id"]
+        kept = _find(snapshot, "DOC-PJE-001")["document_id"]
+        status, body = _add_item(runtime, workspace_id, "PERICIAL_QUESTION", "Quesito sobre a peca 2?", excluded)
+        assert status == 200, body
+        doomed = next(q["item_id"] for q in body["snapshot"]["questions"] if q["provenance"][0]["source_document_id"] == excluded)
+        assert _add_item(runtime, workspace_id, "PERICIAL_QUESTION", "Quesito sobre a peca 1?", kept)[0] == 200
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+
+        status, _refused = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})
+        assert status == 400, f"plano montado sobre peca excluida: {status}"
+
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        status, _ = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", value={
+            "expected_revision": fresh["revision"], "target_item_id": doomed, "action": "REJECT",
+            "corrected_value": None, "reviewer": "PROFESSIONAL-001", "reason": "Fonte excluida da analise.",
+        })
+        assert status == 200
+        status, plan = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})
+        assert status == 201, plan
+        assert excluded not in _plan_citations(plan) and kept in _plan_citations(plan)
+
+        # Saida 2: reabilitar a peca (outro workspace, mesmo export).
+        workspace_b, material_b = _setup(runtime, pdf)
+        excluded_b = _find(_effective(runtime, workspace_b), "DOC-PJE-002")["document_id"]
+        assert _add_item(runtime, workspace_b, "PERICIAL_QUESTION", "Quesito sobre a peca 2?", excluded_b)[0] == 200
+        _set_available(runtime, workspace_b, material_b["content_id"], "DOC-PJE-002", False)
+        assert _request(runtime, "POST", f"/v1/workspaces/{workspace_b}/pericial-planning", value={"title": "Plano"})[0] == 400
+        _set_available(runtime, workspace_b, material_b["content_id"], "DOC-PJE-002", True)
+        status, plan_b = _request(runtime, "POST", f"/v1/workspaces/{workspace_b}/pericial-planning", value={"title": "Plano"})
+        assert status == 201, plan_b
+        assert excluded_b in _plan_citations(plan_b)
+    finally:
+        runtime.close()
+
+
+def test_command_responses_show_the_effective_state_not_the_write_base(tmp_path):
+    """Revisao da #251 (F2, P1): o POST devolvia a base de escrita -- cobertura COMPLETE e
+    a peca excluida de volta como disponivel -- e a interface exibia isso ate recarregar."""
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-resposta")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        snapshot = _effective(runtime, workspace_id)
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+        status, response = _add_item(runtime, workspace_id, "PERICIAL_OBJECT", "Objeto.", _find(snapshot, "DOC-PJE-001")["document_id"])
+        assert status == 200, response
+        status, reread = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        assert _find(response["snapshot"], "DOC-PJE-002")["content_available"] is False
+        assert response["snapshot"]["coverage"]["status"] != "COMPLETE"
+        assert response["snapshot"]["coverage"] == reread["snapshot"]["coverage"]
+        assert response["snapshot"]["documents"] == reread["snapshot"]["documents"]
+    finally:
+        runtime.close()
+
+
+def test_items_derived_from_an_excluded_document_lose_report_and_findings_authority():
+    """Revisao da #251 (F4 do revisor, SA251-05 do auditor): filtrar so CASE_DOCUMENT
+    deixava a exclusao voltar pelos derivados -- decisao, quesito, participante.
+
+    Unidade direta sobre as funcoes de autoridade: nenhuma outra guarda pode responder
+    pela recusa. Controle positivo: derivados de peca disponivel seguem citaveis.
+    """
+    from dataclasses import replace
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    import pytest
+
+    from scripts.backend_contract.application.report_foundation import _claim_sources, _context_sources
+    from scripts.backend_contract.application.technical_findings import _validate_upstream_links
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+    from tests.test_technical_findings_foundation_v1 import bound_snapshot, upstreams
+
+    root = Path(__file__).resolve().parents[1]
+    case = case_analysis_from_mapping(json.loads((root / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8")))
+    excluded = case.project_effective_availability({"DOC-002": False})
+    empty = SimpleNamespace(observations=(), measurements=(), findings=(), decisions=(), question_links=())
+    binding = SimpleNamespace(case_analysis_revision=3, inspection_session_revision=2, construction_defect_analysis_revision=1, technical_snapshot_revision=4)
+
+    for name, current in (("disponivel", case), ("excluida", excluded)):
+        claims = _claim_sources(binding, current, empty, empty, None)
+        context = _context_sources(current, empty)
+        live = name == "disponivel"
+        assert ("DECISION-001" in claims["COURT_DECISION"][0]) is live, name
+        assert ("PART-DEFENDANT" in context["PARTIES"]) is live, name
+        assert ("DECISION-001" in context["COURT"]) is live, name
+        # O proprio documento, no contexto (ADDRESSES so aceita documentos).
+        assert ("DOC-002" in context["ADDRESSES"]) is live, name
+        # Derivados de DOC-001 continuam citaveis nos dois estados.
+        assert "CLAIM-001" in claims["ALLEGATION"][0] and "QUESTION-001" in context["REQUESTS"], name
+
+    _case_record, _case, _inspection_record, inspection = upstreams()
+    snapshot = bound_snapshot()
+    link = replace(snapshot.source_links[0], source_kind="CASE_DECISION", source_id="DECISION-001",
+                   source_revision=snapshot.source_snapshot.case_analysis_revision)
+    # Mesmo link_id: continua pertencendo a sua avaliacao; so a fonte citada muda.
+    candidate = replace(snapshot, source_links=(link, *snapshot.source_links[1:]))
+    _validate_upstream_links(candidate, case, inspection)  # controle: peca disponivel
+    with pytest.raises(ValueError, match="absent from bound upstream"):
+        _validate_upstream_links(candidate, excluded, inspection)
+
+
+
+def _fixture_case_and_findings():
+    from pathlib import Path
+
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+    from tests.test_technical_findings_foundation_v1 import bound_snapshot, upstreams
+
+    root = Path(__file__).resolve().parents[1]
+    case = case_analysis_from_mapping(json.loads((root / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8")))
+    _case_record, _case, _inspection_record, inspection = upstreams()
+    return case, bound_snapshot(), inspection
+
+
+def _neutral_links(snapshot):
+    """Todos os vinculos viram MEDICAO: nenhum pode responder pela recusa sob teste."""
+    from dataclasses import replace
+
+    measurement = replace(
+        snapshot.source_links[0], source_kind="MEASUREMENT", source_id="MEASUREMENT-001",
+        source_revision=snapshot.source_snapshot.inspection_session_revision,
+    )
+    return tuple(replace(measurement, link_id=link.link_id, evidence_id=link.evidence_id) for link in snapshot.source_links)
+
+
+@pytest.mark.parametrize("kind,source_id", [
+    ("CASE_CLAIM", "CLAIM-001"),
+    ("CASE_QUESTION", "QUESTION-001"),
+    ("DOCUMENTED_ALLEGATION", "OCC-CLAIM-001"),
+])
+def test_findings_refuse_each_kind_derived_from_an_excluded_document(kind, source_id):
+    """Oraculo por conjunto de autoridade em Technical Findings (DOC-001 excluido).
+
+    Os demais vinculos sao neutralizados e os quesitos ligados ficam vazios: so o
+    vinculo sob teste pode causar a recusa, e o `match` aponta essa guarda.
+    """
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.technical_findings import _validate_upstream_links
+
+    case, snapshot, inspection = _fixture_case_and_findings()
+    excluded = case.project_effective_availability({"DOC-001": False})
+    links = _neutral_links(snapshot)
+    link = replace(links[0], source_kind=kind, source_id=source_id, source_revision=snapshot.source_snapshot.case_analysis_revision)
+    candidate = replace(snapshot, source_links=(link, *links[1:]), question_links=())
+    _validate_upstream_links(candidate, case, inspection)  # controle: peca disponivel
+    with pytest.raises(ValueError, match="absent from bound upstream"):
+        _validate_upstream_links(candidate, excluded, inspection)
+
+
+def test_findings_refuse_a_question_link_to_a_question_derived_from_an_excluded_document():
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.technical_findings import _validate_upstream_links
+
+    case, snapshot, inspection = _fixture_case_and_findings()
+    assert any(link.question_id == "QUESTION-001" for link in snapshot.question_links)
+    candidate = replace(snapshot, source_links=_neutral_links(snapshot))
+    _validate_upstream_links(candidate, case, inspection)  # controle
+    with pytest.raises(ValueError, match="question identity"):
+        _validate_upstream_links(candidate, case.project_effective_availability({"DOC-001": False}), inspection)
+
+
+def test_report_authority_and_source_picker_drop_items_derived_from_an_excluded_document():
+    """Oraculo por conjunto do laudo: ALLEGATION, CLAIM_AND_GROUNDS, REQUESTS e o seletor.
+
+    O seletor (`ListReportSources`) precisa oferecer exatamente o que o save aceita.
+    """
+    from types import SimpleNamespace
+
+    from scripts.backend_contract.application.report_foundation import ListReportSources, _claim_sources, _context_sources
+
+    case, snapshot, inspection = _fixture_case_and_findings()
+    empty = SimpleNamespace(observations=(), measurements=(), findings=(), decisions=(), question_links=())
+    binding = SimpleNamespace(case_analysis_revision=3, inspection_session_revision=2, construction_defect_analysis_revision=1, technical_snapshot_revision=4)
+
+    def offered(current):
+        listing = ListReportSources(
+            SimpleNamespace(execute=lambda _w: (None, current)),
+            SimpleNamespace(execute=lambda _w: (None, inspection)),
+            SimpleNamespace(execute=lambda _w: (None, snapshot)),
+        ).execute("workspace")
+        return json.dumps(listing, ensure_ascii=False, default=str)
+
+    for current, live in ((case, True), (case.project_effective_availability({"DOC-001": False}), False)):
+        claims = _claim_sources(binding, current, empty, empty, None)
+        context = _context_sources(current, empty)
+        assert ("CLAIM-001" in claims["ALLEGATION"][0]) is live
+        assert ("CLAIM-001" in context["CLAIM_AND_GROUNDS"]) is live
+        assert ("QUESTION-001" in context["REQUESTS"]) is live
+        picker = offered(current)
+        assert ('"CLAIM-001"' in picker) is live, "seletor e save divergem para a alegacao"
+        assert ('"QUESTION-001"' in picker) is live, "seletor e save divergem para o quesito"
+
+
+def test_review_command_response_shows_the_effective_state(tmp_path):
+    """O POST de revisao tambem devolve o read-model, nao a base de escrita."""
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-revisao")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        snapshot = _effective(runtime, workspace_id)
+        status, body = _add_item(runtime, workspace_id, "PERICIAL_OBJECT", "Objeto.", _find(snapshot, "DOC-PJE-001")["document_id"])
+        assert status == 200, body
+        target = body["snapshot"]["pericial_objects"][0]["item_id"]
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        status, reviewed = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", value={
+            "expected_revision": fresh["revision"], "target_item_id": target, "action": "CONFIRM",
+            "corrected_value": None, "reviewer": "PROFESSIONAL-001", "reason": "Revisao sintetica.",
+        })
+        assert status == 200, reviewed
+        assert _find(reviewed["snapshot"], "DOC-PJE-002")["content_available"] is False
+        assert reviewed["snapshot"]["coverage"]["status"] != "COMPLETE"
+    finally:
+        runtime.close()
+
+
+def test_planning_save_guard_refuses_on_its_own():
+    """A guarda do Save do Planejamento, isolada da do Start. O plano inicial e gerado pelo
+    proprio Start sobre a analise DISPONIVEL (proposta pura, como o produto a monta) e depois
+    salvo contra a analise com a peca excluida: so a guarda do Save pode recusar, e recusa
+    antes da validacao do vinculo, com a mensagem propria."""
+    import uuid
+    from contextlib import nullcontext
+
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.application.pericial_planning import SavePericialPlanning, StartPericialPlanning
+
+    case, _snapshot, _inspection = _fixture_case_and_findings()
+    workspace = WorkspaceId.parse(case.workspace_id)
+    ids = SimpleNamespace(new_uuid=uuid.uuid4)
+    captured = []
+    StartPericialPlanning(
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3), case)),
+        SimpleNamespace(execute=lambda _w, snapshot, *_a, **_k: captured.append(snapshot) or SimpleNamespace(revision=1)),
+        ids,
+    ).execute(workspace, title="Plano sintetico")
+    (proposal,) = captured
+
+    excluded = case.project_effective_availability({"DOC-001": False})
+    service = SavePericialPlanning(
+        SimpleNamespace(append_if_latest=lambda **_k: pytest.fail("nao pode gravar")),
+        SimpleNamespace(execute=lambda *_a: pytest.fail("nao pode chegar a revisao")),
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3), excluded)),
+        nullcontext, SimpleNamespace(now=lambda: None), ids,
+    )
+    with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
+        service.execute(workspace, proposal, None)
+
+def test_a_gap_extracted_from_a_document_later_excluded_blocks_planning_like_any_derived_item(tmp_path):
+    """Revisao da #251 (F3): a isencao de lacunas por TIPO reabria o P0 -- uma lacuna
+    criada enquanto a peca estava disponivel foi extraida do conteudo dela; excluida a
+    peca, a lacuna ainda guiava o plano.
+
+    A regra e uniforme: nenhuma lacuna fica isenta (ver derived_from_unavailable). Lacuna
+    derivada de peca excluida bloqueia o plano, e rejeita-la o libera.
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-lacuna")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        snapshot = _effective(runtime, workspace_id)
+        excluded = _find(snapshot, "DOC-PJE-002")["document_id"]
+        status, body = _add_item(runtime, workspace_id, "EVIDENCE_GAP", "Lacuna extraida da peca 2.", excluded)
+        assert status == 200, body
+        gap = body["snapshot"]["gaps"][0]["item_id"]
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+        assert _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})[0] == 400
+
+        status, fresh = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
+        assert _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/case-analysis/reviews", value={
+            "expected_revision": fresh["revision"], "target_item_id": gap, "action": "REJECT",
+            "corrected_value": None, "reviewer": "PROFESSIONAL-001", "reason": "Fonte excluida.",
+        })[0] == 200
+        status, plan = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})
+        assert status == 201, plan
+    finally:
+        runtime.close()
+
+
+
+def test_a_gap_created_in_a_re_enable_window_blocks_planning_after_re_exclusion(tmp_path):
+    """Auditoria da #251, rodada 3 (SA251R3-01): excluir antes do bootstrap, reabilitar,
+    criar uma lacuna citando a peca, excluir de novo -- a lacuna escapava da isencao
+    por `stale` (a disponibilidade voltava ao valor congelado no bootstrap) e o plano
+    saia com 201 apoiado na peca excluida.
+
+    Sem isencao nenhuma, a lacuna e derivada como qualquer item.
+    """
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-janela")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        content_id = material["content_id"]
+        _set_available(runtime, workspace_id, content_id, "DOC-PJE-002", False)  # antes do bootstrap
+        snapshot = _effective(runtime, workspace_id)
+        assert _find(snapshot, "DOC-PJE-002")["content_available"] is False
+        _set_available(runtime, workspace_id, content_id, "DOC-PJE-002", True)  # janela de reabilitacao
+        reopened = _effective(runtime, workspace_id)
+        status, body = _add_item(runtime, workspace_id, "EVIDENCE_GAP", "Lacuna da janela.", _find(reopened, "DOC-PJE-002")["document_id"])
+        assert status == 200, body
+        _set_available(runtime, workspace_id, content_id, "DOC-PJE-002", False)  # nova exclusao
+        status, plan = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano"})
+        assert status == 400, f"plano montado sobre lacuna da peca excluida: {status} {plan}"
+    finally:
+        runtime.close()
+
+
+def test_a_legacy_plan_built_on_an_excluded_source_keeps_accepting_decisions(tmp_path, monkeypatch):
+    """Auditoria da #251, rodada 4 (SA251R4-01): um plano vindo da main, montado sobre uma
+    lacuna que citava a propria peca ausente, passava a recusar TODA decisao -- inclusive
+    sobre itens sem relacao com a peca. Na main a mesma decisao respondia 200.
+
+    A guarda do Save agora julga so o que o snapshot PASSA a referenciar. O plano legado e
+    simulado desligando exatamente as duas guardas que a main nao tinha; dai em diante, o
+    codigo atual puro. (Refazer um plano que ficou stale e o F7, #252, anterior a esta PR.)
+    """
+    from scripts.backend_contract.application import case_analysis as app_case
+    from scripts.backend_contract.application import pericial_planning as app_plan
+
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-legado")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+        snapshot = _effective(runtime, workspace_id)
+        excluded = _find(snapshot, "DOC-PJE-002")["document_id"]
+        assert _add_item(runtime, workspace_id, "PERICIAL_QUESTION", "Quesito sintetico?", _find(snapshot, "DOC-PJE-001")["document_id"])[0] == 200
+
+        real = app_case.GetCaseAnalysis.execute_for_command
+        with monkeypatch.context() as legacy:  # era main: sem as duas guardas
+            legacy.setattr(app_case.GetCaseAnalysis, "execute_for_command", lambda self, w: (lambda r: (r[0], r[1], {k: True for k in r[2]}))(real(self, w)))
+            legacy.setattr(app_plan, "_refuse_new_references_to_unavailable_documents", lambda *a, **k: None)
+            assert _add_item(runtime, workspace_id, "EVIDENCE_GAP", "Anexo tecnico indicado nao esta disponivel.", excluded)[0] == 200
+            assert _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano legado"})[0] == 201
+
+        # Codigo atual: o plano legado segue decidivel.
+        status, plan = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pericial-planning")
+        assert status == 200 and plan["snapshot"]["upstream_stale"] is False
+        target = next(item for collection in ("inspection_requirements", "issues", "gaps", "risks", "required_documents") for item in plan["snapshot"][collection])
+        status, decided = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning/decisions", value={
+            "expected_revision": plan["revision"], "target_item_id": target["item_id"], "action": "APPROVE",
+            "reviewer": "PROFESSIONAL-001", "reason": "Revisao.", "decided_value": None,
+        })
+        assert status == 200, f"plano legado travado: {status} {decided}"
+    finally:
+        runtime.close()
+
+
+def test_planning_save_update_refuses_only_newly_introduced_references():
+    """Numa atualizacao, o Save julga so as referencias NOVAS: o que o predecessor ja
+    referenciava passa (plano legado segue decidivel), o que entra agora e recusado.
+
+    O plano e revinculado ao digest da analise COM a peca excluida para que a validacao
+    do vinculo passe -- assim so a guarda de referencias pode responder pela recusa.
+    """
+    import uuid
+    from contextlib import nullcontext
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+    from scripts.backend_contract.application.pericial_planning import SavePericialPlanning, StartPericialPlanning
+    from scripts.backend_contract.pericial_planning import case_analysis_digest, pericial_planning_to_mapping
+
+    case, _snapshot, _inspection = _fixture_case_and_findings()
+    workspace = WorkspaceId.parse(case.workspace_id)
+    ids = SimpleNamespace(new_uuid=uuid.uuid4)
+    captured = []
+    StartPericialPlanning(
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3), case)),
+        SimpleNamespace(execute=lambda _w, snapshot, *_a, **_k: captured.append(snapshot) or SimpleNamespace(revision=1)),
+        ids,
+    ).execute(workspace, title="Plano sintetico")
+    excluded = case.project_effective_availability({"DOC-001": False})
+    plan = replace(captured[0], plan=replace(captured[0].plan, case_analysis_digest=case_analysis_digest(excluded)))
+    derived = {item.item_id for item in excluded.material_items if excluded.derived_from_unavailable(item)}
+    collection, index = next(
+        (name, position) for name in ("issues", "inspection_requirements", "required_documents", "risks", "gaps")
+        for position, item in enumerate(getattr(plan, name))
+        if set(item.derivation.case_analysis_item_ids) & derived
+    )
+    # Predecessor identico, exceto que aquele item citava um item NAO derivado (OBJECT-001,
+    # da DOC-002): as contagens do plano ficam intactas e so a referencia muda.
+    items = list(getattr(plan, collection))
+    items[index] = replace(items[index], derivation=replace(items[index].derivation, case_analysis_item_ids=("OBJECT-001",)))
+    assert "OBJECT-001" not in derived
+    without = replace(plan, **{collection: tuple(items)})
+
+    def service(previous):
+        record = ArtifactRevision(workspace, "PERICIAL_PLANNING_V1", "PERICIAL-PLANNING", str(uuid.uuid4()), 1,
+                                 "2026-09-30T12:00:00+00:00", "0" * 64, pericial_planning_to_mapping(previous))
+        return SavePericialPlanning(
+            SimpleNamespace(append_if_latest=lambda **_k: SimpleNamespace(revision=2)),
+            SimpleNamespace(execute=lambda *_a: record),
+            SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3, artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+                                                             artifact_id="CASE-ANALYSIS", checksum_sha256="c" * 64), excluded)),
+            nullcontext, SimpleNamespace(now=lambda: __import__("datetime").datetime(2026, 9, 30, 12, tzinfo=__import__("datetime").UTC)), ids,
+        )
+
+    service(plan).execute(workspace, plan, 1)  # nada novo: passa, mesmo com derivados ja referenciados
+    with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
+        service(without).execute(workspace, plan, 1)  # o item derivado entra agora: recusado
+
+
+
+def _plan_and_save_service(previous_plan, excluded):
+    """Servico de Save cujo predecessor gravado e `previous_plan` e cuja analise vigente e `excluded`."""
+    import datetime
+    import uuid
+    from contextlib import nullcontext
+
+    from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+    from scripts.backend_contract.application.pericial_planning import SavePericialPlanning
+    from scripts.backend_contract.pericial_planning import pericial_planning_to_mapping
+
+    workspace = WorkspaceId.parse(previous_plan.workspace_id)
+    record = ArtifactRevision(workspace, "PERICIAL_PLANNING_V1", "PERICIAL-PLANNING", str(uuid.uuid4()), 1,
+                              "2026-09-30T12:00:00+00:00", "0" * 64, pericial_planning_to_mapping(previous_plan))
+    return SavePericialPlanning(
+        SimpleNamespace(append_if_latest=lambda **_k: SimpleNamespace(revision=2)),
+        SimpleNamespace(execute=lambda *_a: record),
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3, artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+                                                             artifact_id="CASE-ANALYSIS", checksum_sha256="c" * 64), excluded)),
+        nullcontext, SimpleNamespace(now=lambda: datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.UTC)),
+        SimpleNamespace(new_uuid=uuid.uuid4),
+    ), workspace
+
+
+def _proposal_over(case):
+    import uuid
+
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.application.pericial_planning import StartPericialPlanning
+
+    captured = []
+    StartPericialPlanning(
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3), case)),
+        SimpleNamespace(execute=lambda _w, snapshot, *_a, **_k: captured.append(snapshot) or SimpleNamespace(revision=1)),
+        SimpleNamespace(new_uuid=uuid.uuid4),
+    ).execute(WorkspaceId.parse(case.workspace_id), title="Plano sintetico")
+    return captured[0]
+
+
+def test_rebinding_a_plan_to_an_analysis_with_an_excluded_source_is_judged_like_a_creation():
+    """Revisao da #251, rodada 5 (SA251R5-01): um PUT trocava so o vinculo do plano (digest da
+    Analise do Caso) para a analise COM a peca excluida e passava -- a tolerancia a "so
+    referencias novas" olhava os IDs e ignorava sob qual analise eles foram autorizados.
+    Depois disso o plano aprovava item derivado da peca excluida.
+
+    O predecessor so vale como baseline se o vinculo de autoridade e o mesmo; revincular
+    e uma nova autorizacao e tudo volta a ser julgado. Unidade direta: pela API o 400 e
+    generico, e aqui o `match` prova que a recusa vem desta guarda.
+    """
+    from dataclasses import replace
+
+    from scripts.backend_contract.pericial_planning import case_analysis_digest
+
+    case, _snapshot, _inspection = _fixture_case_and_findings()
+    legitimate = _proposal_over(case)  # criado com a peca disponivel
+    excluded = case.project_effective_availability({"DOC-001": False})
+    rebound = replace(legitimate, plan=replace(legitimate.plan, case_analysis_digest=case_analysis_digest(excluded)))
+    service, workspace = _plan_and_save_service(legitimate, excluded)
+    with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
+        service.execute(workspace, rebound, 1)
+
+
+def test_a_new_plan_item_citing_an_already_referenced_derived_item_is_refused():
+    """Revisao da #251, rodada 5 (SA251R5-02): "novo" era calculado sobre o conjunto de IDs,
+    entao num plano legado dava para acrescentar itens apoiados num derivado ja citado.
+    Agora a referencia e o par (item do plano, item da analise)."""
+    import uuid
+    from dataclasses import replace
+
+    from scripts.backend_contract.pericial_planning import case_analysis_digest
+
+    case, _snapshot, _inspection = _fixture_case_and_findings()
+    excluded = case.project_effective_availability({"DOC-001": False})
+    proposal = _proposal_over(case)
+    legacy = replace(proposal, plan=replace(proposal.plan, case_analysis_digest=case_analysis_digest(excluded)))
+    derived = {item.item_id for item in excluded.material_items if excluded.derived_from_unavailable(item)}
+    source = next(item for item in legacy.issues if set(item.derivation.case_analysis_item_ids) & derived)
+    extra = replace(source, item_id=f"PLAN-ISSUE-{uuid.uuid4().hex.upper()}", title="Tema novo sobre item derivado")
+    coverage = legacy.coverage
+    grown = replace(legacy, issues=(*legacy.issues, extra), coverage=replace(
+        coverage, material_items_total=coverage.material_items_total + 1, pending_items=coverage.pending_items + 1,
+    ))
+    service, workspace = _plan_and_save_service(legacy, excluded)
+    service.execute(workspace, legacy, 1)  # controle: o legado sem item novo segue gravavel
+    with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
+        service.execute(workspace, grown, 1)
+
+
+@pytest.mark.parametrize("kind,source_id", [
+    ("CASE_CLAIM", "CLAIM-001"),
+    ("CASE_QUESTION", "QUESTION-001"),
+    ("DOCUMENTED_ALLEGATION", "OCC-CLAIM-001"),
+])
+def test_findings_links_recorded_before_an_exclusion_stay_valid_and_new_ones_are_refused(kind, source_id):
+    """Revisao da #251, rodada 5 (SA251R5-01, auditor): o filtro de disponibilidade julgava
+    o snapshot tecnico INTEIRO. Como vinculos sao append-only, uma Constatacao gravada
+    antes da exclusao (ou na era main) ficava congelada: toda mutacao, mesmo sem relacao,
+    era recusada. Agora o vinculo ja gravado no predecessor so tem a identidade conferida;
+    o que entra novo continua julgado pela disponibilidade."""
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.technical_findings import _validate_upstream_links
+
+    case, snapshot, inspection = _fixture_case_and_findings()
+    excluded = case.project_effective_availability({"DOC-001": False})
+    links = _neutral_links(snapshot)
+    link = replace(links[0], source_kind=kind, source_id=source_id, source_revision=snapshot.source_snapshot.case_analysis_revision)
+    recorded = replace(snapshot, source_links=(link, *links[1:]))
+    assert any(item.question_id == "QUESTION-001" for item in recorded.question_links)
+    _validate_upstream_links(recorded, excluded, inspection, recorded)  # legado: tudo ja gravado
+    with pytest.raises(ValueError, match="absent from bound upstream"):  # vinculo de fonte novo
+        _validate_upstream_links(recorded, excluded, inspection, replace(recorded, source_links=links))
+    with pytest.raises(ValueError, match="question identity"):  # vinculo de quesito novo
+        _validate_upstream_links(recorded, excluded, inspection, replace(recorded, question_links=()))
+    with pytest.raises(ValueError, match="absent from bound upstream"):  # identidade segue conferida
+        ghost = replace(link, source_id="ITEM-INEXISTENTE")
+        _validate_upstream_links(replace(recorded, source_links=(ghost, *links[1:])), excluded, inspection,
+                                 replace(recorded, source_links=(ghost, *links[1:])))
+
+
+def test_a_legacy_technical_snapshot_stays_mutable_after_its_source_is_excluded(monkeypatch):
+    """Ponta a ponta pelo Save, no estado legado do auditor: Analise do Caso ja com a peca
+    excluida e Constatacao gravada na era main com evidencia CASE_QUESTION sobre o quesito
+    derivado (o harness grava sem passar pelo Save, como a main aceitava). Uma evidencia
+    nova SEM relacao precisa passar; uma nova sobre o quesito derivado segue recusada."""
+    import tests.test_technical_findings_foundation_v1 as tf
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.application.technical_findings import AddEvidenceProposal
+
+    real = tf.upstreams
+    excluded = real()[1].project_effective_availability({"DOC-001": False})
+    monkeypatch.setattr(tf, "upstreams", lambda: (real()[0], excluded, real()[2], real()[3]))
+    ids = tf.SequentialIds()
+
+    def add(harness, kind, source_id, revision):
+        AddEvidenceProposal(harness.get(), harness.save(), ids).execute(
+            WorkspaceId.parse(harness.snapshot.workspace_id), source_kind=kind, source_id=source_id,
+            proposition=f"Proposicao {kind}.", why_relevant="Relevancia.", expected_revision=revision,
+        )
+
+    harness = tf.CommandHarness(tf.empty_bound_snapshot())
+    add(harness, "CASE_QUESTION", "QUESTION-001", 1)  # registro legado
+    predecessor = harness.snapshot
+    workspace = WorkspaceId.parse(predecessor.workspace_id)
+    unrelated = tf.CommandHarness(predecessor)
+    add(unrelated, "MEASUREMENT", "MEASUREMENT-001", 1)
+    tf.save_service(predecessor).execute(workspace, unrelated.snapshot, 3, mutation_authority="PROPOSAL")
+    derived = tf.CommandHarness(predecessor)
+    add(derived, "CASE_QUESTION", "QUESTION-001", 1)
+    with pytest.raises(ValueError, match="absent from bound upstream"):
+        tf.save_service(predecessor).execute(workspace, derived.snapshot, 3, mutation_authority="PROPOSAL")
+
+
+def _legacy_report_world():
+    """Estado legado do auditor (SA251R6-01): Constatacao gravada na era main com vinculo
+    QUESTION-001 -> FINDING-001, e QUESTION-001 derivado de peca indisponivel desde o
+    bootstrap (DOC-003). Laudo ligado a esse caso; REQUESTS isolado em DOC-001."""
+    from dataclasses import replace
+    from pathlib import Path
+
+    import tests.test_report_foundation_v1 as rf
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+
+    root = Path(__file__).resolve().parents[1]
+    data = json.loads((root / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
+    for index, source in enumerate(data["questions"][0]["provenance"]):
+        source.update(occurrence_id=f"OCC-LEGACY-Q-{index}", source_document_id="DOC-003", source_document_sha256="c" * 64)
+    case = case_analysis_from_mapping(data)
+    assert case.derived_from_unavailable(case.questions[0])
+    records, _case, inspection, technical, profile = rf.upstreams()
+    approved = rf.bound_report()
+    approved = replace(
+        approved,
+        source_snapshot=replace(approved.source_snapshot, case_analysis_digest=app.report_upstream_digest(case)),
+        context_matrix=tuple(replace(item, source_id="DOC-001") if item.field == "REQUESTS" else item for item in approved.context_matrix),
+    )
+    return records, case, inspection, technical, profile, approved
+
+
+def _report_save_service(records, case, inspection, technical, profile, predecessor):
+    import datetime
+    import uuid
+    from contextlib import nullcontext
+
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+    from scripts.backend_contract.report_foundation import report_snapshot_to_mapping
+
+    def ns(value):
+        return SimpleNamespace(execute=lambda *_a, **_k: value)
+
+    workspace = WorkspaceId.parse(technical.workspace_id)
+    record = ArtifactRevision(workspace, "REPORT_SNAPSHOT_V1", "REPORT-SNAPSHOT", str(uuid.uuid4()), 4,
+                              "2026-09-30T12:00:00+00:00", "e" * 64, report_snapshot_to_mapping(predecessor))
+    return app.SaveReportSnapshot(
+        SimpleNamespace(append_if_latest=lambda **_k: SimpleNamespace(revision=5)),
+        ns((records[0], case)), ns((records[1], inspection)), ns((records[2], technical)), ns((records[3], profile)),
+        SimpleNamespace(execute=lambda *_a: record), nullcontext,
+        SimpleNamespace(now=lambda: datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.UTC)),
+        SimpleNamespace(new_uuid=uuid.uuid4),
+    ), workspace
+
+
+def test_report_never_answers_a_question_derived_from_an_excluded_document():
+    """Revisao da #251, rodada 6 (SA251R6-01, auditor): a UI do laudo escondia o quesito
+    derivado de peca excluida, mas o backend o EXIGIA para aprovar e ACEITAVA responde-lo.
+    Regra unica nos dois lados: o quesito excluido nao e exigido nem recebe resposta nova.
+    A resposta ja gravada sob o mesmo vinculo (laudo legado aprovado) segue regravavel."""
+    import uuid
+    from dataclasses import replace
+
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.report_foundation import ReportState
+
+    records, case, inspection, technical, profile, approved = _legacy_report_world()
+    draft = replace(approved, state=ReportState.DRAFT, review_decisions=(), answers=(), coverage=app._draft_coverage(approved, answers=()))
+    ns = lambda value: SimpleNamespace(execute=lambda *_a, **_k: value)  # noqa: E731
+    sources = app.ListReportSources(ns((records[0], case)), ns((records[1], inspection)), ns((records[2], technical))).execute(SimpleNamespace())
+    assert sources["questions"] == []  # a UI nao oferece
+
+    service, workspace = _report_save_service(records, case, inspection, technical, profile, draft)
+    amend = app.AmendReportDraft(ns((SimpleNamespace(revision=4), draft)), service, SimpleNamespace(new_uuid=uuid.uuid4),
+                                 get_case_analysis=ns((records[0], case)), get_technical_snapshot=ns((records[2], technical)))
+    with pytest.raises(ValueError, match="Report answer cannot cite a question derived"):  # o proprio comando, nao o Save
+        amend.execute(workspace, expected_revision=4, action="ANSWER_QUESTION",
+                      values={"question_id": "QUESTION-001", "finding_id": "FINDING-001", "text": "Resposta."})
+    answered = replace(draft, answers=approved.answers, coverage=app._draft_coverage(draft, answers=approved.answers))
+    with pytest.raises(ValueError, match="cannot answer a question derived"):  # resposta nova pelo Save
+        service.execute(workspace, answered, 4)
+    legacy, _workspace = _report_save_service(records, case, inspection, technical, profile, approved)
+    legacy.execute(workspace, approved, 4)  # laudo legado aprovado: mesma resposta, mesmo vinculo
+    rebound = replace(approved.source_snapshot, case_analysis_revision=approved.source_snapshot.case_analysis_revision + 1)
+    with pytest.raises(ValueError, match="cannot answer a question derived"):  # revinculo julga tudo
+        app._refuse_new_answers_to_excluded_questions(replace(approved, source_snapshot=rebound), case, approved)
+
+
+def test_report_approval_requires_only_the_questions_the_ui_offers():
+    """Com um quesito vigente e um excluido, aprovar respondendo so o vigente passa --
+    exatamente o que a UI conta como 'quesitos respondidos'."""
+    from dataclasses import replace
+
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping, case_analysis_to_mapping
+
+    records, case, inspection, technical, profile, approved = _legacy_report_world()
+    data = case_analysis_to_mapping(case)
+    effective = json.loads(json.dumps(data["questions"][0]))
+    effective["item_id"] = "QUESTION-002"
+    for index, source in enumerate(effective["provenance"]):
+        source.update(occurrence_id=f"OCC-EFFECTIVE-Q-{index}", source_document_id="DOC-001", source_document_sha256="a" * 64)
+    data["questions"].append(effective)
+    mixed = case_analysis_from_mapping(data)
+    link = technical.question_links[0]
+    technical = replace(technical, question_links=(*technical.question_links, replace(link, link_id=f"{link.link_id}-2", question_id="QUESTION-002")))
+    answer = approved.answers[0]
+    only_effective = replace(approved, answers=(replace(answer, answer_id=f"{answer.answer_id}-2", question_id="QUESTION-002"),))
+    app._validate_claim_provenance(only_effective, mixed, inspection, technical, None)
+    with pytest.raises(ValueError, match="must answer every bound technical question"):  # controle: o vigente segue exigido
+        app._validate_claim_provenance(approved, mixed, inspection, technical, None)
+
+
+def test_a_new_report_version_drops_the_answer_to_an_excluded_question_and_still_opens():
+    """A nova versao revincula o laudo (nova autorizacao): a resposta legada ao quesito
+    excluido e descartada e reportada, como uma afirmacao sem fonte -- sem isso o Save
+    recusava o rascunho inteiro e o laudo legado ficava sem proxima versao."""
+    import datetime
+    import uuid
+    from contextlib import nullcontext
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.models import _freeze_payload
+    from scripts.backend_contract.application.report_foundation import SaveReportSnapshot, StartReportVersion
+    from scripts.backend_contract.report_foundation import ReportReviewDecision, ReportState, ReviewAction, report_snapshot_to_mapping
+
+    records, case, inspection, technical, profile, approved = _legacy_report_world()
+    decision = ReportReviewDecision("REPORT-REVIEW-003", ReviewAction.SUPERSEDE, approved.expert_profile.profile_id,
+                                    "Correcao pedida pelo juizo.", "2026-08-31T12:00:00+00:00", "REPORT-REVIEW-002")
+    stored = replace(approved, review_decisions=(*approved.review_decisions, decision), state=ReportState.SUPERSEDED,
+                     coverage=replace(approved.coverage, complete=False, reasons=("Superseded.",)))
+    latest = SimpleNamespace(execute=lambda *_a: SimpleNamespace(revision=4, payload=_freeze_payload(report_snapshot_to_mapping(stored))))
+    readers = tuple(SimpleNamespace(execute=lambda _w, value=value: value) for value in (
+        (records[0], case), (records[1], inspection), (records[2], technical), (records[3], profile)))
+    ids = SimpleNamespace(new_uuid=uuid.uuid4)
+    save = SaveReportSnapshot(
+        SimpleNamespace(append_if_latest=lambda **k: SimpleNamespace(revision=5, created_at=k["created_at"])), *readers, latest, nullcontext,
+        SimpleNamespace(now=lambda: datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.UTC)), ids,
+    )
+    _record, draft, dropped = StartReportVersion(latest, *readers, save, ids).execute(stored.workspace_id, expected_revision=4)
+    assert dropped["answers"] == 1 and draft.answers == ()
+    assert draft.state is ReportState.DRAFT
+    from scripts.backend_contract.application.report_foundation import _draft_coverage
+
+    carried = replace(draft, answers=stored.answers, coverage=_draft_coverage(draft, answers=stored.answers))
+    with pytest.raises(ValueError, match="cannot answer a question derived"):  # nova versao nao herda baseline
+        save.execute(stored.workspace_id, carried, 4, allow_new_version=True)
+
+
+class _ReportStore:
+    """Uma revisao do laudo em memoria, gravada pelo Save canonico."""
+
+    def __init__(self, snapshot, revision=4):
+        self.snapshot, self.revision = snapshot, revision
+
+    def latest(self, *_a):
+        import uuid
+
+        from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+        from scripts.backend_contract.report_foundation import report_snapshot_to_mapping
+
+        return ArtifactRevision(WorkspaceId.parse(self.snapshot.workspace_id), "REPORT_SNAPSHOT_V1", "REPORT-SNAPSHOT",
+                                str(uuid.uuid4()), self.revision, "2026-09-30T12:00:00+00:00", "e" * 64,
+                                report_snapshot_to_mapping(self.snapshot))
+
+    def append(self, **kwargs):
+        from scripts.backend_contract.application.report_foundation import validated_report_snapshot_from_mapping
+
+        self.revision += 1
+        self.snapshot = validated_report_snapshot_from_mapping(json.loads(json.dumps(kwargs["payload"])))
+        return SimpleNamespace(revision=self.revision, created_at=kwargs["created_at"])
+
+
+def _legacy_report_services(kind, report=None):
+    """Laudo da era main citando item derivado de peca indisponivel desde o bootstrap:
+    `questions` -> REQUESTS cita QUESTION-001 (como a fixture canonica); `claims` -> uma
+    afirmacao cita a alegacao CLAIM-001. O digest nao muda no upgrade: nada fica stale."""
+    import datetime
+    import uuid
+    from contextlib import nullcontext
+    from dataclasses import replace
+    from pathlib import Path
+
+    import tests.test_report_foundation_v1 as rf
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+
+    root = Path(__file__).resolve().parents[1]
+    data = json.loads((root / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
+    for index, source in enumerate(data[kind][0]["provenance"]):
+        source.update(occurrence_id=f"OCC-LEGACY-{kind}-{index}", source_document_id="DOC-003", source_document_sha256="c" * 64)
+    case = case_analysis_from_mapping(data)
+    assert case.derived_from_unavailable(getattr(case, kind)[0])
+    records, _case, inspection, technical, profile = rf.upstreams()
+    report = report or rf.bound_report()
+    report = replace(report, source_snapshot=replace(report.source_snapshot, case_analysis_digest=app.report_upstream_digest(case)))
+    store = _ReportStore(report)
+    readers = tuple(SimpleNamespace(execute=lambda *_a, value=value: value) for value in (
+        (records[0], case), (records[1], inspection), (records[2], technical), (records[3], profile)))
+    latest = SimpleNamespace(execute=store.latest)
+    clock = SimpleNamespace(now=lambda: datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.UTC))
+    ids = SimpleNamespace(new_uuid=uuid.uuid4)
+    save = app.SaveReportSnapshot(SimpleNamespace(append_if_latest=store.append), *readers, latest, nullcontext, clock, ids)
+    get = app.GetReportSnapshot(latest, *readers)
+    return SimpleNamespace(
+        store=store, save=save, workspace=WorkspaceId.parse(report.workspace_id), professional=report.expert_profile.profile_id,
+        review=app.ReviewReportSnapshot(get, save, clock, ids), version=app.StartReportVersion(latest, *readers, save, ids),
+        amend=app.AmendReportDraft(get, save, ids, get_case_analysis=readers[0], get_technical_snapshot=readers[2]),
+    )
+
+
+@pytest.mark.parametrize("kind,dropped_field", [("questions", "context_fields"), ("claims", "claims")])
+def test_a_legacy_approved_report_citing_a_derived_item_can_be_superseded_and_versioned(kind, dropped_field):
+    """Revisao da #251, rodada 7 (SA251R7-01, auditor e revisor): o filtro de derivados no
+    contexto e nas afirmacoes julgava o laudo INTEIRO a cada save. Um laudo aprovado na era
+    main citando item derivado de peca indisponivel nao podia ser substituido -- e sem
+    substituir nao ha nova versao. Agora o que o predecessor ja gravava sob o MESMO vinculo
+    so e conferido em identidade; a nova versao (revinculo) descarta e reporta."""
+    from dataclasses import replace
+
+    from scripts.backend_contract.report_foundation import ReportState
+
+    w = _legacy_report_services(kind)
+    assert w.store.snapshot.state is ReportState.APPROVED
+    w.review.execute(w.workspace, action="SUPERSEDE", professional_id=w.professional, reason="Correcao.", expected_revision=w.store.revision)
+    assert w.store.snapshot.state is ReportState.SUPERSEDED
+    superseded, revision = w.store.snapshot, w.store.revision
+    carried = replace(superseded, state=ReportState.DRAFT, review_decisions=())
+    with pytest.raises(ValueError, match="provenance is not present in bound upstream authority"):  # revinculo julga tudo
+        w.save.execute(w.workspace, carried, revision, allow_new_version=True)
+    _record, draft, dropped = w.version.execute(w.workspace, expected_revision=revision)
+    assert dropped[dropped_field] and draft.state is ReportState.DRAFT
+
+
+def test_a_legacy_reviewed_report_can_still_be_approved_and_new_derived_context_is_refused():
+    from dataclasses import replace
+
+    import tests.test_report_foundation_v1 as rf
+    from scripts.backend_contract.application.report_foundation import _draft_coverage
+    from scripts.backend_contract.report_foundation import ReportState
+
+    approved = rf.bound_report()
+    reviewed = replace(approved, state=ReportState.REVIEWED, review_decisions=approved.review_decisions[:1],
+                       coverage=replace(approved.coverage, complete=False))
+    w = _legacy_report_services("questions", reviewed)
+    w.review.execute(w.workspace, action="APPROVE", professional_id=w.professional, reason="Aprovado.", expected_revision=w.store.revision)
+    assert w.store.snapshot.state is ReportState.APPROVED
+
+    requests = next(item for item in approved.context_matrix if item.field == "REQUESTS")
+    assert requests.source_id == "QUESTION-001"
+    context = tuple(replace(item, source_id="DOC-001") if item.field == "REQUESTS" else item for item in approved.context_matrix)
+    clean = replace(approved, state=ReportState.DRAFT, review_decisions=(), context_matrix=context,
+                    coverage=_draft_coverage(approved, context=context))
+    w = _legacy_report_services("questions", clean)
+    with pytest.raises(ValueError, match="context provenance is not present"):  # citar o derivado e autoridade NOVA
+        w.amend.execute(w.workspace, expected_revision=w.store.revision, action="UPDATE_CONTEXT",
+                        values={"field": "REQUESTS", "status": "PRESENT", "source_id": "QUESTION-001", "note": requests.note})
+    assert next(item for item in w.store.snapshot.context_matrix if item.field == "REQUESTS").source_id == "DOC-001"
+    w.amend.execute(w.workspace, expected_revision=w.store.revision, action="UPDATE_CONTEXT",  # controle: fonte vigente
+                    values={"field": "REQUESTS", "status": "PRESENT", "source_id": "DOC-002", "note": requests.note})
+    assert next(item for item in w.store.snapshot.context_matrix if item.field == "REQUESTS").source_id == "DOC-002"

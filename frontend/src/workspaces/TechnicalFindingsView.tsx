@@ -1,5 +1,5 @@
 import { type FormEvent, useEffect, useState } from "react";
-import { getCaseAnalysis, type CaseAnalysisEnvelope } from "../data/caseAnalysis";
+import { derivedFromUnavailable, getCaseAnalysis, unavailableDocumentIds, type CaseAnalysisEnvelope } from "../data/caseAnalysis";
 import { usePrefilledProfessional, useExpertIdentity } from "../data/expertIdentity";
 import { getInspectionSession, type InspectionEnvelope } from "../data/inspectionSession";
 import { actionLabel, authorityLabel, documentTypeLabel, formatDateTime, stateLabel } from "../ui/labels";
@@ -18,11 +18,13 @@ function sourceOptions(kind: string, inspection: InspectionEnvelope | null, anal
   if (kind === "MEASUREMENT") return (field?.measurements ?? []).map((item) => ({ id: item.measurement_id, label: `${item.quantity}: ${item.raw_value} ${item.raw_unit}${item.raw_observation ? ` · ${item.raw_observation}` : ""}` }));
   if (kind === "FIELD_OBSERVATION") return (field?.observations ?? []).map((item) => ({ id: item.observation_id, label: item.raw_observation }));
   if (kind === "PHOTO_RECORD") return (field?.photos ?? []).map((item) => ({ id: item.photo_id, label: item.caption }));
-  if (kind === "DOCUMENTED_ALLEGATION") return (caseMap?.claims ?? []).flatMap((claim) => claim.provenance.map((source) => ({ id: source.occurrence_id, label: `${claim.text} · ${source.page_or_span}` })));
+  // Espelha _validate_upstream_links: peça fora da análise não é autoridade, nem pelos derivados.
+  const unavailable = caseMap ? unavailableDocumentIds(caseMap) : new Set<string>();
+  if (kind === "DOCUMENTED_ALLEGATION") return (caseMap?.claims ?? []).flatMap((claim) => claim.provenance.filter((source) => !unavailable.has(source.source_document_id)).map((source) => ({ id: source.occurrence_id, label: `${claim.text} · ${source.page_or_span}` })));
   // A question answered through this chain is cited as its own evidence; the
   // finding it supports is what the report's answer to that question binds.
-  if (kind === "CASE_QUESTION") return (caseMap?.questions ?? []).map((question) => ({ id: question.item_id, label: question.text }));
-  if (kind === "CASE_DOCUMENT") return (caseMap?.documents ?? []).map((document) => ({ id: String(document.document_id), label: `${documentTypeLabel(String(document.raw_type))} · ${String(document.page_count_or_span)}` }));
+  if (kind === "CASE_QUESTION") return (caseMap?.questions ?? []).filter((question) => !derivedFromUnavailable(question, unavailable)).map((question) => ({ id: question.item_id, label: question.text }));
+  if (kind === "CASE_DOCUMENT") return (caseMap?.documents ?? []).filter((document) => !unavailable.has(String(document.document_id))).map((document) => ({ id: String(document.document_id), label: `${documentTypeLabel(String(document.raw_type))} · ${String(document.page_count_or_span)}` }));
   return [];
 }
 

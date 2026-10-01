@@ -28,6 +28,7 @@ from scripts.backend_contract.application.case_analysis import (
     validated_case_analysis_from_mapping,
 )
 from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+from scripts.backend_contract.application.ports import RepositoryConflict
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -472,7 +473,13 @@ def test_effective_review_projection_preserves_source_and_dedicated_command_owns
     )
     calls = []
     service = ReviewCaseAnalysisItem(
-        SimpleNamespace(execute=lambda _workspace: (record, snapshot)),
+        # AUDITOR_TEST_CHANGED | RESPONSE_SHAPE_ADAPTATION
+        # Os comandos deixaram de partir do snapshot PROJETADO e passaram a
+        # partir do persistido, com a disponibilidade vigente ao lado. O duble
+        # precisa oferecer o contrato real: se ele caisse de volta em `execute`,
+        # o teste voltaria a exercitar justamente o caminho que causava a
+        # paralisia da analise apos uma exclusao profissional.
+        SimpleNamespace(execute_for_command=lambda _workspace: (record, snapshot, {})),
         SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(revision=2)),
         SimpleNamespace(now=lambda: datetime(2026, 8, 31, 12, tzinfo=UTC)),
         SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
@@ -560,7 +567,8 @@ def test_typed_item_command_resolves_sha_server_side_and_preserves_append_only_s
     )
     calls = []
     service = AddCaseAnalysisItem(
-        SimpleNamespace(execute=lambda _workspace: (record, original)),
+        # AUDITOR_TEST_CHANGED | RESPONSE_SHAPE_ADAPTATION (ver acima)
+        SimpleNamespace(execute_for_command=lambda _workspace: (record, original, {})),
         SimpleNamespace(execute=lambda *args, **kwargs: calls.append((args, kwargs)) or SimpleNamespace(revision=2)),
         SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888")),
     )
@@ -608,3 +616,47 @@ def test_openapi_exposes_only_minimum_case_analysis_operations_and_canonical_sch
     assert path["get"]["responses"]["200"]["content"]["application/json"]["schema"] == {
         "$ref": "#/components/schemas/CaseAnalysisEnvelope"
     }
+
+
+@pytest.mark.parametrize("command", ["item", "review"])
+def test_real_source_drift_still_blocks_commands_after_exclusion_left_the_drift_channel(command):
+    """Negativo do SA-03: tirar a exclusao profissional de `stale_document_ids` nao
+    pode transformar deriva VERDADEIRA de fonte em verde.
+
+    Os comandos passaram a partir do snapshot persistido (`execute_for_command`), mas
+    continuam reconciliando o hash da fonte. Se os bytes sob um documento mudaram,
+    nada pode ser construido sobre eles. O controle sem deriva alcanca o save -- sem
+    ele, uma recusa por qualquer outro motivo deixaria o teste verde a toa.
+    """
+    snapshot = case_analysis_from_mapping(fixture())
+    record = ArtifactRevision(
+        workspace_id=WorkspaceId.parse(snapshot.workspace_id), artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+        artifact_id="CASE-ANALYSIS", revision_id="99999999-9999-4999-8999-999999999999",
+        revision=1, created_at="2026-08-30T12:00:00+00:00", checksum_sha256="0" * 64,
+        payload=case_analysis_to_mapping(snapshot),
+    )
+    latest = SimpleNamespace(execute=lambda *_args: record)
+    workspace = WorkspaceId.parse(snapshot.workspace_id)
+    ids = SimpleNamespace(new_uuid=lambda: UUID("88888888-8888-4888-8888-888888888888"))
+    clock = SimpleNamespace(now=lambda: datetime(2026, 8, 31, 12, tzinfo=UTC))
+
+    def run(changed_document_id):
+        saved = []
+        save = SimpleNamespace(execute=lambda *args, **kwargs: saved.append(args) or SimpleNamespace(revision=2))
+        documents = SimpleNamespace(execute=lambda _w: _authoritative_documents(snapshot, changed_document_id=changed_document_id))
+        get = GetCaseAnalysis(latest, documents)
+        if command == "item":
+            AddCaseAnalysisItem(get, save, ids).execute(
+                workspace, item_kind="EVIDENCE_GAP", text="Lacuna sintetica.", source_document_id="DOC-001",
+                page_or_span="p. 1", technical_subjects=("tema",), values={}, expected_revision=1,
+            )
+        else:
+            ReviewCaseAnalysisItem(get, save, clock, ids).execute(
+                workspace, target_item_id="CLAIM-001", action="CONFIRM", corrected_value=None,
+                reviewer="PERITO-SYNTHETIC", reason="Revisao sintetica.", expected_revision=1,
+            )
+        return saved
+
+    assert run(None), "controle: sem deriva, o comando precisa alcancar o save"
+    with pytest.raises(RepositoryConflict, match="source or revision is stale"):
+        run("DOC-002")

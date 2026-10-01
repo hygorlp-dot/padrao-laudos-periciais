@@ -189,10 +189,30 @@ def _binding(workspace_id, authorities: _Authorities) -> ConstructionDefectSourc
     )
 
 
+def _excluded_source_reasons(snapshot: ConstructionDefectAnalysisSnapshot, case) -> tuple[str, ...]:
+    """Alegacao ou quesito vinculado a um PAT que hoje deriva de peca excluida.
+
+    A exclusao grava so o inventario PJe; o registro persistido da Analise do Caso nao
+    muda, entao o vinculo por checksum nao a percebe. Sem isto, um PAT aprovado ANTES
+    da exclusao seguia autoridade do laudo apoiado na peca que o perito retirou.
+    Reabilitar a peca desfaz o motivo -- nada e reescrito.
+    """
+    if case is None:
+        return ()
+    items = {item.item_id: item for item in (*case.claims, *case.questions)}
+    for context in snapshot.observation_contexts:
+        for item_id in (*context.claim_ids, *context.question_ids):
+            item = items.get(item_id)
+            if item is not None and case.derived_from_unavailable(item):
+                return ("Case Analysis source excluded by the professional",)
+    return ()
+
+
 def _reconcile(
     snapshot: ConstructionDefectAnalysisSnapshot,
     *,
     current: ConstructionDefectSourceSnapshot,
+    case=None,
 ) -> ConstructionDefectAnalysisSnapshot:
     bound = snapshot.source_snapshot
     comparisons = (
@@ -210,6 +230,7 @@ def _reconcile(
         (bound.source_revision, current.source_revision, "upstream source revision changed"),
     )
     reasons = tuple(reason for actual, expected, reason in comparisons if actual != expected)
+    reasons = (*reasons, *_excluded_source_reasons(snapshot, case))
     return replace(
         snapshot,
         upstream_stale=bool(reasons),
@@ -318,7 +339,7 @@ class SaveConstructionDefectAnalysis:
                 get_planning=self.get_planning,
                 get_inspection=self.get_inspection,
             )
-            if _reconcile(snapshot, current=_binding(workspace_id, authorities)).upstream_stale:
+            if _reconcile(snapshot, current=_binding(workspace_id, authorities), case=authorities.case_analysis).upstream_stale:
                 raise ValueError("Construction Defect Analysis upstream authority is stale")
             now = self.clock.now()
             if now.tzinfo is None or now.utcoffset() is None:
@@ -363,7 +384,7 @@ class GetConstructionDefectAnalysis:
             get_inspection=self.get_inspection,
         )
         return record, _reconcile(
-            snapshot, current=_binding(workspace_id, authorities)
+            snapshot, current=_binding(workspace_id, authorities), case=authorities.case_analysis
         )
 
 

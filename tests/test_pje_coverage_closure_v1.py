@@ -23,6 +23,9 @@ def _request(runtime, method, path, *, value=None, body=None, headers=None):
     status, _headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
         headers={"X-Local-API-Token": TOKEN, **(headers or {})},
+        # Limite canonico do cliente de teste (teto do LocalServerConfig), o mesmo de
+        # test_pje_multisource_identity_v1: importar PJe passa de 5 s em runner carregado.
+        timeout=30.0,
     )
     return status, json.loads(raw) if raw else None
 
@@ -186,3 +189,219 @@ def test_S08_party_table_interrupted_is_recorded_not_discarded(tmp_path):
     body = inspect.getsource(services._pje_inventory_payload)
     assert "final_state" in body, "o construtor do inventario voltou a descartar o sinal"
     assert "PJE_TABELA_PARTES_INTERROMPIDA" in body
+
+
+def _duplicated_index_pje_pdf(path):
+    """Export cujo indice lista o MESMO documento duas vezes.
+
+    Caso real: reexportacao concatenada, ou autos em dois volumes baixados
+    juntos. `validar_integridade` responde por `erros` -- e `erros` e uma lista
+    de STRING, ao contrario de `conflitos` e `pendencias`, que sao registros.
+    """
+    from pypdf import PdfReader, PdfWriter
+
+    base = path.with_name(f"base-{path.name}")
+    pdf_sintetico(base)
+    reader = PdfReader(str(base))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    for page in list(reader.pages)[1:]:
+        writer.add_page(page)
+    with open(path, "wb") as handle:
+        writer.write(handle)
+    return path
+
+
+def test_SA02_a_manifest_error_is_recorded_as_BLOCKED_not_raised_as_internal_error(tmp_path):
+    """O canal `erros` do manifesto e o que mais marca BLOQUEADO -- e era o unico
+    que nunca chegava a ser registrado.
+
+    Os tres canais de diagnostico tem formas diferentes (`erros` sao strings;
+    `conflitos` e `pendencias` sao registros). Trata-los como uma forma so
+    levantava `AttributeError`, que nao esta em `_NOT_A_READABLE_PJE_EXPORT` e
+    portanto escapava da porta como erro interno: 500 na importacao e 404 no
+    inventario, exatamente onde o produto deveria dizer "e um PJe, e nao consegui
+    separa-lo, e aqui esta o porque".
+    """
+    pdf = _duplicated_index_pje_pdf(tmp_path / "duplicado.pdf")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id = _workspace(runtime)
+        # `_import` ja afirma 201: hoje isto e 500, porque a excecao escapa da porta.
+        _import(runtime, workspace_id, pdf, "duplicado.pdf")
+
+        status, envelope = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        assert status == 200, envelope
+        inventory = envelope["intakes"][0]["inventory"]
+        assert inventory["status"] == "BLOCKED"
+        assert inventory["diagnostics"], "um BLOCKED sem diagnostico nao diz por que"
+        # A identidade do documento divergente precisa sobreviver ao diagnostico:
+        # sem ela o perito sabe que falhou, mas nao onde.
+        codes = {item["code"] for item in inventory["diagnostics"]}
+        assert "DOC-PJE-001" in codes, codes
+        assert all(item["detail"] for item in inventory["diagnostics"])
+
+        # E a consequencia: nada disso pode fechar cobertura.
+        assert _coverage(runtime, workspace_id)["status"] != "COMPLETE"
+    finally:
+        runtime.close()
+
+
+
+def test_SA251_02_an_import_that_fails_after_storing_bytes_never_yields_complete_coverage(tmp_path):
+    """Auditoria da #251 (SA251-02, P1; era o SA-06 de setembro, nunca reparado).
+
+    A importacao grava os bytes ANTES de extrair e derivar o inventario PJe. Uma falha
+    inesperada nesse intervalo respondia 500 -- correto -- mas a fonte ficava gravada e
+    a Analise do Caso fechava COMPLETE "analisando" algo que nunca foi lido.
+
+    O armazenamento privado nao tem descarte (e cria-lo mexeria na fronteira de
+    confianca), entao o reparo e na mentira, nao nos bytes: fonte cuja importacao nao
+    chegou ao fim nao conta como analisada. Controle: a mesma composicao com um adapter
+    que funciona fecha COMPLETE.
+    """
+    from scripts.backend_contract.local_api.composition import build_local_api
+    from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
+
+    class _Explodes:
+        def logical_inventory(self, *_args, **_kwargs):
+            raise RuntimeError("falha inesperada sintetica na derivacao PJe")
+
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-falha")
+    for name, adapter, expected_import, complete in (
+        ("controle", PjeIntakeAdapter(), 201, True),
+        ("falha", _Explodes(), 500, False),
+    ):
+        private = tmp_path / f"private-{name}"
+        provision_private_root(private)
+        runtime = build_local_api(tmp_path / f"{name}.sqlite3", private_root=private, token=TOKEN, pje_intake=adapter)
+        runtime.start()
+        try:
+            _s, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": name})
+            workspace_id = workspace["workspace_id"]
+            status, _material = _request(
+                runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+                headers={"Content-Type": "application/pdf", "X-Document-Filename": "a.pdf"},
+            )
+            assert status == expected_import, (name, status)
+            coverage = _coverage(runtime, workspace_id)
+            assert (coverage["status"] == "COMPLETE") is complete, (name, coverage)
+            if not complete:
+                assert coverage["documents_failed"] >= 1, coverage
+        finally:
+            runtime.close()
+
+
+
+def test_SA251R_02_an_unreadable_pdf_never_counts_as_analysed(tmp_path):
+    """Auditoria da #251 (SA251R-02): PDF que nenhum leitor conseguiu ler (cifrado) era
+    importado com 201 e fechava COMPLETE 1/1 com zero paginas lidas.
+
+    "Nao consegui ler" nao e "li e nao ha nada": `text_state` ERROR ou sem texto nao
+    conta como analisado. Controle: um PDF legivel, na mesma composicao, fecha COMPLETE.
+    """
+    from tests.test_pje_workspace_bridge_v1 import _encrypted_pdf
+
+    def _blank_pdf():
+        import io
+
+        from pypdf import PdfWriter
+
+        writer = PdfWriter()
+        for _ in range(2):
+            writer.add_blank_page(width=612, height=792)
+        buffer = io.BytesIO()
+        writer.write(buffer)
+        return buffer.getvalue()
+
+    for name, body, complete in (
+        ("legivel", _distinct_pje_pdf(tmp_path / "ok.pdf", "legivel").read_bytes(), True),
+        ("cifrado", _encrypted_pdf(), False),  # text_state ERROR
+        ("em_branco", _blank_pdf(), False),  # text_state TEXT_EXTRACTION_UNAVAILABLE
+    ):
+        runtime = _runtime(tmp_path, f"{name}.sqlite3")
+        try:
+            workspace_id = _workspace(runtime)
+            status, _payload = _request(
+                runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=body,
+                headers={"Content-Type": "application/pdf", "X-Document-Filename": f"{name}.pdf"},
+            )
+            assert status == 201, (name, status)
+            coverage = _coverage(runtime, workspace_id)
+            assert (coverage["status"] == "COMPLETE") is complete, (name, coverage)
+            if not complete:
+                assert coverage["documents_analyzed"] == 0 and coverage["documents_failed"] == 1, coverage
+        finally:
+            runtime.close()
+
+
+def test_F1_a_failure_after_the_pje_inventory_step_still_leaves_the_import_incomplete(tmp_path):
+    """Revisao da #251 (F1): os metadados eram gravados ANTES do inventario PJe, entao
+    uma falha depois deles (inventario invalido, por exemplo) deixava a fonte parecendo
+    concluida e a cobertura fechava COMPLETE sobre um export nunca decomposto.
+
+    Agora os metadados sao a ULTIMA escrita. O adapter devolve um inventario OK
+    estruturalmente invalido: a validacao recusa e nada conta como analisado.
+    """
+    from scripts.backend_contract.local_api.composition import build_local_api
+    from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
+
+    class _InvalidInventory:
+        def logical_inventory(self, pdf_path, staging_dir=None):
+            real = PjeIntakeAdapter().logical_inventory(pdf_path, staging_dir)
+            assert real["status"] == "OK"
+            return {**real, "documents": [{**real["documents"][0], "page_start": 0}]}
+
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "inventario-invalido")
+    private = tmp_path / "private-f1"
+    provision_private_root(private)
+    runtime = build_local_api(tmp_path / "f1.sqlite3", private_root=private, token=TOKEN, pje_intake=_InvalidInventory())
+    runtime.start()
+    try:
+        workspace_id = _workspace(runtime)
+        status, _material = _request(
+            runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
+            headers={"Content-Type": "application/pdf", "X-Document-Filename": "a.pdf"},
+        )
+        assert status >= 400, status
+        coverage = _coverage(runtime, workspace_id)
+        assert coverage["status"] != "COMPLETE" and coverage["documents_failed"] >= 1, coverage
+    finally:
+        runtime.close()
+
+
+def test_reimport_after_an_incomplete_pje_import_recovers_the_decomposition(tmp_path):
+    """Importacao interrompida e recuperavel: reimportar os mesmos bytes com o leitor
+    sadio e idempotente (200) e deriva o inventario que faltava."""
+    from scripts.backend_contract.local_api.composition import build_local_api
+    from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
+
+    class _Explodes:
+        def logical_inventory(self, *_a, **_k):
+            raise RuntimeError("falha sintetica")
+
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "reimport")
+    private = tmp_path / "private-reimport"
+    provision_private_root(private)
+    database = tmp_path / "reimport.sqlite3"
+
+    runtime = build_local_api(database, private_root=private, token=TOKEN, pje_intake=_Explodes())
+    runtime.start()
+    try:
+        workspace_id = _workspace(runtime)
+        headers = {"Content-Type": "application/pdf", "X-Document-Filename": "a.pdf"}
+        status, _ = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(), headers=headers)
+        assert status == 500
+    finally:
+        runtime.close()
+
+    runtime = build_local_api(database, private_root=private, token=TOKEN, pje_intake=PjeIntakeAdapter())
+    runtime.start()
+    try:
+        status, _ = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(), headers=headers)
+        assert status == 200, "reimportar os mesmos bytes e idempotente"
+        status, envelope = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
+        assert status == 200 and envelope["intakes"][0]["inventory"]["status"] == "OK", envelope
+    finally:
+        runtime.close()

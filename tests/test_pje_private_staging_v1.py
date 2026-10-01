@@ -25,6 +25,9 @@ def _request(runtime, method, path, *, value=None, body=None, headers=None):
     status, _headers, raw = http_request(
         runtime.server, method, path, value=value, raw_body=body,
         headers={"X-Local-API-Token": TOKEN, **(headers or {})},
+        # Limite canonico do cliente de teste (teto do LocalServerConfig), o mesmo de
+        # test_pje_multisource_identity_v1: importar PJe passa de 5 s em runner carregado.
+        timeout=30.0,
     )
     return status, json.loads(raw) if raw else None
 
@@ -157,3 +160,143 @@ def test_no_windows_handle_survives_the_adapter(tmp_path):
     pdf.rename(moved)
     moved.unlink()
     assert not moved.exists()
+
+
+def _damaged_corpus(source: Path, count: int = 24) -> list[bytes]:
+    """PDFs deterministicamente corrompidos a partir de um export PJe valido.
+
+    O corpus hostil anterior tinha duas entradas -- cifrado e truncado -- e
+    ambas falham ANTES de `pdfplumber.open()` tomar o handle. A classe que
+    vazava era outra: o arquivo abre normalmente e so estoura na analise
+    preguicosa, as vezes dentro do proprio `close()`. Sem corromper bytes ao
+    acaso com semente fixa, essa classe nao aparece.
+    """
+    import random
+
+    raw = bytearray(source.read_bytes())
+    rng = random.Random(20260902)
+    corpus = []
+    for _ in range(count):
+        data = bytearray(raw)
+        for _ in range(rng.randint(1, 6)):
+            data[rng.randrange(len(data))] = rng.randrange(256)
+        corpus.append(bytes(data))
+    return corpus
+
+
+def test_SA01_a_damaged_pdf_never_strands_private_bytes_nor_returns_an_internal_error(
+    tmp_path, monkeypatch
+):
+    """Autos privados nao podem ficar no %TEMP%, e PDF danificado nao e erro interno.
+
+    Os dois sintomas tem a mesma raiz. `LeitorPdf.fechar` fechava so o
+    pdfplumber -- e sem protecao, embora seja exatamente ali que a analise
+    preguicosa estoura num arquivo danificado -- e nunca fechava o pypdf. Com o
+    handle vivo, o Windows recusa remover o diretorio temporario, e o PDF
+    privado inteiro fica para tras a cada tentativa.
+
+    O 500 vinha do mesmo desencontro: os dois leitores discordavam do total de
+    paginas e o percurso estourava `IndexError`, que nao e uma familia de
+    "PDF ilegivel" e portanto escapava da porta.
+    """
+    created = _watch_temp_dirs(monkeypatch)
+    valid = tmp_path / "autos.pdf"
+    pdf_sintetico(valid)
+
+    statuses = set()
+    runtime = _runtime(tmp_path, "damaged.sqlite3")
+    try:
+        _s, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "danificado"})
+        workspace_id = workspace["workspace_id"]
+        for index, body in enumerate(_damaged_corpus(valid)):
+            status, _payload = _request(
+                runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=body,
+                headers={"Content-Type": "application/pdf",
+                         "X-Document-Filename": f"danificado-{index}.pdf"},
+            )
+            statuses.add(status)
+    finally:
+        runtime.close()
+
+    survivors = [r["root"] for r in created if Path(r["root"]).exists()]
+    assert survivors == [], f"autos privados sobreviveram em area temporaria: {survivors}"
+    assert 500 not in statuses, (
+        f"PDF danificado e entrada ordinariamente invalida, nao falha interna: {sorted(statuses)}"
+    )
+
+
+def test_SA01_readers_that_disagree_on_page_count_are_refused(tmp_path):
+    """Truncar para o menor dos dois violaria a contagem exata de paginas.
+
+    Se um leitor ve 4 paginas e o outro ve 3, nao existe resposta parcial
+    honesta: qualquer pagina lida pode pertencer a outra. Recusar e a unica
+    saida que nao inventa conteudo nem perde conteudo em silencio.
+    """
+    from scripts.extracao_pje.leitor_pdf import LeitorPdf, PdfIlegivel
+
+    pdf = tmp_path / "divergente.pdf"
+    pdf_sintetico(pdf)
+
+    class _PlumberCurto:
+        pages = ()
+
+        def close(self):
+            return None
+
+    import scripts.extracao_pje.leitor_pdf as modulo
+
+    original = modulo.pdfplumber.open
+    modulo.pdfplumber.open = lambda *_a, **_k: _PlumberCurto()
+    try:
+        with pytest.raises(PdfIlegivel, match="total de paginas"):
+            LeitorPdf(pdf)
+    finally:
+        modulo.pdfplumber.open = original
+
+    # E a recusa precisa ser legivel como "PDF ilegivel" por quem ja trata isso.
+    from pypdf.errors import PyPdfError
+
+    assert issubclass(PdfIlegivel, PyPdfError)
+
+
+
+def test_SA251_03_a_corrupt_page_tree_is_an_unreadable_pdf_not_an_internal_error(tmp_path):
+    """Auditoria da #251 (SA251-03): percorrer uma arvore de paginas corrompida faz o
+    pypdf estourar com erro cru (AttributeError). Isso escapava como 500.
+
+    Erros proprios do pypdf continuam passando intactos (ja sao "PDF ilegivel"); o
+    resto vira `PdfIlegivel`, preservando a causa, e os dois leitores sao soltos.
+    """
+    from pypdf.errors import PdfReadError
+
+    import scripts.extracao_pje.leitor_pdf as modulo
+    from scripts.extracao_pje.leitor_pdf import LeitorPdf, PdfIlegivel
+
+    pdf = tmp_path / "arvore.pdf"
+    pdf_sintetico(pdf)
+    closed = []
+
+    class _ArvoreQuebrada:
+        def __init__(self, failure):
+            self._failure = failure
+
+        @property
+        def pages(self):
+            raise self._failure
+
+        def close(self):
+            closed.append("pypdf")
+
+    original = modulo.PdfReader
+    try:
+        modulo.PdfReader = lambda *_a, **_k: _ArvoreQuebrada(AttributeError("'NullObject' object has no attribute 'get'"))
+        with pytest.raises(PdfIlegivel, match="arvore de paginas ilegivel: AttributeError") as caught:
+            LeitorPdf(pdf)
+        assert isinstance(caught.value.__cause__, AttributeError)
+        assert "pypdf" in closed, "o handle do pypdf ficou aberto"
+
+        modulo.PdfReader = lambda *_a, **_k: _ArvoreQuebrada(PdfReadError("xref quebrado"))
+        with pytest.raises(PdfReadError, match="xref quebrado"):
+            LeitorPdf(pdf)
+    finally:
+        modulo.PdfReader = original

@@ -348,6 +348,30 @@ class CaseAnalysisSnapshot:
             *self.conflicts,
         )
 
+    @property
+    def unavailable_document_ids(self) -> frozenset[str]:
+        """Documentos logicos fora do estado efetivo (excluidos pelo perito ou nunca disponiveis)."""
+        return frozenset(document.document_id for document in self.documents if not document.content_available)
+
+    def derived_from_unavailable(self, item) -> bool:
+        """O item (ou participante do JDM) cita como fonte um documento fora do estado efetivo?
+
+        E o sinal que substitui, para os consumidores a jusante, o que antes vinha
+        misturado em `stale_document_ids`. Aquele canal e de DERIVA DE FONTE e, se
+        recebesse a exclusao, congelaria a analise inteira; este diz apenas "nao
+        construa autoridade sobre este item" -- Planejamento, laudo e Constatacoes
+        Tecnicas recusam, o perito resolve rejeitando o item ou reabilitando a peca.
+        """
+        # Regra uniforme, SEM isencao para lacunas. No produto nao ha caminho legitimo
+        # para uma lacuna citar documento indisponivel: a importacao nasce disponivel e
+        # `AddCaseAnalysisItem` recusa fonte excluida. Toda lacuna que cita uma peca hoje
+        # indisponivel foi, portanto, extraida dela enquanto estava disponivel -- e e
+        # derivada como qualquer item. (Isentar pelo tipo, e depois pelo `stale` da
+        # projecao, deixou escapar a lacuna criada numa janela de reabilitacao.) Uma
+        # lacuna sobre anexo ausente cita a peca que MENCIONA o anexo, nao o anexo.
+        unavailable = self.unavailable_document_ids
+        return any(source.source_document_id in unavailable for source in item.provenance)
+
     def effective_reviewed_value(self, item_id: str) -> str | None:
         """Return the reviewed semantic value without mutating source extraction."""
         item = next((candidate for candidate in self.material_items if candidate.item_id == item_id), None)
@@ -376,9 +400,22 @@ class CaseAnalysisSnapshot:
 
         A projecao resolve isso na LEITURA, como ja se faz com hash de fonte: o
         documento excluido deixa de estar disponivel no estado efetivo, a
-        cobertura e recomputada, e ele entra em `stale_document_ids` para que
-        tudo o que dele derivou seja marcado como carente de revisao em vez de
-        seguir se declarando valido.
+        cobertura e recomputada, e tudo o que dele derivou e marcado como
+        carente de revisao em vez de seguir se declarando valido.
+
+        O que a projecao NAO faz e alimentar `stale_document_ids`. Esse campo e
+        o canal de DERIVA DE FONTE -- "os bytes por baixo deste documento
+        mudaram, nao construa mais nada sobre eles" -- e todo comando a jusante
+        o trata como fatal. Uma exclusao profissional nao e deriva de fonte: e o
+        perito estreitando o escopo de proposito. Conflatar as duas paralisava a
+        analise inteira (novos itens e revisoes humanas passavam a responder
+        409, mesmo citando OUTRO documento), e a unica saida era o perito
+        desfazer a propria decisao -- ou seja, o sistema forcava o abandono do
+        juizo profissional que esta funcionalidade existe para registrar.
+
+        A exclusao continua tendo dentes onde importa: o documento sai do estado
+        efetivo, a cobertura deixa de fechar, os itens derivados ficam `stale` e
+        as guardas de autoridade a jusante recusam cita-lo como fonte.
         """
         revised = {
             document.document_id: availability[document.document_id]
@@ -401,6 +438,8 @@ class CaseAnalysisSnapshot:
             else CoverageStatus.PARTIAL if analyzed
             else CoverageStatus.UNAVAILABLE
         )
+        # `changed` marca os itens derivados; `stale_document_ids` permanece
+        # reservado a deriva de fonte e NAO recebe a decisao profissional.
         changed = tuple(sorted(set(self.stale_document_ids) | set(revised)))
 
         def stale(items):
@@ -428,7 +467,6 @@ class CaseAnalysisSnapshot:
             technical_document_references=stale(self.technical_document_references),
             gaps=stale(self.gaps),
             conflicts=stale(self.conflicts),
-            stale_document_ids=changed,
         )
 
     def reconcile_sources(self, source_hashes: dict[str, str]):

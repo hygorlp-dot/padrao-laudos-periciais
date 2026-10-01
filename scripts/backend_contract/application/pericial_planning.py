@@ -44,6 +44,45 @@ def validated_pericial_planning_from_mapping(value: object) -> PlanningSnapshot:
         raise ValueError("invalid Pericial Planning payload") from exc
 
 
+def _refuse_new_references_to_unavailable_documents(analysis, snapshot, previous=None) -> None:
+    """Unica guarda: recusa o que o snapshot PASSA a referenciar sobre peca indisponivel.
+
+    O Start monta o plano a partir dos itens efetivos e o grava pela criacao do Save, entao
+    esta guarda cobre os dois caminhos; uma guarda separada no Start era redundante.
+
+    Recusar tudo que estivesse derivado (como no Start) travava planos legados: um plano
+    criado na main sobre uma lacuna que citava a propria peca ausente ficava com toda
+    decisao recusada -- inclusive sobre itens sem relacao nenhuma com a peca. Criar um
+    plano (sem predecessor) continua exigindo que nenhuma referencia seja derivada;
+    numa atualizacao, so as referencias NOVAS sao julgadas.
+    """
+    # O predecessor so serve de baseline se o plano continua autorizado pela MESMA analise.
+    # Revincular o plano (trocar digest/revisao da Analise do Caso) e uma nova autorizacao:
+    # tudo volta a ser julgado, como numa criacao.
+    if previous is not None and (
+        previous.plan.case_analysis_digest != snapshot.plan.case_analysis_digest
+        or previous.plan.case_analysis_revision != snapshot.plan.case_analysis_revision
+    ):
+        previous = None
+
+    def referenced(planning):
+        # Pares (item do plano, item da analise): um item NOVO que cita um derivado ja
+        # citado por outro item tambem e uma referencia nova.
+        return {
+            (item.item_id, item_id)
+            for item in planning.material_items for item_id in item.derivation.case_analysis_item_ids
+        }
+
+    derived = {item.item_id for item in analysis.material_items if analysis.derived_from_unavailable(item)}
+    introduced = referenced(snapshot) - (referenced(previous) if previous is not None else set())
+    offending = sorted({item_id for _plan_item, item_id in introduced if item_id in derived})
+    if offending:
+        raise ValueError(
+            "Pericial Planning cannot build on items derived from a document excluded by the professional: "
+            + ", ".join(offending)
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class SavePericialPlanning:
     revisions: object
@@ -73,6 +112,8 @@ class SavePericialPlanning:
         analysis_record, analysis = self.get_case_analysis.execute(workspace_id)
         if analysis.stale_document_ids or analysis.source_inventory_stale:
             raise ValueError("stale Case Analysis cannot authorize Pericial Planning")
+        if expected_revision is None:
+            _refuse_new_references_to_unavailable_documents(analysis, snapshot)
         validate_against_case_analysis(snapshot, analysis, artifact_revision=analysis_record.revision)
         if expected_revision is not None:
             previous_record = self.get_latest_revision.execute(
@@ -83,6 +124,7 @@ class SavePericialPlanning:
             if previous_record.revision != expected_revision:
                 raise ValueError("expected Pericial Planning revision is not latest")
             previous = validated_pericial_planning_from_mapping(thaw_payload(previous_record.payload))
+            _refuse_new_references_to_unavailable_documents(analysis, snapshot, previous)
             _validate_append_only_history(previous, snapshot)
             if not allow_review_transition and snapshot.decisions != previous.decisions:
                 raise ValueError("Pericial Planning decisions require the professional review command")
