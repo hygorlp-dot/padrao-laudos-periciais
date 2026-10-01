@@ -1101,3 +1101,118 @@ def test_a_new_report_version_drops_the_answer_to_an_excluded_question_and_still
     carried = replace(draft, answers=stored.answers, coverage=_draft_coverage(draft, answers=stored.answers))
     with pytest.raises(ValueError, match="cannot answer a question derived"):  # nova versao nao herda baseline
         save.execute(stored.workspace_id, carried, 4, allow_new_version=True)
+
+
+class _ReportStore:
+    """Uma revisao do laudo em memoria, gravada pelo Save canonico."""
+
+    def __init__(self, snapshot, revision=4):
+        self.snapshot, self.revision = snapshot, revision
+
+    def latest(self, *_a):
+        import uuid
+
+        from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+        from scripts.backend_contract.report_foundation import report_snapshot_to_mapping
+
+        return ArtifactRevision(WorkspaceId.parse(self.snapshot.workspace_id), "REPORT_SNAPSHOT_V1", "REPORT-SNAPSHOT",
+                                str(uuid.uuid4()), self.revision, "2026-09-30T12:00:00+00:00", "e" * 64,
+                                report_snapshot_to_mapping(self.snapshot))
+
+    def append(self, **kwargs):
+        from scripts.backend_contract.application.report_foundation import validated_report_snapshot_from_mapping
+
+        self.revision += 1
+        self.snapshot = validated_report_snapshot_from_mapping(json.loads(json.dumps(kwargs["payload"])))
+        return SimpleNamespace(revision=self.revision, created_at=kwargs["created_at"])
+
+
+def _legacy_report_services(kind, report=None):
+    """Laudo da era main citando item derivado de peca indisponivel desde o bootstrap:
+    `questions` -> REQUESTS cita QUESTION-001 (como a fixture canonica); `claims` -> uma
+    afirmacao cita a alegacao CLAIM-001. O digest nao muda no upgrade: nada fica stale."""
+    import datetime
+    import uuid
+    from contextlib import nullcontext
+    from dataclasses import replace
+    from pathlib import Path
+
+    import tests.test_report_foundation_v1 as rf
+    from scripts.backend_contract.application import report_foundation as app
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.case_analysis import case_analysis_from_mapping
+
+    root = Path(__file__).resolve().parents[1]
+    data = json.loads((root / "tests/fixtures/case-analysis-snapshot-v1.json").read_text(encoding="utf-8"))
+    for index, source in enumerate(data[kind][0]["provenance"]):
+        source.update(occurrence_id=f"OCC-LEGACY-{kind}-{index}", source_document_id="DOC-003", source_document_sha256="c" * 64)
+    case = case_analysis_from_mapping(data)
+    assert case.derived_from_unavailable(getattr(case, kind)[0])
+    records, _case, inspection, technical, profile = rf.upstreams()
+    report = report or rf.bound_report()
+    report = replace(report, source_snapshot=replace(report.source_snapshot, case_analysis_digest=app.report_upstream_digest(case)))
+    store = _ReportStore(report)
+    readers = tuple(SimpleNamespace(execute=lambda *_a, value=value: value) for value in (
+        (records[0], case), (records[1], inspection), (records[2], technical), (records[3], profile)))
+    latest = SimpleNamespace(execute=store.latest)
+    clock = SimpleNamespace(now=lambda: datetime.datetime(2026, 9, 30, 12, tzinfo=datetime.UTC))
+    ids = SimpleNamespace(new_uuid=uuid.uuid4)
+    save = app.SaveReportSnapshot(SimpleNamespace(append_if_latest=store.append), *readers, latest, nullcontext, clock, ids)
+    get = app.GetReportSnapshot(latest, *readers)
+    return SimpleNamespace(
+        store=store, save=save, workspace=WorkspaceId.parse(report.workspace_id), professional=report.expert_profile.profile_id,
+        review=app.ReviewReportSnapshot(get, save, clock, ids), version=app.StartReportVersion(latest, *readers, save, ids),
+        amend=app.AmendReportDraft(get, save, ids, get_case_analysis=readers[0], get_technical_snapshot=readers[2]),
+    )
+
+
+@pytest.mark.parametrize("kind,dropped_field", [("questions", "context_fields"), ("claims", "claims")])
+def test_a_legacy_approved_report_citing_a_derived_item_can_be_superseded_and_versioned(kind, dropped_field):
+    """Revisao da #251, rodada 7 (SA251R7-01, auditor e revisor): o filtro de derivados no
+    contexto e nas afirmacoes julgava o laudo INTEIRO a cada save. Um laudo aprovado na era
+    main citando item derivado de peca indisponivel nao podia ser substituido -- e sem
+    substituir nao ha nova versao. Agora o que o predecessor ja gravava sob o MESMO vinculo
+    so e conferido em identidade; a nova versao (revinculo) descarta e reporta."""
+    from dataclasses import replace
+
+    from scripts.backend_contract.report_foundation import ReportState
+
+    w = _legacy_report_services(kind)
+    assert w.store.snapshot.state is ReportState.APPROVED
+    w.review.execute(w.workspace, action="SUPERSEDE", professional_id=w.professional, reason="Correcao.", expected_revision=w.store.revision)
+    assert w.store.snapshot.state is ReportState.SUPERSEDED
+    superseded, revision = w.store.snapshot, w.store.revision
+    carried = replace(superseded, state=ReportState.DRAFT, review_decisions=())
+    with pytest.raises(ValueError, match="provenance is not present in bound upstream authority"):  # revinculo julga tudo
+        w.save.execute(w.workspace, carried, revision, allow_new_version=True)
+    _record, draft, dropped = w.version.execute(w.workspace, expected_revision=revision)
+    assert dropped[dropped_field] and draft.state is ReportState.DRAFT
+
+
+def test_a_legacy_reviewed_report_can_still_be_approved_and_new_derived_context_is_refused():
+    from dataclasses import replace
+
+    import tests.test_report_foundation_v1 as rf
+    from scripts.backend_contract.application.report_foundation import _draft_coverage
+    from scripts.backend_contract.report_foundation import ReportState
+
+    approved = rf.bound_report()
+    reviewed = replace(approved, state=ReportState.REVIEWED, review_decisions=approved.review_decisions[:1],
+                       coverage=replace(approved.coverage, complete=False))
+    w = _legacy_report_services("questions", reviewed)
+    w.review.execute(w.workspace, action="APPROVE", professional_id=w.professional, reason="Aprovado.", expected_revision=w.store.revision)
+    assert w.store.snapshot.state is ReportState.APPROVED
+
+    requests = next(item for item in approved.context_matrix if item.field == "REQUESTS")
+    assert requests.source_id == "QUESTION-001"
+    context = tuple(replace(item, source_id="DOC-001") if item.field == "REQUESTS" else item for item in approved.context_matrix)
+    clean = replace(approved, state=ReportState.DRAFT, review_decisions=(), context_matrix=context,
+                    coverage=_draft_coverage(approved, context=context))
+    w = _legacy_report_services("questions", clean)
+    with pytest.raises(ValueError, match="context provenance is not present"):  # citar o derivado e autoridade NOVA
+        w.amend.execute(w.workspace, expected_revision=w.store.revision, action="UPDATE_CONTEXT",
+                        values={"field": "REQUESTS", "status": "PRESENT", "source_id": "QUESTION-001", "note": requests.note})
+    assert next(item for item in w.store.snapshot.context_matrix if item.field == "REQUESTS").source_id == "DOC-001"
+    w.amend.execute(w.workspace, expected_revision=w.store.revision, action="UPDATE_CONTEXT",  # controle: fonte vigente
+                    values={"field": "REQUESTS", "status": "PRESENT", "source_id": "DOC-002", "note": requests.note})
+    assert next(item for item in w.store.snapshot.context_matrix if item.field == "REQUESTS").source_id == "DOC-002"

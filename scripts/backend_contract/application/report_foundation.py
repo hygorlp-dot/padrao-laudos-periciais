@@ -358,18 +358,37 @@ def _validate_claim_provenance(
     inspection: InspectionSession,
     technical: TechnicalSnapshot,
     pathology: ConstructionDefectAnalysisSnapshot | None,
+    baseline=None,
 ) -> None:
     sources = _claim_sources(snapshot.source_snapshot, case, inspection, technical, pathology)
     bound = [provenance for claim in snapshot.claims for provenance in claim.provenance]
     bound.extend(row.provenance for row in snapshot.findings_table or ())
+    # Fonte que o predecessor ja gravava sob o MESMO vinculo nao e rejulgada pela exclusao:
+    # o vinculo identico (digests das autoridades) garante a identidade, e o laudo legado
+    # segue revisavel e substituivel como na main. O que entra NOVO passa pelo filtro; a
+    # nova versao (revinculo) nao tem baseline e descarta o que perdeu fonte. O predecessor
+    # so e lido se alguma entrada falhar no filtro (`baseline` devolve o snapshot ou None).
+    loaded = []
+
+    def recorded():
+        if not loaded:
+            loaded.append(baseline() if baseline is not None else None)
+        return loaded[0]
+
+    def recorded_provenance():
+        previous = recorded()
+        if previous is None:
+            return ()
+        return (*(provenance for claim in previous.claims for provenance in claim.provenance), *(row.provenance for row in previous.findings_table or ()))
+
     for provenance in bound:
         identities, revision = sources[provenance.source_kind]
-        if provenance.source_id not in identities or provenance.source_revision != revision:
+        if (provenance.source_id not in identities or provenance.source_revision != revision) and provenance not in recorded_provenance():
             raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
     validate_technical_findings_table(snapshot, technical)
     context_sources = _context_sources(case, technical)
     for item in snapshot.context_matrix:
-        if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field]:
+        if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field] and item not in (recorded().context_matrix if recorded() is not None else ()):
             raise ValueError("Report Snapshot context provenance is not present in bound upstream authority")
     # Exige-se o mesmo conjunto que o seletor oferece: quesito derivado de peca excluida
     # sai da exigencia (a UI o esconde). Resposta legada a ele nao impede a aprovacao.
@@ -523,9 +542,18 @@ class SaveReportSnapshot:
             )
             if _reconcile(snapshot, current[-1]).upstream_stale or _site_location_reasons(snapshot, self.get_site_location, workspace_id) or _property_reasons(snapshot, self.get_property_record, workspace_id) or _process_reasons(snapshot, self.get_process_record, workspace_id):
                 raise ValueError("Report Snapshot upstream authority is stale")
+            def baseline():
+                if expected_revision is None or allow_new_version:
+                    return None
+                record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
+                if record is None:  # sem predecessor gravado: nada a preservar
+                    return None
+                previous = validated_report_snapshot_from_mapping(thaw_payload(record.payload))
+                return previous if previous.source_snapshot == snapshot.source_snapshot else None
+
             _validate_answer_chains(snapshot, current[5])
             _validate_claim_provenance(
-                snapshot, current[1], current[3], current[5], current[9]
+                snapshot, current[1], current[3], current[5], current[9], baseline
             )
             if expected_revision is not None:
                 predecessor_record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
