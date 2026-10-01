@@ -20,7 +20,11 @@ export type InspectionSnapshot = {
   coverage: { total_items: number; pending_items: number; completed_items: number; partial_items: number; not_executed_items: number; not_applicable_items: number; blocked_items: number; complete: boolean; limitation_ids: string[]; reasons: string[] };
   reviews: unknown[]; upstream_stale: boolean; upstream_stale_reasons: string[];
   visit_context?: VisitContext;
+  reuse_decisions?: ReuseDecision[];
 };
+export type ReuseDecision = { decision_id: string; source_session_id: string; source_session_revision: number; source_record_kind: string; source_record_id: string; target_record_id: string; target_item_id: string; decided_by: string; decided_at: string };
+export type ReuseCandidate = { source_record_id: string; record_kind: string; source_item_title: string; target_item_id: string; target_item_title: string; summary: string; captured_at: string | null };
+export type ReuseCandidates = { revision: number; source_session_id: string | null; source_revision: number | null; candidates: ReuseCandidate[] };
 export type InspectionEnvelope = { revision: number; updated_at: string; snapshot: InspectionSnapshot };
 
 export class InspectionSessionApiError extends Error {
@@ -95,4 +99,37 @@ export async function uploadInspectionPhoto(workspaceId: string, file: File) {
   const value = await response.json() as Record<string, unknown>;
   if (typeof value.content_id !== "string" || !UUID.test(value.content_id) || typeof value.checksum_sha256 !== "string" || !/^[0-9a-f]{64}$/.test(value.checksum_sha256)) invalid();
   return { contentId: value.content_id, sha256: value.checksum_sha256 };
+}
+
+async function command(workspaceId: string, action: "successor" | "reuse", body: object, failure: string) {
+  if (!UUID.test(workspaceId)) invalid();
+  let response: Response;
+  try { response = await fetch(`/app-api/v1/workspaces/${workspaceId}/inspection-session/${action}`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify(body) }); }
+  catch { throw new InspectionSessionApiError("unavailable", "Serviço local indisponível"); }
+  if (!response.ok || !response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) throw new InspectionSessionApiError("unavailable", failure);
+  return parseInspectionEnvelope(await response.json(), workspaceId);
+}
+
+// A vistoria anterior continua no histórico; a nova nasce sem registros de campo.
+export function startSuccessorInspectionSession(workspaceId: string, expectedRevision: number, command_: { responsible_professional: string; location_context: string; participant_references: string[] }) {
+  if (!command_.responsible_professional.trim() || !command_.location_context.trim()) invalid();
+  return command(workspaceId, "successor", { expected_revision: expectedRevision, ...command_ }, "Não foi possível iniciar a nova vistoria; reabra a vistoria e confira o planejamento.");
+}
+
+export async function getInspectionReuseCandidates(workspaceId: string, signal?: AbortSignal): Promise<ReuseCandidates> {
+  if (!UUID.test(workspaceId)) invalid();
+  let response: Response;
+  try { response = await fetch(`/app-api/v1/workspaces/${workspaceId}/inspection-session/reuse-candidates`, { method: "GET", credentials: "same-origin", cache: "no-store", signal }); }
+  catch { throw new InspectionSessionApiError("unavailable", "Serviço local indisponível"); }
+  if (!response.ok) throw new InspectionSessionApiError("unavailable", "Não foi possível consultar a vistoria anterior");
+  const value = await response.json() as Record<string, unknown>;
+  if (!Number.isSafeInteger(value.revision) || !Array.isArray(value.candidates)) invalid();
+  for (const item of objects(value.candidates)) if (typeof item.source_record_id !== "string" || typeof item.target_item_id !== "string" || typeof item.summary !== "string") invalid();
+  return value as unknown as ReuseCandidates;
+}
+
+// Cada registro só entra por escolha do perito; o estado do item não muda.
+export function reuseInspectionRecords(workspaceId: string, expectedRevision: number, selections: { source_record_id: string; target_item_id: string }[]) {
+  if (!selections.length) invalid();
+  return command(workspaceId, "reuse", { expected_revision: expectedRevision, selections }, "Não foi possível reaproveitar os registros; reabra a vistoria.");
 }

@@ -28,6 +28,8 @@ afterEach(() => { vi.unstubAllGlobals(); sessionStorage.clear(); });
 function inspectionOnly(inspection: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) {
   return (input: RequestInfo | URL, init?: RequestInit) => String(input).includes("/property-record")
     ? Promise.resolve(response(200, { revision: null, record: { workspace_id: ID, values: [] }, fields: [], stale_fields: [] }))
+    : String(input).includes("/reuse-candidates")
+    ? Promise.resolve(response(200, { revision: 0, source_session_id: null, source_revision: null, candidates: [] }))
     : inspection(input, init);
 }
 

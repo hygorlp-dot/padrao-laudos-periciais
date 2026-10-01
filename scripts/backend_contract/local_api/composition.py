@@ -74,7 +74,7 @@ from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import AddCaseAnalysisItem, GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis, StartCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning, StartSuccessorPericialPlanning
-from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession, ConfirmInspectionVisit
+from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession, ConfirmInspectionVisit, InspectionReuseCandidates, ReuseInspectionRecords, StartSuccessorInspectionSession
 from ..application.case_intake import GetCaseIntake, AcceptCaseQuestions, ConfirmDocumentInventory
 from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, ReplaceRevokedOfflineDevice, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
 from ..application.technical_findings import (
@@ -427,6 +427,8 @@ def build_local_api(
         if private_store is not None
         else None
     )
+    start_inspection_session = (StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids) if save_inspection_session is not None else None)
+    inspection_reuse_candidates = (InspectionReuseCandidates(get_inspection_session, store.revisions, get_pericial_planning) if save_inspection_session is not None else None)
     prepare_offline_inspection = (
         PrepareOfflineInspection(get_inspection_session, get_private_content, offline_registry.vault_for, local_clock, local_ids)
         if offline_registry is not None and get_private_content is not None else None
@@ -750,7 +752,10 @@ def build_local_api(
         ),
         save_inspection_session=save_inspection_session,
         get_inspection_session=get_inspection_session,
-        start_inspection_session=(StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids) if save_inspection_session is not None else None),
+        start_inspection_session=start_inspection_session,
+        start_successor_inspection_session=(StartSuccessorInspectionSession(get_inspection_session, start_inspection_session, save_inspection_session) if save_inspection_session is not None else None),
+        inspection_reuse_candidates=inspection_reuse_candidates,
+        reuse_inspection_records=(ReuseInspectionRecords(inspection_reuse_candidates, save_inspection_session, get_expert_profile, local_clock, local_ids) if save_inspection_session is not None else None),
         confirm_inspection_visit=(ConfirmInspectionVisit(get_inspection_session, save_inspection_session, get_expert_profile, local_clock) if save_inspection_session is not None else None),
         prepare_offline_inspection=prepare_offline_inspection,
         sync_offline_inspection=sync_offline_inspection,

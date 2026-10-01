@@ -1043,6 +1043,12 @@ button.text-action {
 .inspection-start, .inspection-editor { max-width: 52rem; padding: var(--space-5); border: 1px solid var(--color-rule); background: var(--color-paper); }
 .inspection-start form, .inspection-editor form { display: grid; gap: var(--space-4); }
 .inspection-start label, .inspection-editor label { display: grid; gap: var(--space-2); font-weight: 680; }
+.inspection-succession { max-width: 52rem; padding: var(--space-5); border: 1px solid var(--color-rule); background: var(--color-paper); display: grid; gap: var(--space-3); }
+.inspection-succession form { display: grid; gap: var(--space-4); }
+.inspection-succession label { display: grid; gap: var(--space-2); font-weight: 680; }
+.inspection-reuse-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.inspection-reuse-list label { grid-template-columns: auto 1fr; align-items: start; font-weight: 400; }
+.inspection-reuse-list small { grid-column: 2; color: var(--color-slate); }
 .inspection-start input, .inspection-editor input, .inspection-editor select, .inspection-editor textarea { width: 100%; padding: 0.72rem 0.78rem; border: 1px solid var(--color-rule); background: white; color: var(--color-graphite); font: inherit; }
 .inspection-editor textarea { min-height: 5rem; resize: vertical; }
 .inspection-editor fieldset { display: grid; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--color-rule); }

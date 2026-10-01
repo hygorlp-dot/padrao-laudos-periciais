@@ -69,7 +69,7 @@ from ..delivery_renderer import validate_delivery_artifact, validate_final_artif
 from ..pericial_planning import pericial_planning_from_mapping
 from ..report_foundation import expert_profile_from_mapping, report_snapshot_from_mapping
 from ..technical_findings import technical_snapshot_from_mapping
-from ..vistoria import inspection_session_from_mapping
+from ..vistoria import REUSABLE_RECORD_COLLECTIONS, inspection_session_from_mapping
 from .private_filesystem import LocalPrivateContentStore
 from .ai_cost_ledger import AI_COST_LEDGER_FILENAME, SQLiteAICostLedger
 from .sqlite import SQLiteApplicationStore
@@ -977,6 +977,19 @@ class VerifyWorkspaceBackup:
                     for item in media
                 ):
                     raise RepositoryIntegrityError("backup inspection media authority is incomplete")
+                # Registro reaproveitado aponta para a vistoria de origem; a origem tem
+                # de viajar no pacote, senao a decisao do perito fica sem lastro auditavel.
+                for decision in inspection.reuse_decisions:
+                    origin = next((
+                        candidate for candidate in revisions
+                        if candidate.artifact_kind == "INSPECTION_SESSION_V1" and candidate.revision == decision.source_session_revision
+                    ), None)
+                    origin_payload = thaw_payload(origin.payload) if origin is not None else {}
+                    collection, identity = REUSABLE_RECORD_COLLECTIONS[decision.source_record_kind]
+                    if origin_payload.get("session_id") != decision.source_session_id or not any(
+                        item.get(identity) == decision.source_record_id for item in origin_payload.get(collection, ())
+                    ):
+                        raise RepositoryIntegrityError("backup inspection reuse origin is incomplete")
             elif record.artifact_kind == "DELIVERY_SNAPSHOT_V1":
                 delivery = delivery_snapshot_from_mapping(thaw_payload(record.payload))
                 if private_authority.get(delivery.template_content_id) != delivery.template_digest or any(

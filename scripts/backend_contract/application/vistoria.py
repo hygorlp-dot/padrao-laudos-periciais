@@ -7,7 +7,12 @@ from pathlib import Path
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
-from ..pericial_planning import ProfessionalReviewStatus, pericial_planning_to_mapping
+from ..pericial_planning import (
+    PERICIAL_PLANNING_ARTIFACT_ID,
+    PERICIAL_PLANNING_ARTIFACT_KIND,
+    ProfessionalReviewStatus,
+    pericial_planning_to_mapping,
+)
 from ..vistoria import (
     INSPECTION_SESSION_ARTIFACT_ID,
     INSPECTION_SESSION_ARTIFACT_KIND,
@@ -16,13 +21,17 @@ from ..vistoria import (
     InspectionCoverage,
     InspectionItem,
     InspectionPlanSnapshot,
+    InspectionReuseDecision,
     InspectionSession,
     LocationReference,
     ObservationType,
+    REUSABLE_RECORD_COLLECTIONS,
+    ReusedRecordKind,
     inspection_session_from_mapping,
     inspection_session_to_mapping,
 )
 from .models import PrivateContentId, thaw_payload
+from .pericial_planning import validated_pericial_planning_from_mapping
 from .ports import RepositoryConflict, RepositoryIntegrityError
 from ..visit_context import VisitContext
 
@@ -110,6 +119,26 @@ def _validate_execution_against_planning(session: InspectionSession, planning) -
             raise ValueError("completed access requirement requires full access occurrence")
 
 
+_FIELD_RECORD_COLLECTIONS = (
+    "observations", "statements", "measurements", "measurement_series", "methods", "instruments",
+    "instrument_statuses", "photos", "videos", "sketches", "environmental_conditions",
+    "access_occurrences", "limitations", "missing_items", "evidence_candidates", "reviews",
+)
+
+
+def _is_fresh_session(session) -> bool:
+    return (
+        type(session) is InspectionSession
+        and session.visit_context is None and session.ended_at is None and not session.reuse_decisions
+        and all(not getattr(session, name) for name in _FIELD_RECORD_COLLECTIONS)
+        and all(
+            item.state is ExecutionState.PENDING and item.note is None
+            and not (item.observation_ids or item.measurement_ids or item.photo_ids or item.limitation_ids)
+            for item in session.items
+        )
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SaveInspectionSession:
     revisions: object
@@ -120,7 +149,13 @@ class SaveInspectionSession:
     clock: object
     ids: object
 
-    def execute(self, workspace_id, session: InspectionSession, expected_revision: int | None, *, allow_initial_create: bool = False, allow_visit_confirmation: bool = False):
+    def execute(self, workspace_id, session: InspectionSession, expected_revision: int | None, *, allow_initial_create: bool = False, allow_visit_confirmation: bool = False, allow_succession: bool = False, allow_reuse: bool = False):
+        if sum((allow_initial_create, allow_visit_confirmation, allow_succession, allow_reuse)) > 1:
+            raise ValueError("Inspection Session mutation authority is ambiguous")
+        if (allow_succession or allow_reuse) and expected_revision is None:
+            raise ValueError("Inspection Session succession and reuse require the latest revision")
+        if allow_succession and not _is_fresh_session(session):
+            raise ValueError("Inspection Session successor must start without field records")
         if type(session) is not InspectionSession or str(workspace_id) != session.workspace_id:
             raise ValueError("Inspection Session workspace identity mismatch")
         if session.upstream_stale:
@@ -141,6 +176,23 @@ class SaveInspectionSession:
                 if predecessor_record.revision != expected_revision:
                     raise RepositoryConflict("expected Inspection Session revision is not latest")
                 predecessor = validated_inspection_session_from_mapping(thaw_payload(predecessor_record.payload))
+            if expected_revision is not None and allow_succession:
+                # A sessao anterior nao e reescrita: continua como revisao imutavel do
+                # mesmo artefato. So uma sessao que deixou de refletir o planejamento
+                # vigente (lido nesta transacao) pode ser sucedida.
+                planning_record, planning = self.get_planning.execute(workspace_id)
+                if not _reconcile(predecessor, planning_record=planning_record, planning=planning).upstream_stale:
+                    raise ValueError("only a stale Inspection Session can be succeeded")
+                if session.session_id == predecessor.session_id:
+                    raise ValueError("Inspection Session successor requires a new session identity")
+            elif expected_revision is not None:
+                if allow_reuse:
+                    if session.reuse_decisions[:len(predecessor.reuse_decisions)] != predecessor.reuse_decisions or len(session.reuse_decisions) <= len(predecessor.reuse_decisions):
+                        raise ValueError("Inspection Session reuse must append professional reuse decisions")
+                    if [(item.item_id, item.state, item.note) for item in session.items] != [(item.item_id, item.state, item.note) for item in predecessor.items]:
+                        raise ValueError("reused field records cannot change inspection item execution state")
+                elif session.reuse_decisions != predecessor.reuse_decisions:
+                    raise ValueError("Inspection Session reuse requires the dedicated professional command")
                 immutable = ("session_id", "workspace_id", "plan_snapshot", "started_at", "responsible_professional", "source_revision")
                 if any(getattr(session, name) != getattr(predecessor, name) for name in immutable):
                     raise ValueError("Inspection Session immutable authority changed")
@@ -254,6 +306,15 @@ class StartInspectionSession:
     ids: object
 
     def execute(self, workspace_id, *, responsible_professional: str, location_context: str, participant_references: tuple[str, ...]):
+        session = self.propose(
+            workspace_id, responsible_professional=responsible_professional,
+            location_context=location_context, participant_references=participant_references,
+        )
+        saved = self.save_session.execute(workspace_id, session, None, allow_initial_create=True)
+        return saved, session
+
+    def propose(self, workspace_id, *, responsible_professional: str, location_context: str, participant_references: tuple[str, ...]) -> InspectionSession:
+        """Sessao nova, sem registros de campo, sobre o planejamento vigente."""
         if not isinstance(responsible_professional, str) or not responsible_professional.strip():
             raise ValueError("responsible professional is required")
         if not isinstance(location_context, str) or not location_context.strip():
@@ -309,5 +370,218 @@ class StartInspectionSession:
             ),
             reviews=(),
         )
-        saved = self.save_session.execute(workspace_id, session, None, allow_initial_create=True)
+        return session
+
+
+@dataclass(frozen=True, slots=True)
+class StartSuccessorInspectionSession:
+    """Nova vistoria sobre o planejamento vigente quando a atual ficou para tras (#252).
+
+    A sessao anterior continua como revisao imutavel do mesmo artefato, com todos os
+    registros de campo, no historico e no backup. A sucessora nasce sem registros;
+    trazer algo da anterior e decisao explicita do perito (ReuseInspectionRecords).
+    """
+
+    get_session: object
+    start_session: StartInspectionSession
+    save_session: object
+
+    def execute(self, workspace_id, *, expected_revision: int, responsible_professional: str, location_context: str, participant_references: tuple[str, ...]):
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("expected revision is invalid")
+        record, _current = self.get_session.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Inspection Session revision is not latest")
+        session = self.start_session.propose(
+            workspace_id, responsible_professional=responsible_professional,
+            location_context=location_context, participant_references=participant_references,
+        )
+        saved = self.save_session.execute(workspace_id, session, expected_revision, allow_succession=True)
         return saved, session
+
+
+def _lineage(planning) -> dict[str, tuple[str, tuple[str, ...]]]:
+    # Correspondencia entre planos por derivacao semantica: o tipo do requisito e
+    # os itens da Analise do Caso de que ele deriva. O titulo nao participa.
+    return {
+        item.item_id: (type(item).__name__, tuple(sorted(item.derivation.case_analysis_item_ids)))
+        for item in planning.material_items
+        if item.derivation.case_analysis_item_ids
+    }
+
+
+def _record_summary(kind: ReusedRecordKind, record) -> tuple[str, str | None]:
+    if kind is ReusedRecordKind.OBSERVATION:
+        return record.raw_observation, record.timestamp
+    if kind is ReusedRecordKind.MEASUREMENT:
+        return f"{record.quantity}: {record.raw_value} {record.raw_unit}", record.timestamp
+    if kind is ReusedRecordKind.PHOTO:
+        return record.caption, record.reliable_capture_timestamp
+    if kind is ReusedRecordKind.STATEMENT:
+        return f"{record.speaker} ({record.declared_role}): {record.verbatim_or_summary}", record.timestamp
+    if kind is ReusedRecordKind.ACCESS_OCCURRENCE:
+        return f"{record.outcome.value}: {record.description}", record.timestamp
+    return f"{record.kind.value}: {record.description}", None
+
+
+@dataclass(frozen=True, slots=True)
+class InspectionReuseCandidates:
+    """Registros da vistoria anterior que podem ser oferecidos ao perito.
+
+    Nada aqui altera a sessao: so propoe pares (registro anterior, item atual) cuja
+    linhagem semantica coincide. Quem decide e o comando de reaproveitamento.
+    """
+
+    get_session: object
+    revisions: object
+    get_planning: object
+
+    def resolve(self, workspace_id):
+        record, current = self.get_session.execute(workspace_id)
+        if current.upstream_stale:
+            raise ValueError("stale Inspection Session cannot receive reused records")
+        history = self.revisions.list_all(workspace_id, INSPECTION_SESSION_ARTIFACT_KIND, INSPECTION_SESSION_ARTIFACT_ID)
+        previous = [item for item in history if item.revision < record.revision]
+        source_record = None
+        for candidate in sorted(previous, key=lambda item: item.revision, reverse=True):
+            if thaw_payload(candidate.payload).get("session_id") != current.session_id:
+                source_record = candidate
+                break
+        if source_record is None:
+            return record, current, None, None, ()
+        source = validated_inspection_session_from_mapping(thaw_payload(source_record.payload))
+        if source.workspace_id != str(workspace_id):
+            raise RepositoryIntegrityError("previous Inspection Session belongs to another workspace")
+        planning_record = self.revisions.get_revision(
+            workspace_id, PERICIAL_PLANNING_ARTIFACT_KIND, PERICIAL_PLANNING_ARTIFACT_ID, source.plan_snapshot.planning_revision,
+        )
+        if planning_record is None:
+            raise RepositoryIntegrityError("previous Inspection Session planning authority is missing")
+        source_planning = validated_pericial_planning_from_mapping(thaw_payload(planning_record.payload))
+        if inspection_planning_digest(source_planning) != source.plan_snapshot.planning_digest:
+            raise RepositoryIntegrityError("previous Inspection Session planning authority diverges")
+        _, planning = self.get_planning.execute(workspace_id)
+        source_lineage, target_lineage = _lineage(source_planning), _lineage(planning)
+        source_items = {item.item_id: item for item in source.items}
+        targets_by_signature: dict[tuple, list] = {}
+        for item in current.items:
+            signature = target_lineage.get(item.planning_item_id)
+            if signature is not None:
+                targets_by_signature.setdefault(signature, []).append(item)
+        already = {item.source_record_id for item in current.reuse_decisions if item.source_session_id == source.session_id}
+        candidates = []
+        for kind, (collection, identity) in REUSABLE_RECORD_COLLECTIONS.items():
+            for field_record in getattr(source, collection):
+                record_id = getattr(field_record, identity)
+                source_item = source_items[field_record.inspection_item_id]
+                signature = source_lineage.get(source_item.planning_item_id)
+                if record_id in already or signature is None:
+                    continue
+                summary, captured_at = _record_summary(kind, field_record)
+                for target in targets_by_signature.get(signature, ()):
+                    candidates.append({
+                        "source_record_id": record_id, "record_kind": kind.value,
+                        "source_item_title": source_item.title, "target_item_id": target.item_id,
+                        "target_item_title": target.title, "summary": summary, "captured_at": captured_at,
+                    })
+        return record, current, source_record, source, tuple(candidates)
+
+    def execute(self, workspace_id):
+        record, current, source_record, source, candidates = self.resolve(workspace_id)
+        return {
+            "revision": record.revision,
+            "source_session_id": source.session_id if source is not None else None,
+            "source_revision": source_record.revision if source_record is not None else None,
+            "candidates": list(candidates),
+        }
+
+
+_REUSE_ID_PREFIX = {
+    ReusedRecordKind.OBSERVATION: "OBSERVATION", ReusedRecordKind.MEASUREMENT: "MEASUREMENT",
+    ReusedRecordKind.PHOTO: "PHOTO", ReusedRecordKind.STATEMENT: "STATEMENT",
+    ReusedRecordKind.ACCESS_OCCURRENCE: "ACCESS", ReusedRecordKind.LIMITATION: "LIMITATION",
+}
+_ITEM_LINKS = {
+    ReusedRecordKind.OBSERVATION: "observation_ids", ReusedRecordKind.MEASUREMENT: "measurement_ids",
+    ReusedRecordKind.PHOTO: "photo_ids", ReusedRecordKind.LIMITATION: "limitation_ids",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ReuseInspectionRecords:
+    """Traz para a vistoria atual os registros que o perito escolheu, um a um.
+
+    O conteudo original e preservado (horario de captura, bytes e SHA da foto, texto,
+    proveniencia). A decisao registra sessao e revisao de origem, quem decidiu e
+    quando. O estado do item atual nao muda: o perito continua julgando o item.
+    """
+
+    candidates: InspectionReuseCandidates
+    save_session: object
+    get_expert_profile: object
+    clock: object
+    ids: object
+
+    def execute(self, workspace_id, *, expected_revision: int, selections):
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("expected revision is invalid")
+        if type(selections) is not list or not selections or len(selections) > 512 or any(
+            type(item) is not dict or set(item) != {"source_record_id", "target_item_id"}
+            or type(item["source_record_id"]) is not str or type(item["target_item_id"]) is not str
+            for item in selections
+        ):
+            raise ValueError("inspection reuse selections are invalid")
+        if len({item["source_record_id"] for item in selections}) != len(selections):
+            raise ValueError("a previous record can be reused only once")
+        record, current, source_record, source, candidates = self.candidates.resolve(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Inspection Session revision is not latest")
+        offered = {(item["source_record_id"], item["target_item_id"]): item for item in candidates}
+        if source is None or any((item["source_record_id"], item["target_item_id"]) not in offered for item in selections):
+            raise ValueError("inspection reuse selection is not an offered lineage match")
+        _, profile = self.get_expert_profile.execute(workspace_id)
+        decided_at = self.clock.now().isoformat()
+        session = current
+        collections = {name: list(getattr(session, name)) for name in ("observations", "measurements", "photos", "statements", "access_occurrences", "limitations", "locations", "methods", "instruments")}
+        links = {item.item_id: {name: list(getattr(item, name)) for name in _ITEM_LINKS.values()} for item in session.items}
+        decisions = list(session.reuse_decisions)
+
+        def bring(name, identity, value):
+            if all(getattr(existing, identity) != value for existing in collections[name]):
+                match = next(item for item in getattr(source, name) if getattr(item, identity) == value)
+                collections[name].append(match)
+                if name == "locations" and match.parent_location_id is not None:
+                    bring("locations", "location_id", match.parent_location_id)
+
+        for selection in selections:
+            kind = ReusedRecordKind(offered[(selection["source_record_id"], selection["target_item_id"])]["record_kind"])
+            collection, identity = REUSABLE_RECORD_COLLECTIONS[kind]
+            original = next(item for item in getattr(source, collection) if getattr(item, identity) == selection["source_record_id"])
+            new_id = f"{_REUSE_ID_PREFIX[kind]}-{self.ids.new_uuid().hex.upper()}"
+            copy = replace(original, **{identity: new_id, "inspection_item_id": selection["target_item_id"]})
+            if hasattr(copy, "location_id"):
+                bring("locations", "location_id", copy.location_id)
+            if kind is ReusedRecordKind.MEASUREMENT:
+                bring("methods", "method_id", copy.method_id)
+                bring("instruments", "instrument_id", copy.instrument_id)
+            collections[collection].append(copy)
+            if kind in _ITEM_LINKS:
+                links[selection["target_item_id"]][_ITEM_LINKS[kind]].append(new_id)
+            decisions.append(InspectionReuseDecision(
+                decision_id=f"INSPECTION-REUSE-{self.ids.new_uuid().hex.upper()}",
+                source_session_id=source.session_id, source_session_revision=source_record.revision,
+                source_record_kind=kind, source_record_id=selection["source_record_id"],
+                target_record_id=new_id, target_item_id=selection["target_item_id"],
+                decided_by=profile.profile_id, decided_at=decided_at,
+            ))
+        items = tuple(replace(item, **{name: tuple(values) for name, values in links[item.item_id].items()}) for item in session.items)
+        limitation_ids = tuple(item.limitation_id for item in collections["limitations"])
+        coverage = session.coverage
+        complete = not any((coverage.pending_items, coverage.partial_items, coverage.not_executed_items, coverage.blocked_items, len(limitation_ids)))
+        updated = replace(
+            session, items=items, reuse_decisions=tuple(decisions),
+            coverage=replace(coverage, limitation_ids=limitation_ids, complete=complete),
+            **{name: tuple(values) for name, values in collections.items()},
+        )
+        saved = self.save_session.execute(workspace_id, updated, expected_revision, allow_reuse=True)
+        return saved, updated

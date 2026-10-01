@@ -134,8 +134,10 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-session" and method in {"GET", "POST", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
-        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["inspection-session", "visit-context"] and method == "POST":
-            return f"/v1/workspaces/{remainder[0]}/inspection-session/visit-context"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-session" and remainder[2] in {"visit-context", "successor", "reuse"} and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/inspection-session/{remainder[2]}"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["inspection-session", "reuse-candidates"] and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/inspection-session/reuse-candidates"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] in {"offline-inspection", "offline-sync"} and method in ({"GET", "POST", "PUT"} if remainder[1] == "offline-inspection" else {"POST"}):
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "offline-inspection" and method == "GET":
