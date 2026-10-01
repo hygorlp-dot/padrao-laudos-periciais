@@ -116,14 +116,14 @@ def test_stale_inspection_has_an_explicit_successor_and_offers_records_only_by_l
         assert _http(runtime, "POST", root + "/inspection-session/successor", {"expected_revision": v2["revision"], "responsible_professional": profile["profile_id"], "location_context": "x", "participant_references": []})[0] == 400
 
         status, offered = _http(runtime, "GET", root + "/inspection-session/reuse-candidates")
-        assert status == 200 and offered["source_session_id"] == v1["snapshot"]["session_id"]
-        assert offered["source_revision"] == v1["revision"]
+        assert status == 200
+        assert {(item["source_session_id"], item["source_revision"]) for item in offered["candidates"]} == {(v1["snapshot"]["session_id"], v1["revision"])}
         # So o item com a mesma linhagem (quesito 01) recebe oferta; o item novo (quesito 2) nao.
         assert {item["source_record_id"] for item in offered["candidates"]} == {"OBSERVATION-V1-001", "PHOTO-V1-001"}
         assert len({item["target_item_id"] for item in offered["candidates"]}) == 1
         target = offered["candidates"][0]["target_item_id"]
 
-        status, reused = _http(runtime, "POST", root + "/inspection-session/reuse", {"expected_revision": v2["revision"], "selections": [{"source_record_id": "PHOTO-V1-001", "target_item_id": target}]})
+        status, reused = _http(runtime, "POST", root + "/inspection-session/reuse", {"expected_revision": v2["revision"], "selections": [{"source_session_id": v1["snapshot"]["session_id"], "source_record_id": "PHOTO-V1-001", "target_item_id": target}]})
         assert status == 200, reused
         session = reused["snapshot"]
         photo = session["photos"][0]
@@ -142,10 +142,10 @@ def test_stale_inspection_has_an_explicit_successor_and_offers_records_only_by_l
         # O mesmo registro nao e oferecido de novo nem aceito duas vezes.
         status, offered = _http(runtime, "GET", root + "/inspection-session/reuse-candidates")
         assert [item["source_record_id"] for item in offered["candidates"]] == ["OBSERVATION-V1-001"]
-        assert _http(runtime, "POST", root + "/inspection-session/reuse", {"expected_revision": reused["revision"], "selections": [{"source_record_id": "PHOTO-V1-001", "target_item_id": target}]})[0] == 400
+        assert _http(runtime, "POST", root + "/inspection-session/reuse", {"expected_revision": reused["revision"], "selections": [{"source_session_id": v1["snapshot"]["session_id"], "source_record_id": "PHOTO-V1-001", "target_item_id": target}]})[0] == 400
         # Selecao sem linhagem e recusada.
         other = next(item["item_id"] for item in session["items"] if item["item_id"] != target)
-        assert _http(runtime, "POST", root + "/inspection-session/reuse", {"expected_revision": reused["revision"], "selections": [{"source_record_id": "OBSERVATION-V1-001", "target_item_id": other}]})[0] == 400
+        assert _http(runtime, "POST", root + "/inspection-session/reuse", {"expected_revision": reused["revision"], "selections": [{"source_session_id": v1["snapshot"]["session_id"], "source_record_id": "OBSERVATION-V1-001", "target_item_id": other}]})[0] == 400
         # Decisao de reaproveitamento nao e forjavel pelo save generico.
         forged = json.loads(json.dumps(session))
         forged["reuse_decisions"][0]["decided_by"] = "OUTRO-PERFIL"
@@ -153,6 +153,52 @@ def test_stale_inspection_has_an_explicit_successor_and_offers_records_only_by_l
         forged = json.loads(json.dumps(session))
         forged.pop("reuse_decisions")
         assert _http(runtime, "PUT", root + "/inspection-session", {"expected_revision": reused["revision"], "snapshot": forged})[0] == 400
+    finally:
+        runtime.close()
+
+
+def test_a_chain_of_successions_keeps_every_unreused_original_offerable_exactly_once(tmp_path):
+    """Revisao independente (P1): V1 -> V2 -> V3 nao pode esconder os registros da V1."""
+    runtime = _runtime(tmp_path)
+    try:
+        root, profile, v1, _photo = _inspection_v1_with_field_records_then_analysis_change(runtime)
+        v1_session = v1["snapshot"]["session_id"]
+
+        def succeed():
+            status, stale = _http(runtime, "GET", root + "/inspection-session")
+            assert stale["snapshot"]["upstream_stale"] is True
+            status, session = _http(runtime, "POST", root + "/inspection-session/successor", {"expected_revision": stale["revision"], "responsible_professional": profile["profile_id"], "location_context": "Imóvel sintético", "participant_references": []})
+            assert status == 201, session
+            return session
+
+        def change_analysis_and_plan():
+            status, case = _http(runtime, "GET", root + "/case-analysis")
+            doc = case["snapshot"]["documents"][0]["document_id"]
+            status, case = _http(runtime, "POST", root + "/case-analysis/items", {"expected_revision": case["revision"], "item_kind": "PERICIAL_OBJECT", "text": "Objeto sintético adicional.", "source_document_id": doc, "page_or_span": "p. 1", "technical_subjects": ["Superfície"], "values": {}})
+            assert status == 200, case
+            status, stale = _http(runtime, "GET", root + "/pericial-planning")
+            status, plan = _http(runtime, "POST", root + "/pericial-planning/successor", {"expected_revision": stale["revision"], "title": "Plano seguinte"})
+            assert status == 201
+            for name in ("issues", "inspection_requirements", "question_links"):
+                for item in plan["snapshot"][name]:
+                    status, plan = _http(runtime, "POST", root + "/pericial-planning/decisions", {"expected_revision": plan["revision"], "target_item_id": item["item_id"], "action": "APPROVE", "reviewer": profile["profile_id"], "reason": "Ok.", "decided_value": None})
+                    assert status == 200
+
+        v2 = succeed()
+        status, offered = _http(runtime, "GET", root + "/inspection-session/reuse-candidates")
+        photo = next(item for item in offered["candidates"] if item["source_record_id"] == "PHOTO-V1-001")
+        status, v2 = _http(runtime, "POST", root + "/inspection-session/reuse", {"expected_revision": v2["revision"], "selections": [{key: photo[key] for key in ("source_session_id", "source_record_id", "target_item_id")}]})
+        assert status == 200
+        copy_id = v2["snapshot"]["reuse_decisions"][0]["target_record_id"]
+
+        change_analysis_and_plan()
+        succeed()
+        status, offered = _http(runtime, "GET", root + "/inspection-session/reuse-candidates")
+        origins = {(item["source_session_id"], item["source_record_id"]) for item in offered["candidates"]}
+        # A observacao da V1, nunca reaproveitada na V2, continua oferecivel; a foto
+        # aparece uma vez, pela origem real (V1), nunca pela copia que esta na V2.
+        assert origins == {(v1_session, "OBSERVATION-V1-001"), (v1_session, "PHOTO-V1-001")}
+        assert all(item["source_record_id"] != copy_id for item in offered["candidates"])
     finally:
         runtime.close()
 
@@ -168,7 +214,7 @@ def test_inspection_succession_survives_backup_and_process_restart(tmp_path):
         status, stale = _http(runtime, "GET", root + "/inspection-session")
         status, v2 = _http(runtime, "POST", root + "/inspection-session/successor", {"expected_revision": stale["revision"], "responsible_professional": profile["profile_id"], "location_context": "Imóvel sintético", "participant_references": []})
         status, offered = _http(runtime, "GET", root + "/inspection-session/reuse-candidates")
-        selections = [{"source_record_id": item["source_record_id"], "target_item_id": item["target_item_id"]} for item in offered["candidates"]]
+        selections = [{"source_session_id": item["source_session_id"], "source_record_id": item["source_record_id"], "target_item_id": item["target_item_id"]} for item in offered["candidates"]]
         status, reused = _http(runtime, "POST", root + "/inspection-session/reuse", {"expected_revision": v2["revision"], "selections": selections})
         assert status == 200
         status, _, backup = http_request(runtime.server, "POST", root + "/backup", value={}, headers={"X-Local-API-Token": TOKEN})
@@ -306,3 +352,21 @@ def test_reuse_decision_must_bind_a_record_owned_by_the_target_item():
     ):
         with pytest.raises(ValueError, match="does not bind"):
             replace(valid, reuse_decisions=(broken,))
+
+
+def test_reuse_refuses_to_bind_a_copied_record_to_a_different_reference_with_the_same_identity(tmp_path):
+    runtime = _runtime(tmp_path)
+    try:
+        root, profile, v1, _photo = _inspection_v1_with_field_records_then_analysis_change(runtime)
+        status, stale = _http(runtime, "GET", root + "/inspection-session")
+        status, v2 = _http(runtime, "POST", root + "/inspection-session/successor", {"expected_revision": stale["revision"], "responsible_professional": profile["profile_id"], "location_context": "Imóvel sintético", "participant_references": []})
+        crafted = json.loads(json.dumps(v2["snapshot"]))
+        crafted["locations"].append({"location_id": v1["snapshot"]["locations"][0]["location_id"], "description": "Outro cômodo com a mesma identidade", "parent_location_id": None})
+        status, v2 = _http(runtime, "PUT", root + "/inspection-session", {"expected_revision": v2["revision"], "snapshot": crafted})
+        assert status == 200, v2
+        status, offered = _http(runtime, "GET", root + "/inspection-session/reuse-candidates")
+        observation = next(item for item in offered["candidates"] if item["source_record_id"] == "OBSERVATION-V1-001")
+        selection = {key: observation[key] for key in ("source_session_id", "source_record_id", "target_item_id")}
+        assert _http(runtime, "POST", root + "/inspection-session/reuse", {"expected_revision": v2["revision"], "selections": [selection]})[0] == 400
+    finally:
+        runtime.close()

@@ -37,11 +37,11 @@ describe("inspection succession panel", () => {
 
   test("previous records enter only when the professional selects them", async () => {
     const candidates = [
-      { source_record_id: "PHOTO-V1", record_kind: "PHOTO", source_item_title: "Verificar quesito", target_item_id: "ITEM-V2", target_item_title: "Verificar quesito", summary: "Parede com mancha.", captured_at: null },
-      { source_record_id: "OBS-V1", record_kind: "OBSERVATION", source_item_title: "Verificar quesito", target_item_id: "ITEM-V2", target_item_title: "Verificar quesito", summary: "Mancha de umidade.", captured_at: "2026-09-20T12:30:00Z" },
+      { source_session_id: "SESSION-V1", source_revision: 5, source_record_id: "PHOTO-V1", record_kind: "PHOTO", source_item_title: "Verificar quesito", target_item_id: "ITEM-V2", target_item_title: "Verificar quesito", summary: "Parede com mancha.", captured_at: null },
+      { source_session_id: "SESSION-V1", source_revision: 5, source_record_id: "OBS-V1", record_kind: "OBSERVATION", source_item_title: "Verificar quesito", target_item_id: "ITEM-V2", target_item_title: "Verificar quesito", summary: "Mancha de umidade.", captured_at: "2026-09-20T12:30:00Z" },
     ];
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(response(200, { revision: 6, source_session_id: "SESSION-V1", source_revision: 5, candidates }))
+      .mockResolvedValueOnce(response(200, { revision: 6, candidates }))
       .mockResolvedValueOnce(response(200, { revision: 7, updated_at: "x", snapshot: base }));
     vi.stubGlobal("fetch", fetchMock);
     const onSaved = vi.fn();
@@ -55,7 +55,23 @@ describe("inspection succession panel", () => {
     await waitFor(() => expect(onSaved).toHaveBeenCalled());
     const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(url).toBe(`/app-api/v1/workspaces/${ID}/inspection-session/reuse`);
-    expect(JSON.parse(String(init.body))).toEqual({ expected_revision: 6, selections: [{ source_record_id: "OBS-V1", target_item_id: "ITEM-V2" }] });
+    expect(JSON.parse(String(init.body))).toEqual({ expected_revision: 6, selections: [{ source_session_id: "SESSION-V1", source_record_id: "OBS-V1", target_item_id: "ITEM-V2" }] });
+  });
+
+  test("a failed candidate lookup is visible instead of looking like nothing to reuse", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(500, { error: { code: "INTEGRITY" } })));
+    render(<InspectionSuccessionPanel workspaceId={ID} envelope={{ revision: 6, updated_at: "x", snapshot: base }} disabled={false} onSaved={vi.fn()} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível consultar os registros de vistorias anteriores");
+  });
+
+  test("one original record offered to two items can be chosen only once", async () => {
+    const offered = (target: string) => ({ source_session_id: "SESSION-V1", source_revision: 5, source_record_id: "OBS-V1", record_kind: "OBSERVATION", source_item_title: "Origem", target_item_id: target, target_item_title: target, summary: `Mancha ${target}`, captured_at: null });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(response(200, { revision: 6, candidates: [offered("ITEM-A"), offered("ITEM-B")] })));
+    const user = userEvent.setup();
+    render(<InspectionSuccessionPanel workspaceId={ID} envelope={{ revision: 6, updated_at: "x", snapshot: base }} disabled={false} onSaved={vi.fn()} />);
+    await user.click(await screen.findByRole("checkbox", { name: /Mancha ITEM-A/ }));
+    expect(screen.getByRole("checkbox", { name: /Mancha ITEM-B/ })).toBeDisabled();
+    expect(screen.getAllByText(/De: Origem/).length).toBe(2);
   });
 
   test("a failed successor shows an error and keeps the stale state", async () => {

@@ -23,8 +23,8 @@ export type InspectionSnapshot = {
   reuse_decisions?: ReuseDecision[];
 };
 export type ReuseDecision = { decision_id: string; source_session_id: string; source_session_revision: number; source_record_kind: string; source_record_id: string; target_record_id: string; target_item_id: string; decided_by: string; decided_at: string };
-export type ReuseCandidate = { source_record_id: string; record_kind: string; source_item_title: string; target_item_id: string; target_item_title: string; summary: string; captured_at: string | null };
-export type ReuseCandidates = { revision: number; source_session_id: string | null; source_revision: number | null; candidates: ReuseCandidate[] };
+export type ReuseCandidate = { source_session_id: string; source_revision: number; source_record_id: string; record_kind: string; source_item_title: string; target_item_id: string; target_item_title: string; summary: string; captured_at: string | null };
+export type ReuseCandidates = { revision: number; candidates: ReuseCandidate[] };
 export type InspectionEnvelope = { revision: number; updated_at: string; snapshot: InspectionSnapshot };
 
 export class InspectionSessionApiError extends Error {
@@ -124,12 +124,12 @@ export async function getInspectionReuseCandidates(workspaceId: string, signal?:
   if (!response.ok) throw new InspectionSessionApiError("unavailable", "Não foi possível consultar a vistoria anterior");
   const value = await response.json() as Record<string, unknown>;
   if (!Number.isSafeInteger(value.revision) || !Array.isArray(value.candidates)) invalid();
-  for (const item of objects(value.candidates)) if (typeof item.source_record_id !== "string" || typeof item.target_item_id !== "string" || typeof item.summary !== "string") invalid();
+  for (const item of objects(value.candidates)) if (typeof item.source_session_id !== "string" || typeof item.source_record_id !== "string" || typeof item.target_item_id !== "string" || typeof item.summary !== "string") invalid();
   return value as unknown as ReuseCandidates;
 }
 
 // Cada registro só entra por escolha do perito; o estado do item não muda.
-export function reuseInspectionRecords(workspaceId: string, expectedRevision: number, selections: { source_record_id: string; target_item_id: string }[]) {
+export function reuseInspectionRecords(workspaceId: string, expectedRevision: number, selections: { source_session_id: string; source_record_id: string; target_item_id: string }[]) {
   if (!selections.length) invalid();
   return command(workspaceId, "reuse", { expected_revision: expectedRevision, selections }, "Não foi possível reaproveitar os registros; reabra a vistoria.");
 }

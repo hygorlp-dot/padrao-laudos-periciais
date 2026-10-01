@@ -436,64 +436,74 @@ class InspectionReuseCandidates:
     revisions: object
     get_planning: object
 
+    def _previous_sessions(self, workspace_id, current, record):
+        """Ultima revisao de cada vistoria anterior, da mais recente para a mais antiga.
+
+        Uma cadeia V1 -> V2 -> V3 nao pode esconder registros da V1 que a V2 nunca
+        reaproveitou: todas as vistorias anteriores sao fonte, cada uma lida contra o
+        proprio planejamento de origem.
+        """
+        history = self.revisions.list_all(workspace_id, INSPECTION_SESSION_ARTIFACT_KIND, INSPECTION_SESSION_ARTIFACT_ID)
+        latest: dict[str, object] = {}
+        for item in sorted(history, key=lambda value: value.revision):
+            session_id = thaw_payload(item.payload).get("session_id")
+            if item.revision < record.revision and session_id != current.session_id:
+                latest[session_id] = item
+        sources = []
+        for source_record in sorted(latest.values(), key=lambda value: value.revision, reverse=True):
+            source = validated_inspection_session_from_mapping(thaw_payload(source_record.payload))
+            if source.workspace_id != str(workspace_id):
+                raise RepositoryIntegrityError("previous Inspection Session belongs to another workspace")
+            planning_record = self.revisions.get_revision(
+                workspace_id, PERICIAL_PLANNING_ARTIFACT_KIND, PERICIAL_PLANNING_ARTIFACT_ID, source.plan_snapshot.planning_revision,
+            )
+            if planning_record is None:
+                raise RepositoryIntegrityError("previous Inspection Session planning authority is missing")
+            source_planning = validated_pericial_planning_from_mapping(thaw_payload(planning_record.payload))
+            if inspection_planning_digest(source_planning) != source.plan_snapshot.planning_digest:
+                raise RepositoryIntegrityError("previous Inspection Session planning authority diverges")
+            sources.append((source_record, source, _lineage(source_planning)))
+        return sources
+
     def resolve(self, workspace_id):
         record, current = self.get_session.execute(workspace_id)
         if current.upstream_stale:
             raise ValueError("stale Inspection Session cannot receive reused records")
-        history = self.revisions.list_all(workspace_id, INSPECTION_SESSION_ARTIFACT_KIND, INSPECTION_SESSION_ARTIFACT_ID)
-        previous = [item for item in history if item.revision < record.revision]
-        source_record = None
-        for candidate in sorted(previous, key=lambda item: item.revision, reverse=True):
-            if thaw_payload(candidate.payload).get("session_id") != current.session_id:
-                source_record = candidate
-                break
-        if source_record is None:
-            return record, current, None, None, ()
-        source = validated_inspection_session_from_mapping(thaw_payload(source_record.payload))
-        if source.workspace_id != str(workspace_id):
-            raise RepositoryIntegrityError("previous Inspection Session belongs to another workspace")
-        planning_record = self.revisions.get_revision(
-            workspace_id, PERICIAL_PLANNING_ARTIFACT_KIND, PERICIAL_PLANNING_ARTIFACT_ID, source.plan_snapshot.planning_revision,
-        )
-        if planning_record is None:
-            raise RepositoryIntegrityError("previous Inspection Session planning authority is missing")
-        source_planning = validated_pericial_planning_from_mapping(thaw_payload(planning_record.payload))
-        if inspection_planning_digest(source_planning) != source.plan_snapshot.planning_digest:
-            raise RepositoryIntegrityError("previous Inspection Session planning authority diverges")
+        sources = self._previous_sessions(workspace_id, current, record)
         _, planning = self.get_planning.execute(workspace_id)
-        source_lineage, target_lineage = _lineage(source_planning), _lineage(planning)
-        source_items = {item.item_id: item for item in source.items}
+        target_lineage = _lineage(planning)
         targets_by_signature: dict[tuple, list] = {}
         for item in current.items:
             signature = target_lineage.get(item.planning_item_id)
             if signature is not None:
                 targets_by_signature.setdefault(signature, []).append(item)
-        already = {item.source_record_id for item in current.reuse_decisions if item.source_session_id == source.session_id}
+        already = {(item.source_session_id, item.source_record_id) for item in current.reuse_decisions}
         candidates = []
-        for kind, (collection, identity) in REUSABLE_RECORD_COLLECTIONS.items():
-            for field_record in getattr(source, collection):
-                record_id = getattr(field_record, identity)
-                source_item = source_items[field_record.inspection_item_id]
-                signature = source_lineage.get(source_item.planning_item_id)
-                if record_id in already or signature is None:
-                    continue
-                summary, captured_at = _record_summary(kind, field_record)
-                for target in targets_by_signature.get(signature, ()):
-                    candidates.append({
-                        "source_record_id": record_id, "record_kind": kind.value,
-                        "source_item_title": source_item.title, "target_item_id": target.item_id,
-                        "target_item_title": target.title, "summary": summary, "captured_at": captured_at,
-                    })
-        return record, current, source_record, source, tuple(candidates)
+        for source_record, source, source_lineage in sources:
+            source_items = {item.item_id: item for item in source.items}
+            # Copia ja reaproveitada naquela vistoria nao e um original: o original e
+            # oferecido a partir da sessao de onde veio, uma unica vez.
+            copies = {item.target_record_id for item in source.reuse_decisions}
+            for kind, (collection, identity) in REUSABLE_RECORD_COLLECTIONS.items():
+                for field_record in getattr(source, collection):
+                    record_id = getattr(field_record, identity)
+                    source_item = source_items[field_record.inspection_item_id]
+                    signature = source_lineage.get(source_item.planning_item_id)
+                    if record_id in copies or (source.session_id, record_id) in already or signature is None:
+                        continue
+                    summary, captured_at = _record_summary(kind, field_record)
+                    for target in targets_by_signature.get(signature, ()):
+                        candidates.append({
+                            "source_session_id": source.session_id, "source_revision": source_record.revision,
+                            "source_record_id": record_id, "record_kind": kind.value,
+                            "source_item_title": source_item.title, "target_item_id": target.item_id,
+                            "target_item_title": target.title, "summary": summary, "captured_at": captured_at,
+                        })
+        return record, current, {source.session_id: (source_record, source) for source_record, source, _ in sources}, tuple(candidates)
 
     def execute(self, workspace_id):
-        record, current, source_record, source, candidates = self.resolve(workspace_id)
-        return {
-            "revision": record.revision,
-            "source_session_id": source.session_id if source is not None else None,
-            "source_revision": source_record.revision if source_record is not None else None,
-            "candidates": list(candidates),
-        }
+        record, _current, _sources, candidates = self.resolve(workspace_id)
+        return {"revision": record.revision, "candidates": list(candidates)}
 
 
 _REUSE_ID_PREFIX = {
@@ -525,19 +535,19 @@ class ReuseInspectionRecords:
     def execute(self, workspace_id, *, expected_revision: int, selections):
         if type(expected_revision) is not int or expected_revision < 1:
             raise ValueError("expected revision is invalid")
+        fields_ = {"source_session_id", "source_record_id", "target_item_id"}
         if type(selections) is not list or not selections or len(selections) > 512 or any(
-            type(item) is not dict or set(item) != {"source_record_id", "target_item_id"}
-            or type(item["source_record_id"]) is not str or type(item["target_item_id"]) is not str
+            type(item) is not dict or set(item) != fields_ or any(type(item[name]) is not str for name in fields_)
             for item in selections
         ):
             raise ValueError("inspection reuse selections are invalid")
-        if len({item["source_record_id"] for item in selections}) != len(selections):
+        if len({(item["source_session_id"], item["source_record_id"]) for item in selections}) != len(selections):
             raise ValueError("a previous record can be reused only once")
-        record, current, source_record, source, candidates = self.candidates.resolve(workspace_id)
+        record, current, sources, candidates = self.candidates.resolve(workspace_id)
         if record.revision != expected_revision:
             raise RepositoryConflict("expected Inspection Session revision is not latest")
-        offered = {(item["source_record_id"], item["target_item_id"]): item for item in candidates}
-        if source is None or any((item["source_record_id"], item["target_item_id"]) not in offered for item in selections):
+        offered = {(item["source_session_id"], item["source_record_id"], item["target_item_id"]): item for item in candidates}
+        if any((item["source_session_id"], item["source_record_id"], item["target_item_id"]) not in offered for item in selections):
             raise ValueError("inspection reuse selection is not an offered lineage match")
         _, profile = self.get_expert_profile.execute(workspace_id)
         decided_at = self.clock.now().isoformat()
@@ -546,24 +556,31 @@ class ReuseInspectionRecords:
         links = {item.item_id: {name: list(getattr(item, name)) for name in _ITEM_LINKS.values()} for item in session.items}
         decisions = list(session.reuse_decisions)
 
-        def bring(name, identity, value):
-            if all(getattr(existing, identity) != value for existing in collections[name]):
-                match = next(item for item in getattr(source, name) if getattr(item, identity) == value)
+        def bring(source, name, identity, value):
+            match = next(item for item in getattr(source, name) if getattr(item, identity) == value)
+            existing = next((item for item in collections[name] if getattr(item, identity) == value), None)
+            if existing is None:
                 collections[name].append(match)
                 if name == "locations" and match.parent_location_id is not None:
-                    bring("locations", "location_id", match.parent_location_id)
+                    bring(source, "locations", "location_id", match.parent_location_id)
+            elif existing != match:
+                # Mesma identidade com conteudo diferente: o registro copiado nao pode
+                # passar a apontar para algo que nao e o que sustentava o original.
+                raise ValueError("reused record reference collides with a different record of this session")
 
         for selection in selections:
-            kind = ReusedRecordKind(offered[(selection["source_record_id"], selection["target_item_id"])]["record_kind"])
+            key = (selection["source_session_id"], selection["source_record_id"], selection["target_item_id"])
+            source_record, source = sources[selection["source_session_id"]]
+            kind = ReusedRecordKind(offered[key]["record_kind"])
             collection, identity = REUSABLE_RECORD_COLLECTIONS[kind]
             original = next(item for item in getattr(source, collection) if getattr(item, identity) == selection["source_record_id"])
             new_id = f"{_REUSE_ID_PREFIX[kind]}-{self.ids.new_uuid().hex.upper()}"
             copy = replace(original, **{identity: new_id, "inspection_item_id": selection["target_item_id"]})
             if hasattr(copy, "location_id"):
-                bring("locations", "location_id", copy.location_id)
+                bring(source, "locations", "location_id", copy.location_id)
             if kind is ReusedRecordKind.MEASUREMENT:
-                bring("methods", "method_id", copy.method_id)
-                bring("instruments", "instrument_id", copy.instrument_id)
+                bring(source, "methods", "method_id", copy.method_id)
+                bring(source, "instruments", "instrument_id", copy.instrument_id)
             collections[collection].append(copy)
             if kind in _ITEM_LINKS:
                 links[selection["target_item_id"]][_ITEM_LINKS[kind]].append(new_id)

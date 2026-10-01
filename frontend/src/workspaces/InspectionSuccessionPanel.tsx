@@ -6,7 +6,8 @@ const KIND_LABEL: Record<string, string> = {
   STATEMENT: "Declaração", ACCESS_OCCURRENCE: "Acesso", LIMITATION: "Limitação",
 };
 
-const key = (item: ReuseCandidate) => `${item.source_record_id}|${item.target_item_id}`;
+const origin = (item: ReuseCandidate) => `${item.source_session_id}|${item.source_record_id}`;
+const key = (item: ReuseCandidate) => `${origin(item)}|${item.target_item_id}`;
 
 // Sucessão da vistoria (#252, opção B estrita): a vistoria anterior continua no
 // histórico; a nova nasce vazia e só recebe o que o perito escolher, registro a
@@ -18,12 +19,14 @@ export function InspectionSuccessionPanel({ workspaceId, envelope, disabled, onS
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<ReuseCandidate[]>([]);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
+  const [unavailable, setUnavailable] = useState(false);
   useEffect(() => {
     if (snapshot.upstream_stale || disabled) return;
     const controller = new AbortController();
     getInspectionReuseCandidates(workspaceId, controller.signal).then(
-      (value) => { if (!controller.signal.aborted && value.revision === revision) { setCandidates(value.candidates); setChosen(new Set()); } },
-      () => { if (!controller.signal.aborted) setCandidates([]); },
+      (value) => { if (!controller.signal.aborted && value.revision === revision) { setCandidates(value.candidates); setChosen(new Set()); setUnavailable(false); } },
+      // Falha na consulta nao pode parecer "nada a reaproveitar".
+      () => { if (!controller.signal.aborted) { setCandidates([]); setUnavailable(true); } },
     );
     return () => controller.abort();
   }, [workspaceId, revision, snapshot.upstream_stale, disabled]);
@@ -46,11 +49,15 @@ export function InspectionSuccessionPanel({ workspaceId, envelope, disabled, onS
     </section>;
   }
   // Ofertas de outra revisao (ou com edicao offline em curso) nao sao exibidas.
-  if (disabled || !candidates.length) return null;
+  if (disabled) return null;
+  if (unavailable) return <p className="inspection-succession" role="alert">Não foi possível consultar os registros de vistorias anteriores. Reabra a vistoria para tentar novamente.</p>;
+  if (!candidates.length) return null;
+  // Um mesmo registro original pode servir a mais de um item; ele so pode entrar uma vez.
+  const takenOrigins = new Set(candidates.filter((item) => chosen.has(key(item))).map(origin));
   const reuse = async () => {
     setBusy(true); setError(null);
     try {
-      const selections = candidates.filter((item) => chosen.has(key(item))).map((item) => ({ source_record_id: item.source_record_id, target_item_id: item.target_item_id }));
+      const selections = candidates.filter((item) => chosen.has(key(item))).map((item) => ({ source_session_id: item.source_session_id, source_record_id: item.source_record_id, target_item_id: item.target_item_id }));
       onSaved(await reuseInspectionRecords(workspaceId, revision, selections));
     } catch { setError("Não foi possível reaproveitar os registros. Reabra a vistoria e tente novamente."); }
     finally { setBusy(false); }
@@ -58,7 +65,7 @@ export function InspectionSuccessionPanel({ workspaceId, envelope, disabled, onS
   return <section className="inspection-succession" aria-labelledby="inspection-reuse-title">
     <h3 id="inspection-reuse-title">Registros da vistoria anterior</h3>
     <p>Só os registros marcados entram nesta vistoria, com data, conteúdo e foto originais. O estado dos itens não muda: cada item continua exigindo a sua conferência.</p>
-    <ul className="inspection-reuse-list">{candidates.map((item) => <li key={key(item)}><label><input type="checkbox" checked={chosen.has(key(item))} disabled={busy || disabled} onChange={(event) => setChosen((current) => { const next = new Set(current); if (event.target.checked) next.add(key(item)); else next.delete(key(item)); return next; })}/><span><strong>{KIND_LABEL[item.record_kind] ?? item.record_kind}</strong> — {item.summary}</span><small>Para: {item.target_item_title}{item.captured_at ? ` · registrado em ${new Date(item.captured_at).toLocaleString("pt-BR")}` : ""}</small></label></li>)}</ul>
+    <ul className="inspection-reuse-list">{candidates.map((item) => <li key={key(item)}><label><input type="checkbox" checked={chosen.has(key(item))} disabled={busy || disabled || (!chosen.has(key(item)) && takenOrigins.has(origin(item)))} onChange={(event) => setChosen((current) => { const next = new Set(current); if (event.target.checked) next.add(key(item)); else next.delete(key(item)); return next; })}/><span><strong>{KIND_LABEL[item.record_kind] ?? item.record_kind}</strong> — {item.summary}</span><small>De: {item.source_item_title} → Para: {item.target_item_title}{item.captured_at ? ` · registrado em ${new Date(item.captured_at).toLocaleString("pt-BR")}` : ""}</small></label></li>)}</ul>
     {error && <p role="alert">{error}</p>}
     <button className="secondary-action" type="button" onClick={reuse} disabled={busy || disabled || chosen.size === 0}>{busy ? "Reaproveitando…" : "Reaproveitar selecionados"}</button>
   </section>;
