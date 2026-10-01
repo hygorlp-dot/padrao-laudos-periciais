@@ -150,8 +150,8 @@ class SaveInspectionSession:
                     raise ValueError("Inspection Session planned item identity or title changed")
                 if session.visit_context != predecessor.visit_context and not allow_visit_confirmation:
                     raise ValueError("visit facts require the dedicated confirmation command")
-                if allow_visit_confirmation and session.reviews:
-                    raise ValueError("changed visit facts invalidate prior inspection review")
+                if allow_visit_confirmation and session.reviews != predecessor.reviews:
+                    raise ValueError("visit confirmation cannot rewrite inspection review history")
                 if session.reviews != predecessor.reviews and not allow_visit_confirmation:
                     raise ValueError("Inspection Session reviews require a dedicated professional command")
                 append_only = (
@@ -222,7 +222,10 @@ class ConfirmInspectionVisit:
             raise RepositoryConflict("visit session is stale")
         _, profile = self.get_expert_profile.execute(workspace_id)
         context = VisitContext.from_values(values, confirmed_by=profile.profile_id, confirmed_at=self.clock.now().isoformat())
-        updated = replace(session, visit_context=context, participant_references=tuple(dict.fromkeys(person.name for person in context.attendants)), reviews=())
+        # A confirmação cria uma nova revisão da sessão, mas a trilha profissional
+        # anterior continua histórica e auditável. Invalidar autoridade corrente não
+        # autoriza apagar os registros que explicam como a sessão chegou até aqui.
+        updated = replace(session, visit_context=context, participant_references=tuple(dict.fromkeys(person.name for person in context.attendants)))
         saved = self.save_session.execute(workspace_id, updated, expected_revision, allow_visit_confirmation=True)
         return saved, updated
 
