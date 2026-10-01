@@ -377,6 +377,18 @@
     "/v1/workspaces/{workspace_id}/budget-snapshot/expenses": {"post":{"summary":"Registra despesa efetiva append-only","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/RecordBudgetExpenseRequest"}}}},"responses":{"200":{"description":"Despesa anexada","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BudgetSnapshotEnvelope"}}}},"409":{"description":"Conflito de revisão"}}}},
     "/v1/workspaces/{workspace_id}/budget-snapshot/payments": {"post":{"summary":"Registra recebimento e recalcula saldo pendente","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/RecordReceivedPaymentRequest"}}}},"responses":{"200":{"description":"Recebimento anexado","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BudgetSnapshotEnvelope"}}}},"409":{"description":"Conflito de revisão"}}}},
     "/v1/workspaces/{workspace_id}/budget-snapshot/close": {"post":{"summary":"Encerra explicitamente um orçamento integralmente recebido","parameters":[{"$ref":"#/components/parameters/WorkspaceId"}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/CloseBudgetSnapshotRequest"}}}},"responses":{"200":{"description":"Orçamento encerrado e terminal","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BudgetSnapshotEnvelope"}}}},"409":{"description":"Conflito de revisão"}}}},
+    "/v1/workspaces/{workspace_id}/pericial-planning/successor": {
+      "post": {
+        "summary": "Cria plano sucessor sobre a Análise do Caso vigente quando o plano atual está stale",
+        "parameters": [{"$ref": "#/components/parameters/WorkspaceId"}],
+        "requestBody": {"required": true, "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PericialPlanningSuccessorRequest"}}}},
+        "responses": {
+          "201": {"description": "Plano sucessor só de propostas; o plano anterior permanece no histórico", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/PericialPlanningEnvelope"}}}},
+          "400": {"description": "Plano atual não está stale ou Análise do Caso não está vigente"},
+          "409": {"description": "Conflito de revisão"}
+        }
+      }
+    },
     "/v1/workspaces/{workspace_id}/pericial-planning/decisions": {
       "post": {
         "summary": "Registra decisão profissional explícita sobre uma proposta",
@@ -489,6 +501,15 @@
           "revision": {"type": "integer", "minimum": 1},
           "updated_at": {"type": "string"},
           "snapshot": {"$ref": "#/components/schemas/PericialPlanningSnapshot"}
+        },
+        "additionalProperties": false
+      },
+      "PericialPlanningSuccessorRequest": {
+        "type": "object",
+        "required": ["expected_revision", "title"],
+        "properties": {
+          "expected_revision": {"type": "integer", "minimum": 1},
+          "title": {"type": "string", "minLength": 1}
         },
         "additionalProperties": false
       },

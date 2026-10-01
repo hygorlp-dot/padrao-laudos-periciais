@@ -109,6 +109,15 @@ export function startPericialPlanning(workspaceId: string, title: string) {
   });
 }
 
+// O plano stale continua no histórico com as suas decisões; o sucessor nasce só
+// de propostas sobre a análise vigente.
+export function startSuccessorPericialPlanning(workspaceId: string, expectedRevision: number, title: string) {
+  if (!UUID.test(workspaceId) || !title.trim()) throw new PericialPlanningApiError("invalid-response", "Informe o título do planejamento");
+  return localJson(`/app-api/v1/workspaces/${workspaceId}/pericial-planning/successor`, workspaceId, {
+    method: "POST", headers: { "Content-Type": "application/json; charset=utf-8" }, body: JSON.stringify({ expected_revision: expectedRevision, title }),
+  });
+}
+
 export function reviewPericialPlanning(
   workspaceId: string,
   command: { expected_revision: number; target_item_id: string; action: ReviewAction; reviewer: string; reason: string; decided_value: string | null },

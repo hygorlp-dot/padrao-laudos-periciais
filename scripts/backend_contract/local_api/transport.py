@@ -139,6 +139,7 @@ class LocalApiServices:
     save_pericial_planning: object | None = None
     get_pericial_planning: object | None = None
     start_pericial_planning: object | None = None
+    start_successor_pericial_planning: object | None = None
     review_pericial_planning: object | None = None
     save_inspection_session: object | None = None
     get_inspection_session: object | None = None
@@ -1372,6 +1373,20 @@ class LocalApi:
                     record, snapshot = self._services.start_pericial_planning.execute(workspace_id, title=dto["title"])
                     return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": pericial_planning_to_mapping(snapshot)})
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("pericial-planning", "successor"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.start_successor_pericial_planning is None:
+                    return _error(503, "PERICIAL_PLANNING_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_revision", "title"}:
+                    raise ValueError("Pericial Planning successor request is invalid")
+                record, snapshot = self._services.start_successor_pericial_planning.execute(
+                    workspace_id, title=dto["title"], expected_revision=dto["expected_revision"],
+                )
+                return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": pericial_planning_to_mapping(snapshot)})
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("pericial-planning", "decisions"):
                 if normalized_method != "POST":
