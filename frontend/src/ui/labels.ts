@@ -159,3 +159,4 @@ const REASON_LABELS: Array<[RegExp, string]> = [
 export function reasonLabels(reasons: readonly string[]) {
   return [...new Set(reasons.map((reason) => REASON_LABELS.find(([pattern]) => pattern.test(reason))?.[1] ?? reason))];
 }
+export const questionOriginLabel = (origin: string) => ({ COURT: "Juízo", CLAIMANT: "Parte autora", DEFENDANT: "Parte ré" })[origin] ?? "Origem não informada";

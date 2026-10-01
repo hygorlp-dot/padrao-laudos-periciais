@@ -29,6 +29,7 @@
     "unindexed_source_count"
   ],
   "properties": {
+    "document_inventory": {"type":"array","items":{"$ref":"#/$defs/documentInventoryDecision"}},
     "schema_version": { "const": "1.0.0" },
     "snapshot_id": { "$ref": "#/$defs/text" },
     "workspace_id": { "type": "string", "format": "uuid" },
@@ -149,6 +150,8 @@
     "unindexed_source_count": { "type": "integer", "minimum": 0 }
   },
   "$defs": {
+    "questionSource": {"type":"object","additionalProperties":false,"required":["origin","original_number","page_start","page_end","excerpt","method"],"properties":{"origin":{"enum":["COURT","CLAIMANT","DEFENDANT"]},"original_number":{"$ref":"#/$defs/text"},"page_start":{"type":"integer","minimum":1},"page_end":{"type":"integer","minimum":1},"excerpt":{"$ref":"#/$defs/text"},"method":{"enum":["NUMBERED_NATIVE_TEXT_V1","NUMBERED_OCR_V1"]}}},
+    "documentInventoryDecision": {"type":"object","additionalProperties":false,"required":["category","status","source_document_ids","reason","confirmed_by","confirmed_at"],"properties":{"category":{"$ref":"#/$defs/text"},"status":{"enum":["PROFESSIONALLY_CONFIRMED_PRESENT","PROFESSIONALLY_CONFIRMED_ABSENT_FROM_CASE"]},"source_document_ids":{"type":"array","uniqueItems":true,"items":{"$ref":"#/$defs/text"}},"reason":{"$ref":"#/$defs/text"},"confirmed_by":{"$ref":"#/$defs/text"},"confirmed_at":{"type":"string","format":"date-time"}}},
     "text": { "type": "string", "minLength": 1, "maxLength": 4096 },
     "sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "provenance": {
@@ -209,6 +212,7 @@
           "items": { "$ref": "#/$defs/text" }
         },
         "answer": { "type": "null" },
+        "source_question": {"$ref":"#/$defs/questionSource"},
         "event_raw": { "$ref": "#/$defs/text" },
         "event_normalized": { "$ref": "#/$defs/text" },
         "timestamp": { "type": ["string", "null"] },

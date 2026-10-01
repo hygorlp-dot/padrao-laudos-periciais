@@ -72,7 +72,8 @@ from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import AddCaseAnalysisItem, GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis, StartCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning
-from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession
+from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession, ConfirmInspectionVisit
+from ..application.case_intake import GetCaseIntake, AcceptCaseQuestions, ConfirmDocumentInventory
 from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, ReplaceRevokedOfflineDevice, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
 from ..application.technical_findings import (
     AddEvidenceProposal,
@@ -482,6 +483,8 @@ def build_local_api(
         local_ids,
     )
     get_expert_profile = GetExpertProfile(get_latest_artifact)
+    save_case_intake = SaveCaseAnalysis(store.revisions, get_latest_artifact, local_clock, local_ids, case_analysis_documents, private_store.authority_guard if private_store is not None else nullcontext)
+    get_case_intake = GetCaseIntake(get_case_analysis, read_case_document, LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine())) if read_case_document is not None else None
     save_expert_profile = SaveExpertProfile(
         store.revisions,
         get_latest_artifact,
@@ -700,6 +703,9 @@ def build_local_api(
             private_store.authority_guard if private_store is not None else nullcontext,
         ),
         get_case_analysis=get_case_analysis,
+        get_case_intake=get_case_intake,
+        accept_case_questions=AcceptCaseQuestions(get_case_intake, save_case_intake, local_ids) if get_case_intake is not None else None,
+        confirm_document_inventory=ConfirmDocumentInventory(get_case_analysis, save_case_intake, get_expert_profile, local_clock),
         start_case_analysis=StartCaseAnalysis(
             case_analysis_documents,
             SaveCaseAnalysis(
@@ -737,6 +743,7 @@ def build_local_api(
         save_inspection_session=save_inspection_session,
         get_inspection_session=get_inspection_session,
         start_inspection_session=(StartInspectionSession(get_pericial_planning, save_inspection_session, local_clock, local_ids) if save_inspection_session is not None else None),
+        confirm_inspection_visit=(ConfirmInspectionVisit(get_inspection_session, save_inspection_session, get_expert_profile, local_clock) if save_inspection_session is not None else None),
         prepare_offline_inspection=prepare_offline_inspection,
         sync_offline_inspection=sync_offline_inspection,
         update_offline_inspection=update_offline_inspection,

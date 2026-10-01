@@ -9,6 +9,8 @@ import json
 import re
 from typing import Any, TypeVar
 
+from .visit_context import VisitContext
+
 
 INSPECTION_SESSION_ARTIFACT_KIND = "INSPECTION_SESSION_V1"
 INSPECTION_SESSION_ARTIFACT_ID = "INSPECTION-SESSION"
@@ -460,8 +462,13 @@ class InspectionSession:
     reviews: tuple[InspectionReview, ...]
     upstream_stale: bool = False
     upstream_stale_reasons: tuple[str, ...] = ()
+    visit_context: VisitContext | None = None
 
     def __post_init__(self):
+        if self.visit_context is not None and type(self.visit_context) is not VisitContext:
+            raise ValueError("inspection visit context is invalid")
+        if self.visit_context is not None and self.participant_references != tuple(dict.fromkeys(person.name for person in self.visit_context.attendants)):
+            raise ValueError("inspection participants must project confirmed visit attendance")
         if self.schema_version != "1.0.0" or not all(_text(value) for value in (self.session_id, self.workspace_id, self.started_at, self.location_context, self.responsible_professional)):
             raise ValueError("inspection session identity is invalid")
         if self.plan_snapshot.workspace_id != self.workspace_id or type(self.source_revision) is not int or self.source_revision < 1:
@@ -588,9 +595,12 @@ _COLLECTION_TYPES = {
 
 
 def inspection_session_from_mapping(value: object) -> InspectionSession:
-    if type(value) is not dict or set(value) != {field.name for field in fields(InspectionSession)}:
+    required = {field.name for field in fields(InspectionSession)} - {"visit_context"}
+    if type(value) is not dict or set(value) - {"visit_context"} != required:
         raise ValueError("invalid Inspection Session payload")
     converted: dict[str, Any] = dict(value)
+    if "visit_context" in converted:
+        converted["visit_context"] = VisitContext.from_mapping(converted["visit_context"])
     converted["plan_snapshot"] = _record(InspectionPlanSnapshot, converted["plan_snapshot"])
     converted["coverage"] = _record(InspectionCoverage, converted["coverage"])
     for name, cls in _COLLECTION_TYPES.items():
@@ -607,4 +617,7 @@ def inspection_session_from_mapping(value: object) -> InspectionSession:
 def inspection_session_to_mapping(value: InspectionSession) -> dict[str, Any]:
     if type(value) is not InspectionSession:
         raise TypeError("InspectionSession required")
-    return json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    result = json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    if value.visit_context is None:
+        result.pop("visit_context")
+    return result

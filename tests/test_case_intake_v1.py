@@ -1,0 +1,583 @@
+from dataclasses import replace
+import json
+from pathlib import Path
+
+import pytest
+
+from scripts.backend_contract.application.process_metadata import PdfTextPage
+from tests.test_report_foundation_v1 import upstreams
+
+
+def test_questions_keep_original_number_origin_unicode_and_physical_pages():
+    from scripts.backend_contract.case_intake import extract_questions
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="p. 2-3 | PJe sintético")
+    pages = (PdfTextPage(1, "QUESITOS DO JUÍZO\n99. Fora do documento?"), PdfTextPage(2, "QUESITOS DA PARTE AUTORA\n01) A parede apresenta\numidade?\n\n2. Qual a extensão?\n"), PdfTextPage(3, "QUESITOS DA PARTE RÉ\n7 - Há fissuras?\n\nNestes termos,"))
+    values = extract_questions(doc, pages)
+    assert [(p.source.origin, p.source.original_number, p.text) for p in values] == [("CLAIMANT", "01)", "A parede apresenta\numidade?"), ("CLAIMANT", "2.", "Qual a extensão?"), ("DEFENDANT", "7 -", "Há fissuras?")]
+    assert [p.source.page_start for p in values] == [2, 2, 3]
+    assert values[0].text in values[0].source.excerpt
+
+
+def test_question_intake_does_not_guess_origin_or_treat_narrative_mentions_as_questions():
+    from scripts.backend_contract.case_intake import extract_questions
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    assert extract_questions(doc, (PdfTextPage(1, "A parte autora mencionou os quesitos.\n1. Qual seria a área?"),)) == ()
+
+
+def test_inventory_document_heading_is_a_proposal_but_body_mention_is_not_presence():
+    from scripts.backend_contract.case_intake import inventory_proposals
+    doc = replace(upstreams()[1].documents[0], raw_type="peticao.pdf", page_count_or_span="Documento completo")
+    values = inventory_proposals((doc,), {doc.document_id: (PdfTextPage(1, "PETIÇÃO\n\nRequer a juntada do habite-se."),)})
+    row = next(p for p in values if p["category"] == "HABITE_SE")
+    assert row["state"] == "NOT_FOUND_IN_CURRENT_INGESTED_MATERIAL" and not row["matches"]
+    values = inventory_proposals((doc,), {doc.document_id: (PdfTextPage(1, "HABITE-SE\nCertificado sintético"),)})
+    row = next(p for p in values if p["category"] == "HABITE_SE")
+    assert row["state"] == "PROPOSED_PRESENT" and row["matches"][0]["page"] == 1
+
+
+def test_real_intake_accepts_literal_questions_once_and_backup_rejects_forged_excerpt(tmp_path):
+    # `pymupdf` nao e dependencia declarada: o CI instala so requirements-dev.txt.
+    # `_text_pdf` usa `pypdf`, e o extrator do produto le deste PDF exatamente o
+    # mesmo texto que lia do gerado por pymupdf (acentos e quebras incluidos).
+    from tests.test_property_record_v1 import _text_pdf
+    from scripts.backend_contract.local_api.composition import build_local_api
+    from scripts.backend_contract.infrastructure.productization import VerifyWorkspaceBackup
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+    from tests.test_product_integration_oracle_v1 import _http, http_request, _reseal, TOKEN
+    runtime = build_local_api(tmp_path / "intake.db", token=TOKEN, private_root=tmp_path / "private")
+    runtime.start()
+    try:
+        status, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Quesitos sintéticos"})
+        assert status == 201
+        root = f"/v1/workspaces/{workspace['workspace_id']}"
+        profile = json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8"))["expert_profile"]
+        assert _http(runtime, "PUT", root + "/expert-profile", {"expected_revision": None, "profile": profile})[0] == 200
+        data = _text_pdf(["QUESITOS DA PARTE AUTORA", "01) A parede apresenta umidade?", "", "2. Qual a extensão?"])
+        assert _http(runtime, "POST", root + "/materials", raw_body=data, headers={"Content-Type": "application/pdf", "X-Document-Filename": "quesitos-sinteticos.pdf"})[0] == 201
+        assert _http(runtime, "POST", root + "/case-analysis", {})[0] == 201
+        status, proposed = _http(runtime, "GET", root + "/case-analysis/intake")
+        assert status == 200 and len(proposed["questions"]) == 2
+        chosen = proposed["questions"][0]
+        body = {"selections": [{"proposal_id": chosen["proposal_id"], "origin": chosen["source"]["origin"]}], "expected_revision": proposed["revision"]}
+        status, accepted = _http(runtime, "POST", root + "/case-analysis/questions", body)
+        assert status == 200 and len(accepted["snapshot"]["questions"]) == 1
+        question = accepted["snapshot"]["questions"][0]
+        assert question["text"] == chosen["text"] and question["source_question"]["original_number"] == "01)"
+        body["expected_revision"] = accepted["revision"]
+        status, repeated = _http(runtime, "POST", root + "/case-analysis/questions", body)
+        assert status == 200 and repeated["revision"] == accepted["revision"]
+        status, confirmed = _http(runtime, "POST", root + "/case-analysis/document-inventory", {"expected_revision": accepted["revision"], "values": {"category": "HABITE_SE", "status": "PROFESSIONALLY_CONFIRMED_ABSENT_FROM_CASE", "source_document_ids": [], "reason": "Conferência sintética integral feita pelo perito."}})
+        assert status == 200 and confirmed["snapshot"]["document_inventory"][0]["confirmed_by"] == profile["profile_id"]
+        status, case = _http(runtime, "POST", root + "/case-analysis/items", {"expected_revision": confirmed["revision"], "item_kind": "PERICIAL_OBJECT", "text": "Verificar condição superficial sintética.", "source_document_id": question["provenance"][0]["source_document_id"], "page_or_span": "p. 1", "technical_subjects": ["Superfície"], "values": {}})
+        assert status == 200
+        for item in [*case["snapshot"]["questions"], *case["snapshot"]["pericial_objects"]]:
+            status, case = _http(runtime, "POST", root + "/case-analysis/reviews", {"expected_revision": case["revision"], "target_item_id": item["item_id"], "action": "CONFIRM", "corrected_value": None, "reviewer": profile["profile_id"], "reason": "Fonte sintética conferida."})
+            assert status == 200
+        status, planning = _http(runtime, "POST", root + "/pericial-planning", {"title": "Vistoria sintética"})
+        assert status == 201
+        planned = planning["snapshot"]["inspection_requirements"][0]
+        status, planning = _http(runtime, "POST", root + "/pericial-planning/decisions", {"expected_revision": planning["revision"], "target_item_id": planned["item_id"], "action": "APPROVE", "reviewer": profile["profile_id"], "reason": "Planejamento sintético confirmado.", "decided_value": None})
+        assert status == 200
+        status, inspection = _http(runtime, "POST", root + "/inspection-session", {"responsible_professional": profile["profile_id"], "location_context": "Imóvel sintético", "participant_references": []})
+        assert status == 201 and "visit_context" not in inspection["snapshot"]
+        from tests.test_inspection_visit_context_v1 import visit_values
+        status, inspection = _http(runtime, "POST", root + "/inspection-session/visit-context", {"expected_revision": inspection["revision"], "values": visit_values()})
+        assert status == 200 and inspection["snapshot"]["visit_context"]["date"] == "2026-09-20"
+        assert inspection["snapshot"]["participant_references"] == ["Pessoa sintética"]
+        forged_visit = json.loads(json.dumps(inspection["snapshot"]))
+        forged_visit["visit_context"]["weather"] = "Clima adulterado"
+        assert _http(runtime, "PUT", root + "/inspection-session", {"expected_revision": inspection["revision"], "snapshot": forged_visit})[0] == 400
+        assert _http(runtime, "POST", root + "/inspection-session/visit-context", {"expected_revision": 1, "values": visit_values()})[0] == 409
+        assert _http(runtime, "GET", root + "/case-analysis/intake", headers={"X-Local-API-Token": "invalid"})[0] == 403
+        status, _, backup = http_request(runtime.server, "POST", root + "/backup", value={}, headers={"X-Local-API-Token": TOKEN})
+        assert status == 200
+        VerifyWorkspaceBackup().execute(backup)
+        forged = json.loads(backup)
+        for revision in forged["artifact_revisions"]:
+            if revision["artifact_kind"] == "CASE_ANALYSIS_SNAPSHOT_V1" and revision["revision"] == accepted["revision"]:
+                q = revision["payload"]["questions"][0]
+                q["text"] = "Pergunta inventada?"
+                q["source_question"]["excerpt"] = "01) Pergunta inventada?"
+                for review in revision["payload"]["human_reviews"]:
+                    if review["target_item_id"] == q["item_id"]:
+                        review["original_extraction"] = review["corrected_value"] = q["text"]
+        with pytest.raises(RepositoryIntegrityError, match="question source evidence"):
+            VerifyWorkspaceBackup().execute(_reseal(forged))
+    finally:
+        runtime.close()
+
+
+def test_intake_commands_write_over_the_persisted_base_after_a_professional_exclusion(tmp_path):
+    """Integracao com a #251: a Analise do Caso lida pelo GET e uma PROJECAO (peca excluida
+    pelo perito aparece sem conteudo). Os comandos de intake gravavam essa projecao, que
+    diverge do predecessor persistido -- toda confirmacao de inventario e todo aceite de
+    quesito passavam a falhar depois de qualquer exclusao. Quem escreve parte do persistido."""
+    from tests.test_pje_effective_availability_v1 import _distinct_pje_pdf, _effective, _find, _request, _runtime, _set_available, _setup
+
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, _distinct_pje_pdf(tmp_path / "autos.pdf", "intake-apos-exclusao"))
+        root = f"/v1/workspaces/{workspace_id}"
+        profile = json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8"))["expert_profile"]
+        assert _request(runtime, "PUT", root + "/expert-profile", value={"expected_revision": None, "profile": profile})[0] == 200
+        _effective(runtime, workspace_id)
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+        excluded = _find(_effective(runtime, workspace_id), "DOC-PJE-002")
+        available = _find(_effective(runtime, workspace_id), "DOC-PJE-001")
+        assert excluded["content_available"] is False
+
+        status, intake = _request(runtime, "GET", root + "/case-analysis/intake")
+        assert status == 200, intake
+        status, refused = _request(runtime, "POST", root + "/case-analysis/document-inventory", value={"expected_revision": intake["revision"], "values": {
+            "category": "HABITE_SE", "status": "PROFESSIONALLY_CONFIRMED_PRESENT", "source_document_ids": [excluded["document_id"]], "reason": "Conferencia sintetica."}})
+        assert status == 400, refused  # presenca nao pode se apoiar na peca excluida
+        status, confirmed = _request(runtime, "POST", root + "/case-analysis/document-inventory", value={"expected_revision": intake["revision"], "values": {
+            "category": "HABITE_SE", "status": "PROFESSIONALLY_CONFIRMED_PRESENT", "source_document_ids": [available["document_id"]], "reason": "Conferencia sintetica."}})
+        assert status == 200, confirmed
+        # a resposta e o read-model: a exclusao continua visivel, nada foi gravado como projecao
+        assert _find(confirmed["snapshot"], "DOC-PJE-002")["content_available"] is False
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", True)
+        assert _find(_effective(runtime, workspace_id), "DOC-PJE-002")["content_available"] is True
+    finally:
+        runtime.close()
+
+
+def test_accepting_questions_after_a_professional_exclusion_keeps_the_exclusion(tmp_path):
+    """Mesmo contrato para o aceite de quesitos: proposta vinda de fonte disponivel, gravada
+    sobre a base persistida; a exclusao da outra peca segue visivel e reversivel."""
+    from tests.test_pje_effective_availability_v1 import _distinct_pje_pdf, _effective, _find, _request, _runtime, _set_available, _setup
+    from tests.test_property_record_v1 import _text_pdf
+
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, _distinct_pje_pdf(tmp_path / "autos.pdf", "quesitos-apos-exclusao"))
+        root = f"/v1/workspaces/{workspace_id}"
+        status, _ = _request(runtime, "POST", root + "/materials", body=_text_pdf(["QUESITOS DA PARTE AUTORA", "01) A parede apresenta umidade?"]),
+                             headers={"Content-Type": "application/pdf", "X-Document-Filename": "quesitos-sinteticos.pdf"})
+        assert status == 201
+        _effective(runtime, workspace_id)
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+
+        status, intake = _request(runtime, "GET", root + "/case-analysis/intake")
+        assert status == 200 and len(intake["questions"]) == 1, intake
+        status, accepted = _request(runtime, "POST", root + "/case-analysis/questions", value={
+            "selections": [{"proposal_id": intake["questions"][0]["proposal_id"], "origin": intake["questions"][0]["source"]["origin"]}], "expected_revision": intake["revision"]})
+        assert status == 200, accepted
+        assert [item["text"] for item in accepted["snapshot"]["questions"]] == ["A parede apresenta umidade?"]
+        assert _find(accepted["snapshot"], "DOC-PJE-002")["content_available"] is False
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", True)
+        assert _find(_effective(runtime, workspace_id), "DOC-PJE-002")["content_available"] is True
+    finally:
+        runtime.close()
+
+
+def test_intake_never_opens_a_document_excluded_by_the_professional():
+    """As propostas saem da projecao: peca excluida pelo perito nao e aberta nem lida,
+    mesmo com a escrita partindo da base persistida."""
+    from types import SimpleNamespace
+
+    from scripts.backend_contract.application.case_intake import GetCaseIntake
+
+    case = upstreams()[1]
+    available = [d.document_id for d in case.documents if d.content_available]
+    assert available
+    excluded = {document_id: False for document_id in available}
+
+    def refuse_open(*_args):
+        raise AssertionError("opened a document excluded by the professional")
+
+    intake = GetCaseIntake(
+        SimpleNamespace(execute_for_command=lambda _w: (SimpleNamespace(revision=3), case, excluded)),
+        SimpleNamespace(execute=refuse_open), SimpleNamespace(),
+    )
+    record, projected, questions, _inventory = intake.execute(case.workspace_id)
+    assert record.revision == 3 and questions == ()
+    assert not any(d.content_available for d in projected.documents)
+    _record, base, availability, _proposals = intake.execute_for_command(case.workspace_id)
+    assert base is case and availability == excluded  # a escrita parte do persistido
+
+
+def _paged_text_pdf(pages):
+    """PDF sintetico com uma lista de linhas por pagina (pypdf, sem pymupdf)."""
+    import io
+
+    from pypdf import PdfWriter
+    from pypdf.generic import DictionaryObject, NameObject, StreamObject
+
+    def literal(text):
+        return "(" + "".join(chr(b) if 32 <= b < 127 and b not in b"()\\" else "\\%03o" % b for b in text.encode("cp1252")) + ")"
+
+    writer = PdfWriter()
+    for lines in pages:
+        page = writer.add_blank_page(width=612, height=792)
+        font = DictionaryObject({NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+                                 NameObject("/BaseFont"): NameObject("/Helvetica"), NameObject("/Encoding"): NameObject("/WinAnsiEncoding")})
+        page[NameObject("/Resources")] = DictionaryObject({NameObject("/Font"): DictionaryObject({NameObject("/F1"): writer._add_object(font)})})
+        stream = StreamObject()
+        stream.set_data(("BT /F1 10 Tf 40 760 Td " + " ".join(f"{literal(line)} Tj 0 -14 Td" for line in lines) + " ET").encode("ascii"))
+        page[NameObject("/Contents")] = writer._add_object(stream)
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    return buffer.getvalue()
+
+
+def _intake_workspace(tmp_path, data):
+    from scripts.backend_contract.local_api.composition import build_local_api
+    from tests.test_local_api_v1 import http_request
+    from tests.test_product_integration_oracle_v1 import TOKEN
+
+    def _http(runtime, method, path, value=None, raw_body=None, headers=None):
+        # Limite canonico do cliente de teste: o intake le e faz OCR de todas as paginas.
+        status, _headers, body = http_request(runtime.server, method, path, value=value, raw_body=raw_body,
+                                              headers={"X-Local-API-Token": TOKEN, **(headers or {})}, timeout=30.0)
+        return status, json.loads(body) if body else None
+
+    runtime = build_local_api(tmp_path / "intake.db", token=TOKEN, private_root=tmp_path / "private")
+    runtime.start()
+    status, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Limites sinteticos"})
+    assert status == 201
+    root = f"/v1/workspaces/{workspace['workspace_id']}"
+    profile = json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8"))["expert_profile"]
+    assert _http(runtime, "PUT", root + "/expert-profile", {"expected_revision": None, "profile": profile})[0] == 200
+    assert _http(runtime, "POST", root + "/materials", raw_body=data, headers={"Content-Type": "application/pdf", "X-Document-Filename": "quesitos.pdf"})[0] == 201
+    status, case = _http(runtime, "POST", root + "/case-analysis", {})
+    assert status == 201
+    return runtime, root, case, _http
+
+
+def test_question_proposal_limit_is_the_published_case_analysis_text_limit():
+    from scripts.backend_contract.case_intake import QUESTION_TEXT_MAX
+
+    schema = json.loads((Path(__file__).resolve().parents[1] / "schemas/case-analysis-snapshot-v1.schema.json").read_text(encoding="utf-8"))
+    assert QUESTION_TEXT_MAX == schema["$defs"]["text"]["maxLength"]
+
+
+def test_an_oversized_question_block_is_not_proposed_and_the_analysis_stays_readable(tmp_path):
+    """Revisao da PR #255 (P1): um bloco de quesito sem linha em branco atravessava paginas
+    e passava do limite do schema. O aceite respondia 200 e TODA leitura seguinte da Analise
+    do Caso falhava (revisao append-only, sem desfazer). O bloco acima do limite nao e
+    oferecido; o quesito curto do mesmo documento continua."""
+    filler = "continuacao sintetica do mesmo quesito sem linha em branco"
+    pages = [["QUESITOS DA PARTE AUTORA", "01) Quesito longo sintetico?", *(f"linha {i:03d} {filler}" for i in range(45))],
+             *([f"pagina {n} linha {i:03d} {filler}" for i in range(45)] for n in (2, 3)),
+             ["QUESITOS DA PARTE RE", "02) Quesito curto sintetico?"]]
+    runtime, root, _case, http = _intake_workspace(tmp_path, _paged_text_pdf(pages))
+    try:
+        status, intake = http(runtime, "GET", root + "/case-analysis/intake")
+        assert status == 200
+        assert [item["text"] for item in intake["questions"]] == ["Quesito curto sintetico?"]
+        status, accepted = http(runtime, "POST", root + "/case-analysis/questions",
+                                {"selections": [{"proposal_id": intake["questions"][0]["proposal_id"], "origin": intake["questions"][0]["source"]["origin"]}], "expected_revision": intake["revision"]})
+        assert status == 200, accepted
+        assert http(runtime, "GET", root + "/case-analysis")[0] == 200
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("vector", ["inventory_reason", "manual_item_text"])
+def test_an_oversized_text_is_refused_at_write_and_never_bricks_the_analysis(tmp_path, vector):
+    """A causa-raiz: o Save da Analise do Caso gravava sem validar o schema que a leitura
+    valida. Agora a escrita falha fechada (400) e a analise segue legivel e editavel.
+    `manual_item_text` e o vetor ANTERIOR a PR (POST /items), fechado pela mesma causa."""
+    from tests.test_property_record_v1 import _text_pdf
+
+    runtime, root, case, http = _intake_workspace(tmp_path, _text_pdf(["QUESITOS DA PARTE AUTORA", "01) A parede apresenta umidade?"]))
+    try:
+        oversized = "x" * 4097
+        if vector == "inventory_reason":
+            status, _ = http(runtime, "POST", root + "/case-analysis/document-inventory", {"expected_revision": case["revision"], "values": {
+                "category": "HABITE_SE", "status": "PROFESSIONALLY_CONFIRMED_ABSENT_FROM_CASE", "source_document_ids": [], "reason": oversized}})
+        else:
+            status, _ = http(runtime, "POST", root + "/case-analysis/items", {"expected_revision": case["revision"], "item_kind": "PERICIAL_OBJECT", "text": oversized,
+                             "source_document_id": case["snapshot"]["documents"][0]["document_id"], "page_or_span": "p. 1", "technical_subjects": ["x"], "values": {}})
+        assert status == 400
+        status, current = http(runtime, "GET", root + "/case-analysis")
+        assert status == 200 and current["revision"] == case["revision"]
+        status, _ = http(runtime, "POST", root + "/case-analysis/document-inventory", {"expected_revision": current["revision"], "values": {
+            "category": "HABITE_SE", "status": "PROFESSIONALLY_CONFIRMED_ABSENT_FROM_CASE", "source_document_ids": [], "reason": "Conferencia sintetica."}})
+        assert status == 200  # segue editavel
+    finally:
+        runtime.close()
+
+
+def test_question_origin_never_leaks_past_its_own_heading():
+    """Revisao da PR #255 (P1, auditor): a origem so mudava com "QUESITOS DO/DA <x>".
+    "QUESITOS FORMULADOS PELA PARTE RE" nao era reconhecido, o quesito da re herdava
+    "Juizo" (gravado sem como corrigir) e um despacho numerado virava quesito do Juizo.
+    Agora a origem vale so dentro da secao que a declara; o que nao e explicito nao e
+    proposto."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, "\n".join([
+        "QUESITOS DO JUIZO", "1. Ha fissuras na fachada?",
+        "QUESITOS FORMULADOS PELA PARTE RE", "1. A obra seguiu o projeto aprovado?",
+        "Determino:", "1. Intimem-se as partes para manifestacao.",
+    ]))
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == [
+        ("COURT", "Ha fissuras na fachada?"), ("DEFENDANT", "A obra seguiu o projeto aprovado?"),
+    ]
+    unknown = PdfTextPage(1, "QUESITOS DA PARTE AUTORA\n1. Ha umidade?\nQUESITOS DAS PARTES\n2. Quem responde?")
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (unknown,))] == [("CLAIMANT", "Ha umidade?")]
+    unrecognized = PdfTextPage(1, "QUESITOS DO JUIZO\n1. Ha umidade?\nQUESITOS COMPLEMENTARES APRESENTADOS NA REPLICA\n2. Quem responde?")
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (unrecognized,))] == [("COURT", "Ha umidade?")]
+    dispositive = PdfTextPage(1, "QUESITOS DO JUIZO\n1. Ha vicios construtivos no imovel?\nDiante do exposto, determino:\n"
+                                 "1. Intimem-se as partes para indicar assistentes tecnicos.\n2. Deposite a autora os honorarios periciais.")
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (dispositive,))] == [("COURT", "Ha vicios construtivos no imovel?")]
+    supplementary = PdfTextPage(1, "QUESITOS SUPLEMENTARES DOS REUS\n3) Houve manutencao?")
+    assert [(p.source.origin, p.source.original_number) for p in extract_questions(doc, (supplementary,))] == [("DEFENDANT", "3)")]
+
+
+@pytest.mark.parametrize("pages,expected", [
+    pytest.param(
+        ("QUESITOS DA PARTE AUTORA\n1. Queira o Sr. Perito descrever as patologias do imóvel, informando\no seguinte:\n"
+         "a) localização;\nb) extensão;\nc) causa provável.\n2. Os vícios decorrem de falha construtiva?\n3. Qual o custo de reparo?",),
+        [("1.", "Queira o Sr. Perito descrever as patologias do imóvel, informando\no seguinte:\na) localização;\nb) extensão;\nc) causa provável."),
+         ("2.", "Os vícios decorrem de falha construtiva?"), ("3.", "Qual o custo de reparo?")],
+        id="continuacao_terminada_em_dois_pontos"),
+    pytest.param(
+        ("QUESITOS DA PARTE RÉ\nDos vícios construtivos:\n1. Há fissuras nas alvenarias?\n2. Há infiltração na cobertura?\n"
+         "Da manutenção:\n3. O morador realizou a manutenção prevista no manual?",),
+        [("1.", "Há fissuras nas alvenarias?"), ("2.", "Há infiltração na cobertura?\nDa manutenção:"),
+         ("3.", "O morador realizou a manutenção prevista no manual?")],
+        id="subtitulo_tematico"),
+    pytest.param(
+        ("QUESITOS DO JUÍZO\n1. Há vícios construtivos no imóvel?\n2. Quais?\nNúmero do documento:\n21051315224400000000000",
+         "3. Qual a causa provável?\n4. Qual o custo de reparo?"),
+        [("1.", "Há vícios construtivos no imóvel?"), ("2.", "Quais?"), ("3.", "Qual a causa provável?"), ("4.", "Qual o custo de reparo?")],
+        id="rodape_pje_entre_paginas"),
+    pytest.param(
+        ("QUESITOS DO JUIZO\n1. Ha fissuras?\nResposta:\n2. Ha infiltracao?\nResposta:\n3. Qual a causa?\nResposta:",),
+        [("1.", "Ha fissuras?"), ("2.", "Ha infiltracao?"), ("3.", "Qual a causa?")],
+        id="espaco_de_resposta"),
+])
+def test_common_question_layouts_are_neither_truncated_nor_dropped(pages, expected):
+    """Revisao da PR #255 (P1, revisor, rodada 2): a primeira correcao do vazamento de
+    origem tratava QUALQUER rotulo curto terminado em ":" como fim de secao e truncava ou
+    descartava quesitos legitimos. So a parte dispositiva do ato encerra a secao; espaco de
+    resposta e rodape PJe so fecham o quesito em curso."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    proposals = extract_questions(doc, tuple(PdfTextPage(number, text) for number, text in enumerate(pages, 1)))
+    assert [(p.source.original_number, p.text) for p in proposals] == expected
+
+
+@pytest.mark.parametrize("second_section,expected_origin", [
+    ("II - QUESITOS DA RE", "DEFENDANT"),
+    ("III. QUESITOS DA PARTE AUTORA", "CLAIMANT"),
+    ("b) Quesitos da re", "DEFENDANT"),
+    ("Seguem os quesitos da re:", "DEFENDANT"),
+    ("Intimem-se as partes para, no prazo de 15 dias:", None),
+    ("DETERMINO", None),
+])
+def test_every_common_section_boundary_resets_or_declares_the_origin(second_section, expected_origin):
+    """Revisao da PR #255 (P1, auditor, rodada 2): enumeradores romanos/letras, introducao
+    curta e parte dispositiva sem dois-pontos deixavam o quesito seguinte herdar "Juizo"."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, f"QUESITOS DO JUIZO\n1. Ha fissuras?\n{second_section}\n1. Seguiu o projeto?")
+    expected = [("COURT", "Ha fissuras?")] + ([(expected_origin, "Seguiu o projeto?")] if expected_origin else [])
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == expected
+
+
+def test_a_continuation_line_that_mentions_questions_is_not_a_heading():
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, "QUESITOS DA PARTE AUTORA\n1. Queira o perito responder, com base\nnos quesitos do juizo\n2. Ha umidade?")
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == [
+        ("CLAIMANT", "Queira o perito responder, com base\nnos quesitos do juizo"), ("CLAIMANT", "Ha umidade?")]
+
+
+_PJE_FOOTER = ("Assinado eletronicamente por: PESSOA SINTETICA - 01/10/2026\n"
+               "https://pje.tjxx.jus.br/pje/Processo/ConsultaDocumento/listView.seam\n"
+               "Número do documento: 21051315224400000000000")
+
+
+@pytest.mark.parametrize("pages", [
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. Queira o Sr. Perito informar se as infiltrações verificadas na parede\n" + _PJE_FOOTER,
+                  "Num. 12345 - Pág. 2\nda cozinha decorrem de falha de impermeabilização ou de uso inadequado?\n2. Qual o custo de reparo?"),
+                 id="rodape_no_fim_da_pagina"),
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. Queira o Sr. Perito informar se as infiltrações verificadas na parede",
+                  _PJE_FOOTER + "\nda cozinha decorrem de falha de impermeabilização ou de uso inadequado?\n2. Qual o custo de reparo?"),
+                 id="rodape_no_topo_da_pagina_seguinte"),
+])
+def test_a_question_that_crosses_a_pje_page_footer_is_kept_whole(pages):
+    """Revisao da PR #255 (P1, revisor, rodada 3): o rodape PJe fechava o quesito em curso;
+    a continuacao na pagina seguinte era descartada e o texto truncado (e o trecho, que o
+    perito usaria para conferir) era aceito com 200. O rodape nao e texto do quesito nem o
+    encerra."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    proposals = extract_questions(doc, tuple(PdfTextPage(number, text) for number, text in enumerate(pages, 1)))
+    assert [(p.text, p.source.page_start, p.source.page_end) for p in proposals] == [
+        ("Queira o Sr. Perito informar se as infiltrações verificadas na parede\n"
+         "da cozinha decorrem de falha de impermeabilização ou de uso inadequado?", 1, 2),
+        ("Qual o custo de reparo?", 2, 2),
+    ]
+    assert "Assinado" not in proposals[0].source.excerpt and "21051315224400000000000" not in proposals[0].text
+
+
+@pytest.mark.parametrize("continuation", [
+    "quesitos do juizo", "aos quesitos da re:", "quesitos anteriores?", "respostas anteriores estao corretas?",
+    "ante o exposto na contestacao?", "nao decido",
+])
+def test_a_wrapped_continuation_line_never_changes_the_section(continuation):
+    """Revisao da PR #255 (P1, auditor, rodada 3): a linha que o PDF quebrou ("...aos\n
+    quesitos do juizo") virava cabecalho e os quesitos seguintes eram rotulados com outra
+    origem. Linha estrutural comeca com maiuscula ou enumerador; continuacao, nao."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, f"QUESITOS DA PARTE AUTORA\n1. O perito confirma as respostas dadas\n{continuation}\n2. Ha umidade?")
+    proposals = extract_questions(doc, (page,))
+    assert [(p.source.origin, p.source.original_number) for p in proposals] == [("CLAIMANT", "1."), ("CLAIMANT", "2.")]
+    assert proposals[0].text == f"O perito confirma as respostas dadas\n{continuation}"
+
+
+@pytest.mark.parametrize("boundary,expected", [
+    ("A re, por sua vez, apresenta os seguintes quesitos", None),
+    ("A parte re apresentou os seguintes quesitos:", None),
+    ("Seguem os quesitos da re", None),  # introducao sem ":" nao e cabecalho: falha fechada
+    ("Quesitos da re (fls. 120):", "DEFENDANT"),
+    ("Intime-se o perito:", None),
+    ("Providências:", None),
+    ("Por todo o exposto, fixo:", None),
+    ("DISPOSITIVO", None),
+    ("Indefiro os seguintes quesitos da re:", None),
+])
+def test_prose_and_dispositive_boundaries_never_inherit_the_previous_origin(boundary, expected):
+    """Introducao em prosa nao reconhecida zera a origem: os quesitos seguintes deixam de
+    ser propostos (a UI avisa que a lista pode estar incompleta) em vez de herdarem a
+    origem anterior. O dispositivo prevalece sobre um aparente cabecalho ("Indefiro...")."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, f"QUESITOS DA PARTE AUTORA\n1. Ha umidade?\n{boundary}\n1. Houve manutencao?")
+    expected_rows = [("CLAIMANT", "Ha umidade?")] + ([(expected, "Houve manutencao?")] if expected else [])
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == expected_rows
+
+
+
+def test_the_question_origin_is_the_professional_decision_at_acceptance(tmp_path):
+    """Revisao da PR #255 (rodada 4): quatro rodadas mostraram que a heuristica de texto
+    livre erra a origem em layouts incomuns -- e a origem proposta era gravada sem decisao
+    profissional e sem correcao possivel. Agora o perito confirma a origem de cada quesito
+    no aceite (proposta != decisao). O verify do backup confere a evidencia literal contra
+    os bytes; a origem e a decisao registrada."""
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+    from scripts.backend_contract.infrastructure.productization import VerifyWorkspaceBackup
+    from tests.test_local_api_v1 import http_request
+    from tests.test_product_integration_oracle_v1 import TOKEN, _reseal
+    from tests.test_property_record_v1 import _text_pdf
+
+    runtime, root, _case, http = _intake_workspace(tmp_path, _text_pdf(["QUESITOS DA PARTE AUTORA", "01) A parede apresenta umidade?"]))
+    try:
+        status, intake = http(runtime, "GET", root + "/case-analysis/intake")
+        proposal = intake["questions"][0]
+        assert status == 200 and proposal["source"]["origin"] == "CLAIMANT"
+        assert proposal["section_heading"] == "QUESITOS DA PARTE AUTORA" and proposal["section_page"] == 1
+        for invalid in ({"proposal_ids": [proposal["proposal_id"]]},
+                        {"selections": [{"proposal_id": proposal["proposal_id"]}]},
+                        {"selections": [{"proposal_id": proposal["proposal_id"], "origin": "EXPERT"}]}):
+            assert http(runtime, "POST", root + "/case-analysis/questions", {**invalid, "expected_revision": intake["revision"]})[0] == 400
+        status, accepted = http(runtime, "POST", root + "/case-analysis/questions", {
+            "selections": [{"proposal_id": proposal["proposal_id"], "origin": "DEFENDANT"}], "expected_revision": intake["revision"]})
+        assert status == 200, accepted
+        question = accepted["snapshot"]["questions"][0]
+        assert question["source_question"]["origin"] == "DEFENDANT"  # a decisao do perito, nao a proposta
+        assert question["source_question"]["excerpt"] == proposal["source"]["excerpt"] and question["text"] == proposal["text"]
+        status, again = http(runtime, "POST", root + "/case-analysis/questions", {
+            "selections": [{"proposal_id": proposal["proposal_id"], "origin": "CLAIMANT"}], "expected_revision": accepted["revision"]})
+        assert status == 200 and again["revision"] == accepted["revision"]  # mesma evidencia: nao duplica
+        status, _headers, backup = http_request(runtime.server, "POST", root + "/backup", value={}, headers={"X-Local-API-Token": TOKEN})
+        assert status == 200
+        VerifyWorkspaceBackup().execute(backup)  # origem decidida nao invalida a evidencia
+        forged = json.loads(backup)
+        for revision in forged["artifact_revisions"]:
+            if revision["artifact_kind"] == "CASE_ANALYSIS_SNAPSHOT_V1" and revision["revision"] == accepted["revision"]:
+                revision["payload"]["questions"][0]["source_question"]["method"] = "NUMBERED_OCR_V1"
+        with pytest.raises(RepositoryIntegrityError, match="question source evidence"):
+            VerifyWorkspaceBackup().execute(_reseal(forged))  # evidencia adulterada continua recusada
+    finally:
+        runtime.close()
+
+
+def test_each_proposal_shows_the_heading_and_what_follows_in_the_document():
+    """O perito confere a fronteira e a origem antes de aceitar: a linha do titulo que
+    sugeriu a origem e o texto que vem logo depois do bloco."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    proposals = extract_questions(doc, (PdfTextPage(1, "QUESITOS DO JUIZO\n1. Ha fissuras?\n2. Ha umidade?\nNestes termos."),))
+    assert [(p.section_heading, p.section_page, p.context_after) for p in proposals] == [
+        ("QUESITOS DO JUIZO", 1, "2. Ha umidade?\nNestes termos."), ("QUESITOS DO JUIZO", 1, ""),
+    ]
+
+
+@pytest.mark.parametrize("pages,expected", [
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. Esclareça o perito:\na) se ratifica as respostas aos quesitos do juízo;\nb) se há umidade na sala;\n2. Há fissuras?",),
+                 [("CLAIMANT", "Esclareça o perito:\na) se ratifica as respostas aos quesitos do juízo;\nb) se há umidade na sala;"), ("CLAIMANT", "Há fissuras?")],
+                 id="subitem_que_menciona_quesitos"),
+    pytest.param(("QUESITOS DO JUIZO\n1. HA INFILTRACAO NO BANHEIRO?\nDISPOSITIVO DE DESCARGA E REGISTROS ESTAO EM FUNCIONAMENTO?\n2. HA FISSURAS?",),
+                 [("COURT", "HA INFILTRACAO NO BANHEIRO?\nDISPOSITIVO DE DESCARGA E REGISTROS ESTAO EM FUNCIONAMENTO?"), ("COURT", "HA FISSURAS?")],
+                 id="ocr_vocabulario_tecnico_dispositivo"),
+    pytest.param(("QUESITOS DO JUIZO\n1. HA DEFEITO NO TELHADO? QUAIS AS\nPROVIDENCIAS NECESSARIAS PARA O REPARO?\n2. HA FISSURAS?",),
+                 [("COURT", "HA DEFEITO NO TELHADO? QUAIS AS\nPROVIDENCIAS NECESSARIAS PARA O REPARO?"), ("COURT", "HA FISSURAS?")],
+                 id="ocr_continuacao_providencias"),
+    pytest.param(("QUESITOS DA PARTE RE\n1. QUEIRA O PERITO INFORMAR SE RATIFICA AS RESPOSTAS DADAS AOS\nQUESITOS DO JUIZO\n2. HA FISSURAS NA FACHADA?",),
+                 [("DEFENDANT", "QUEIRA O PERITO INFORMAR SE RATIFICA AS RESPOSTAS DADAS AOS\nQUESITOS DO JUIZO"), ("DEFENDANT", "HA FISSURAS NA FACHADA?")],
+                 id="ocr_continuacao_igual_a_titulo"),
+    pytest.param(("QUESITOS DO JUIZO\n1. HA FISSURAS?\nAS RESPOSTAS AOS QUESITOS ANTERIORES SE APLICAM A FACHADA?\n2. HA UMIDADE?",),
+                 [("COURT", "HA FISSURAS?\nAS RESPOSTAS AOS QUESITOS ANTERIORES SE APLICAM A FACHADA?"), ("COURT", "HA UMIDADE?")],
+                 id="frase_que_menciona_quesitos_nao_e_titulo"),
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. O perito ratifica as respostas dadas aos\nQuesitos do Juizo\nno laudo anterior?\n2. Há umidade?",),
+                 [("CLAIMANT", "O perito ratifica as respostas dadas aos\nQuesitos do Juizo\nno laudo anterior?"), ("CLAIMANT", "Há umidade?")],
+                 id="continuacao_capitalizada"),
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. Há umidade?\n2. Quanto aos quesitos do juízo:\n3. Há fissuras?",),
+                 [("CLAIMANT", "Há umidade?"), ("CLAIMANT", "Quanto aos quesitos do juízo:"), ("CLAIMANT", "Há fissuras?")],
+                 id="quesito_numerado_com_introducao"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há vícios?\n2. Quesitos complementares da parte ré, deferidos:\n2.1. A obra seguiu o projeto aprovado?",),
+                 [("COURT", "Há vícios?")], id="titulo_numerado_nao_reconhecido"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há vícios?\n4. QUESITOS SUPLEMENTARES\n1. Houve manutenção?",),
+                 [("COURT", "Há vícios?")], id="titulo_numerado_sem_designacao"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há fissuras?\n(b) Quesitos da parte ré\n1. Seguiu o projeto?",),
+                 [("COURT", "Há fissuras?"), ("DEFENDANT", "Seguiu o projeto?")], id="titulo_entre_parenteses"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há fissuras?\n- QUESITOS DA RÉ\n1. Seguiu o projeto?",),
+                 [("COURT", "Há fissuras?"), ("DEFENDANT", "Seguiu o projeto?")], id="titulo_com_travessao"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há fissuras?\n\"QUESITOS DA RÉ\"\n1. Seguiu o projeto?",),
+                 [("COURT", "Há fissuras?"), ("DEFENDANT", "Seguiu o projeto?")], id="titulo_entre_aspas"),
+])
+def test_round_four_layouts_keep_text_whole_and_never_inherit_origin(pages, expected):
+    """Revisao da PR #255 (rodada 4, P1 revisor e auditor): linha que nao fecha a frase
+    ("...dadas aos", "informar:", "na sala;") e sempre continuacao, em qualquer caixa;
+    vocabulario tecnico ("dispositivo de descarga") nao encerra secao; titulo numerado nao
+    reconhecido zera a origem; marcas tipograficas nao escondem um titulo."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    proposals = extract_questions(doc, tuple(PdfTextPage(number, text) for number, text in enumerate(pages, 1)))
+    assert [(p.source.origin, p.text) for p in proposals] == expected
+
+
+@pytest.mark.parametrize("middle", [
+    "numero do documento de habite-se coincide com o alvara",
+    "assinado eletronicamente pelo sindico",
+    "1234567890123",
+    "Número do documento: 4567",  # mesmo formato do rodape, mas no meio da pagina: e conteudo
+])
+def test_pje_page_marks_are_only_dropped_at_the_page_edges(middle):
+    """Revisao da PR #255 (rodada 4, P1 auditor): o filtro de rodape removia linhas de
+    conteudo do meio do quesito e o trecho gravado deixava de ser literal. Marca de pagina
+    so no formato real e so nas bordas da pagina."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    filler = "\n".join(f"linha {n}" for n in range(2, 6))
+    page = PdfTextPage(1, f"QUESITOS DO JUIZO\n{filler}\n1. Informe o perito se o\n{middle}\ne se a obra foi concluida?\n2. Ha umidade?\n{filler}")
+    proposals = extract_questions(doc, (page,))
+    assert proposals[0].text == f"Informe o perito se o\n{middle}\ne se a obra foi concluida?"
+    assert middle in proposals[0].source.excerpt

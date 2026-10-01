@@ -387,6 +387,32 @@ def test_full_inspection_save_cannot_create_initial_or_rewrite_professional_hist
     forged = replace(bound, reviews=(replace(bound.reviews[0], notes="Forged professional review."),))
     with pytest.raises(ValueError, match="dedicated professional command"):
         service.execute(WorkspaceId.parse(bound.workspace_id), forged, predecessor.revision)
+
+    # Confirmar fatos físicos é uma nova revisão do conteúdo, não licença para
+    # apagar ou reescrever a revisão profissional histórica já persistida.
+    from scripts.backend_contract.visit_context import VisitContext
+    context = VisitContext.from_values(
+        {"date": "2026-09-20", "start_time": "09:10", "end_time": "10:20",
+         "weather": "Ensolarado", "temperature_c": "27.5",
+         "relative_humidity_percent": "62",
+         "attendants": [{"name": "Pessoa sintética", "role": "Proprietário", "presence_confirmed": True}]},
+        confirmed_by="EXPERT-PROFILE-001", confirmed_at="2026-09-28T12:00:00+00:00",
+    )
+    visit_updated = replace(bound, visit_context=context, participant_references=("Pessoa sintética",))
+    assert service.execute(
+        WorkspaceId.parse(bound.workspace_id), visit_updated, predecessor.revision,
+        allow_visit_confirmation=True,
+    ).revision == 2
+    forged_visit = replace(
+        visit_updated,
+        reviews=(replace(visit_updated.reviews[0], notes="Forged during visit confirmation."),),
+    )
+    with pytest.raises(ValueError, match="review history"):
+        service.execute(
+            WorkspaceId.parse(bound.workspace_id), forged_visit, predecessor.revision,
+            allow_visit_confirmation=True,
+        )
+
     rewritten = replace(bound, items=(replace(bound.items[0], title="Unapproved replacement instruction."), *bound.items[1:]))
     with pytest.raises(ValueError, match="planned item"):
         service.execute(WorkspaceId.parse(bound.workspace_id), rewritten, predecessor.revision)

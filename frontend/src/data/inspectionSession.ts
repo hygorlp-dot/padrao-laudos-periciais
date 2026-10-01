@@ -10,6 +10,8 @@ export type PhotoRecord = { photo_id: string; inspection_item_id: string; privat
 export type FieldLimitation = { limitation_id: string; inspection_item_id: string; kind: string; description: string; consequence_for_coverage: string; provenance: string };
 export type EvidenceCandidate = { candidate_id: string; inspection_item_id: string; source_record_ids: string[]; description: string; provenance: string };
 export type AccessOccurrence = { occurrence_id: string; inspection_item_id: string; outcome: "FULL_ACCESS" | "PARTIAL_ACCESS" | "DENIED" | "UNSAFE"; description: string; timestamp: string };
+export type VisitValues = { date: string; start_time: string; end_time: string | null; weather: string | null; temperature_c: string | null; relative_humidity_percent: string | null; attendants: { name: string; role: string; presence_confirmed: boolean }[] };
+export type VisitContext = VisitValues & { confirmed_by: string; confirmed_at: string };
 export type InspectionSnapshot = {
   schema_version: "1.0.0"; session_id: string; workspace_id: string;
   plan_snapshot: { plan_id: string; planning_snapshot_id: string; planning_revision: number; planning_digest: string; workspace_id: string; approved_item_ids: string[]; source_revision: number };
@@ -17,6 +19,7 @@ export type InspectionSnapshot = {
   items: InspectionItem[]; observations: FieldObservation[]; statements: FieldStatement[]; measurements: Measurement[]; measurement_series: unknown[]; methods: unknown[]; instruments: unknown[]; instrument_statuses: unknown[]; photos: PhotoRecord[]; videos: unknown[]; sketches: unknown[]; locations: unknown[]; environmental_conditions: unknown[]; access_occurrences: AccessOccurrence[]; limitations: FieldLimitation[]; missing_items: unknown[]; evidence_candidates: EvidenceCandidate[];
   coverage: { total_items: number; pending_items: number; completed_items: number; partial_items: number; not_executed_items: number; not_applicable_items: number; blocked_items: number; complete: boolean; limitation_ids: string[]; reasons: string[] };
   reviews: unknown[]; upstream_stale: boolean; upstream_stale_reasons: string[];
+  visit_context?: VisitContext;
 };
 export type InspectionEnvelope = { revision: number; updated_at: string; snapshot: InspectionSnapshot };
 
@@ -73,6 +76,13 @@ export function startInspectionSession(workspaceId: string, command: { responsib
 
 export function saveInspectionSession(workspaceId: string, expectedRevision: number, snapshot: InspectionSnapshot) {
   return mutate(workspaceId, "PUT", { expected_revision: expectedRevision, snapshot });
+}
+
+export async function confirmInspectionVisit(workspaceId: string, expectedRevision: number, values: VisitValues) {
+  if (!UUID.test(workspaceId)) invalid();
+  const response = await fetch(`/app-api/v1/workspaces/${workspaceId}/inspection-session/visit-context`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: expectedRevision, values }) });
+  if (!response.ok) throw new InspectionSessionApiError("unavailable", "Não foi possível confirmar os dados da diligência; reabra a vistoria e confira a versão.");
+  return parseInspectionEnvelope(await response.json(), workspaceId);
 }
 
 export async function uploadInspectionPhoto(workspaceId: string, file: File) {

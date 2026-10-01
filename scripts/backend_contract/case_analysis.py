@@ -7,6 +7,7 @@ from enum import StrEnum
 import re
 
 from .judicial_domain import ProceduralContext, procedural_context_from_mapping
+from .case_intake import QuestionSource, DocumentInventoryDecision
 
 
 class CoverageStatus(StrEnum):
@@ -124,11 +125,18 @@ class PericialObject(MaterialItem):
 @dataclass(frozen=True, slots=True)
 class PericialQuestion(MaterialItem):
     answer: None = None
+    source_question: QuestionSource | None = None
 
     def __post_init__(self):
         super().__post_init__()
         if self.answer is not None:
             raise ValueError("Stage 3 cannot answer pericial questions")
+        if self.source_question is not None and (type(self.source_question) is not QuestionSource or self.text not in self.source_question.excerpt):
+            raise ValueError("question must preserve literal source text")
+        if self.source_question is not None:
+            span = f"p. {self.source_question.page_start}" + (f"-{self.source_question.page_end}" if self.source_question.page_start != self.source_question.page_end else "")
+            if len(self.provenance) != 1 or self.provenance[0].page_or_span != span:
+                raise ValueError("question provenance must retain exact physical source pages")
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +251,7 @@ class CaseAnalysisSnapshot:
     stale_document_ids: tuple[str, ...] = ()
     source_inventory_stale: bool = False
     unindexed_source_count: int = 0
+    document_inventory: tuple[DocumentInventoryDecision, ...] = ()
 
     def __post_init__(self):
         if type(self.source_inventory_stale) is not bool or type(self.unindexed_source_count) is not int or self.unindexed_source_count < 0:
@@ -255,6 +264,8 @@ class CaseAnalysisSnapshot:
         if not set(self.participant_refs) <= participant_ids:
             raise ValueError("Case Analysis participant references require canonical JDM participants")
         documents = {document.document_id: document for document in self.documents}
+        if type(self.document_inventory) is not tuple or any(type(item) is not DocumentInventoryDecision or not set(item.source_document_ids) <= documents.keys() for item in self.document_inventory) or len({item.category for item in self.document_inventory}) != len(self.document_inventory):
+            raise ValueError("document inventory requires unique categories and indexed sources")
         if len(documents) != len(self.documents):
             raise ValueError("Case Analysis document identities must be unique")
         if any(not set(document.participant_refs) <= participant_ids for document in self.documents):
@@ -522,6 +533,10 @@ def case_analysis_to_mapping(snapshot: CaseAnalysisSnapshot) -> dict:
     ):
         for item in value[name]:
             item.pop("stale")
+            if name == "questions" and item.get("source_question") is None:
+                item.pop("source_question", None)
+    if not snapshot.document_inventory:
+        value.pop("document_inventory")
     return value
 
 
@@ -600,11 +615,14 @@ _BASE = {"item_id", "text", "participant_refs", "technical_subjects", "provenanc
 def _items(raw, cls, workspace_id, extra=()):
     rows = []
     for value in raw:
-        row = _exact(value, _BASE | set(extra), cls.__name__)
+        optional = {"source_question"} if cls is PericialQuestion and "source_question" in value else set()
+        row = _exact(value, _BASE | set(extra) | optional, cls.__name__)
         data = {key: row[key] for key in _BASE - {"provenance"}}
         data["participant_refs"] = tuple(data["participant_refs"])
         data["technical_subjects"] = tuple(data["technical_subjects"])
         data["provenance"] = _prov(row["provenance"], workspace_id)
+        if optional:
+            data["source_question"] = QuestionSource.from_mapping(row["source_question"])
         for key in extra:
             value = row[key]
             if key.endswith("_ids"):
@@ -617,7 +635,10 @@ def _items(raw, cls, workspace_id, extra=()):
 
 
 def case_analysis_from_mapping(value: object) -> CaseAnalysisSnapshot:
-    root = _exact(value, _ROOT_FIELDS, "CaseAnalysisSnapshot")
+    optional = {"document_inventory"} if type(value) is dict and "document_inventory" in value else set()
+    root = _exact(value, _ROOT_FIELDS | optional, "CaseAnalysisSnapshot")
+    if optional and type(root["document_inventory"]) is not list:
+        raise ValueError("document inventory payload is invalid")
     if root["schema_version"] != "1.0.0":
         raise ValueError("unsupported schema version")
     workspace = root["workspace_id"]
@@ -645,6 +666,7 @@ def case_analysis_from_mapping(value: object) -> CaseAnalysisSnapshot:
         human_reviews=reviews,
         source_inventory_stale=root["source_inventory_stale"],
         unindexed_source_count=root["unindexed_source_count"],
+        document_inventory=tuple(DocumentInventoryDecision.from_mapping(row) for row in root.get("document_inventory", [])),
     )
     stale_ids = tuple(root["stale_document_ids"])
     known_ids = {document.document_id for document in snapshot.documents}

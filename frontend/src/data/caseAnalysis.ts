@@ -1,4 +1,6 @@
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// `$defs/text` do schema da Analise do Caso: o servidor recusa texto maior.
+export const CASE_ANALYSIS_TEXT_MAX = 4096;
 
 export type Provenance = {
   workspace_id: string;
@@ -23,6 +25,7 @@ export type AnalysisItem = {
   participant_refs: string[];
   technical_subjects: string[];
   provenance: Provenance[];
+  source_question?: QuestionSource;
   [key: string]: unknown;
 };
 
@@ -49,9 +52,18 @@ export type CaseAnalysisSnapshot = {
   stale_document_ids: string[];
   source_inventory_stale: boolean;
   unindexed_source_count: number;
+  document_inventory?: InventoryDecision[];
 };
 
 export type CaseAnalysisEnvelope = { revision: number; updated_at: string; snapshot: CaseAnalysisSnapshot };
+export type QuestionSource = { origin: "COURT" | "CLAIMANT" | "DEFENDANT"; original_number: string; page_start: number; page_end: number; excerpt: string; method: string };
+export type QuestionOrigin = QuestionSource["origin"];
+// `section_heading` e `context_after` so existem para o perito conferir a proposta antes do aceite.
+export type QuestionProposal = { proposal_id: string; document_id: string; text: string; source: QuestionSource; section_heading?: string | null; section_page?: number | null; context_after?: string };
+export type QuestionSelection = { proposal_id: string; origin: QuestionOrigin };
+export type InventoryDecision = { category: string; status: "PROFESSIONALLY_CONFIRMED_PRESENT" | "PROFESSIONALLY_CONFIRMED_ABSENT_FROM_CASE"; source_document_ids: string[]; reason: string; confirmed_by: string; confirmed_at: string };
+export type InventoryProposal = { category: string; label: string; state: "PROPOSED_PRESENT" | "NOT_FOUND_IN_CURRENT_INGESTED_MATERIAL"; matches: { document_id: string; page: number; excerpt: string; method: string }[] };
+export type CaseIntake = { revision: number; questions: QuestionProposal[]; inventory: InventoryProposal[] };
 
 /*
  * Elegibilidade de fonte, espelhando o backend. Um seletor só pode oferecer o que o
@@ -129,6 +141,20 @@ async function mutateCaseAnalysis(workspaceId: string, path: string, body: objec
 }
 
 export function startCaseAnalysis(workspaceId: string) { return mutateCaseAnalysis(workspaceId, "", {}); }
+
+export async function getCaseIntake(workspaceId: string): Promise<CaseIntake> {
+  const response = await fetch(`/app-api/v1/workspaces/${encodeURIComponent(workspaceId)}/case-analysis/intake`, { credentials: "same-origin", cache: "no-store" });
+  if (!response.ok) throw new CaseAnalysisApiError("unavailable", "Não foi possível consultar as fontes atuais.");
+  const value = await response.json() as CaseIntake;
+  if (!Number.isSafeInteger(value.revision) || !Array.isArray(value.questions) || !Array.isArray(value.inventory)) throw new CaseAnalysisApiError("invalid-response", "Propostas inválidas");
+  return value;
+}
+export function acceptCaseQuestions(workspaceId: string, revision: number, selections: QuestionSelection[]) {
+  return mutateCaseAnalysis(workspaceId, "/questions", { expected_revision: revision, selections });
+}
+export function confirmDocumentInventory(workspaceId: string, revision: number, values: Omit<InventoryDecision, "confirmed_by" | "confirmed_at">) {
+  return mutateCaseAnalysis(workspaceId, "/document-inventory", { expected_revision: revision, values });
+}
 
 export function addCaseAnalysisItem(workspaceId: string, command: { expected_revision: number; item_kind: string; text: string; source_document_id: string; page_or_span: string; technical_subjects: string[]; values: Record<string, unknown> }) {
   return mutateCaseAnalysis(workspaceId, "/items", command);
