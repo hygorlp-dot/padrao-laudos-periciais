@@ -1,0 +1,204 @@
+name: core-safety-profile
+
+# NON-DISPOSITIVE profiling (V7-4A, #259). Measures only: it never decides
+# PASS/FAIL for any candidate, is not a required check and never replaces
+# core-safety. Every stage command comes from scripts/quality/verify_core.py
+# itself via scripts.quality.core_safety_plan, so the measured commands cannot
+# drift from the protected judge.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/sharp-newton-yoftzu]
+
+permissions:
+  contents: read
+
+jobs:
+  gate-as-is:
+    # The unchanged core-safety job body, repeated to obtain a runtime
+    # distribution (median/min/max) instead of a single sample.
+    strategy:
+      fail-fast: false
+      matrix:
+        rep: [1, 2, 3]
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.6"
+          cache-dependency-glob: uv.lock
+      - name: Install test dependencies
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
+      - name: Architecture trust-boundary suite
+        run: python -m pytest -q tests/test_architecture_analyzer_v1.py
+      - name: Verify frozen Core V1
+        env:
+          PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
+        run: python -m scripts.quality.verify_core --full
+
+  stages-serial:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.6"
+          cache-dependency-glob: uv.lock
+      - name: Install test dependencies
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
+      - name: Time every verify_core stage serially
+        shell: pwsh
+        env:
+          PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
+        run: |
+          $plan = python -m scripts.quality.core_safety_plan | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          foreach ($s in $plan) {
+            $argv = @($s.argv)
+            $rest = @($argv[1..($argv.Count - 1)])
+            if ($s.name -eq 'regression') { $rest += @('--durations=80', '--junitxml=prof-regression.xml') }
+            $log = "prof-" + ($s.name -replace '\W', '_') + ".log"
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            & $argv[0] @rest *> $log
+            $code = $LASTEXITCODE
+            $sw.Stop()
+            "STAGE_DURATION {0} {1:N3} exit={2}" -f $s.name, $sw.Elapsed.TotalSeconds, $code
+          }
+          "----- regression tail -----"
+          Get-Content prof-regression.log -Tail 120
+          "----- E2E/quality tails -----"
+          foreach ($f in Get-ChildItem prof-*.log) { "== $($f.Name)"; Get-Content $f -Tail 3 }
+          python -m coverage report --data-file=coverage-quality-v2.data --format=total
+          python -m coverage json --data-file=coverage-quality-v2.data -o prof-cov.json -q
+          python -c "import json;t=json.load(open('prof-cov.json'))['totals'];print('COVERAGE_TOTALS',json.dumps(t))"
+
+  regression-nocov:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.6"
+          cache-dependency-glob: uv.lock
+      - name: Install test dependencies
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
+      - name: Collection time, execution time without coverage, per-file durations
+        shell: pwsh
+        env:
+          PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
+        run: |
+          $argv = @(python -m scripts.quality.core_safety_plan --stage regression | ConvertFrom-Json)
+          $i = [Array]::IndexOf($argv, 'pytest')
+          $pytestArgs = @($argv[($i + 1)..($argv.Count - 1)])
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          python -m pytest @pytestArgs --collect-only -q *> collect.log
+          $sw.Stop(); "COLLECT_SECONDS {0:N3} exit={1}" -f $sw.Elapsed.TotalSeconds, $LASTEXITCODE
+          Get-Content collect.log -Tail 2
+          python -m pytest @pytestArgs --collect-only -q 2>$null | Select-String '::' | ForEach-Object { $_.Line.Trim() } | Sort-Object | Set-Content base-node-ids.txt
+          "NODE_IDS {0}" -f (Get-Content base-node-ids.txt).Count
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          python -m pytest @pytestArgs --durations=0 --junitxml=nocov.xml *> nocov.log
+          $sw.Stop(); "NOCOV_SECONDS {0:N3} exit={1}" -f $sw.Elapsed.TotalSeconds, $LASTEXITCODE
+          Get-Content nocov.log -Tail 3
+          @'
+          import collections, json, xml.etree.ElementTree as ET
+          root = ET.parse("nocov.xml").getroot()
+          per_file = collections.Counter(); count = collections.Counter(); outcome = collections.Counter()
+          for case in root.iter("testcase"):
+              name = case.get("classname", "").split(".")[0]
+              per_file[name] += float(case.get("time") or 0); count[name] += 1
+              kind = "skipped" if case.find("skipped") is not None else "failed" if case.find("failure") is not None or case.find("error") is not None else "passed"
+              outcome[kind] += 1
+          print("OUTCOMES", dict(outcome))
+          print("PER_FILE_SECONDS", json.dumps({k: [round(v, 3), count[k]] for k, v in per_file.most_common()}))
+          skipped = sorted({(c.get("classname"), (c.find("skipped").get("message") or "")[:120]) for c in root.iter("testcase") if c.find("skipped") is not None})
+          print("SKIPPED", json.dumps(skipped[:200]))
+          '@ | python -
+          "----- base-node-ids head -----"
+          Get-Content base-node-ids.txt -TotalCount 5
+
+  regression-contexts:
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.6"
+          cache-dependency-glob: uv.lock
+      - name: Install test dependencies
+        run: |
+          uv lock --check
+          uv pip sync --system --require-hashes requirements-dev.txt
+      - name: Per-test-file coverage contribution (dynamic contexts)
+        shell: pwsh
+        env:
+          PYTEST_ADDOPTS: "--ignore=tests/test_architecture_analyzer_v1.py"
+        run: |
+          "[run]`ndynamic_context = test_function`n" | Set-Content prof.coveragerc
+          $argv = @(python -m scripts.quality.core_safety_plan --stage regression | ConvertFrom-Json)
+          $rest = @($argv[1..($argv.Count - 1)]) -replace '^--data-file=.*$', '--data-file=ctx.data'
+          $rest = @($rest[0..2]) + @('--rcfile=prof.coveragerc') + @($rest[3..($rest.Count - 1)])
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          & $argv[0] @rest *> ctx.log
+          $sw.Stop(); "CTX_SECONDS {0:N3} exit={1}" -f $sw.Elapsed.TotalSeconds, $LASTEXITCODE
+          Get-Content ctx.log -Tail 3
+          @'
+          import collections, json, re
+          from coverage import CoverageData
+          data = CoverageData("ctx.data"); data.read()
+          contexts = sorted(data.measured_contexts())
+          print("SAMPLE_CTX", contexts[:8], len(contexts))
+          owners = sorted({c.split(".")[0] if c else "<no-test-context>" for c in contexts})
+          lines_by = collections.defaultdict(set); arcs_by = collections.defaultdict(set)
+          for owner in owners:
+              data.set_query_contexts(["^$"] if owner == "<no-test-context>" else ["^" + re.escape(owner) + r"\."])
+              for path in data.measured_files():
+                  lines_by[owner].update((path, n) for n in (data.lines(path) or ()))
+                  arcs_by[owner].update((path, a) for a in (data.arcs(path) or ()))
+          data.set_query_contexts(None)
+          all_lines = {(p, n) for p in data.measured_files() for n in (data.lines(p) or ())}
+          all_arcs = {(p, a) for p in data.measured_files() for a in (data.arcs(p) or ())}
+          line_owners = collections.Counter(i for s in lines_by.values() for i in s)
+          arc_owners = collections.Counter(i for s in arcs_by.values() for i in s)
+          report = {o: [len(lines_by[o]), len(arcs_by[o]),
+                        sum(1 for i in lines_by[o] if line_owners[i] == 1),
+                        sum(1 for i in arcs_by[o] if arc_owners[i] == 1)] for o in owners}
+          print("TOTAL_DISTINCT lines", len(all_lines), "arcs", len(all_arcs))
+          print("CONTRIBUTION [lines, arcs, unique_lines, unique_arcs]", json.dumps(report))
+          '@ | python -
