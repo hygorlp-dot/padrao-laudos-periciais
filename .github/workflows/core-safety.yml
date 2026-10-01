@@ -102,7 +102,9 @@ jobs:
         # V7-4 (decisao humana "2-III", #256): mesma politica em PR e em main.
         # Dentro da referencia passa; acima dela a BASE e medida neste mesmo
         # runner e so regressao material atribuivel ao candidato bloqueia.
-        # Evidencia ausente ou invalida falha fechada. Com o sharding (#259) o
+        # Evidencia ausente ou invalida falha fechada; a BASE so vale como
+        # referencia se for semanticamente valida (exit code incluido).
+        # Com o sharding (#259) o
         # HEAD cronometra a particao do gate; a BASE e medida com a particao
         # do PROPRIO manifest dela (ou integral, se a BASE nao tiver shards),
         # para comparar o mesmo escopo de medicao.
@@ -123,9 +125,10 @@ jobs:
             $env:PYTEST_ADDOPTS = "$env:PYTEST_ADDOPTS $offload"
           }
           python -m scripts.quality.verify_core "--full" *> $env:RUNNER_TEMP/core-safety-base-timing.log
+          $baseCode = $LASTEXITCODE
           Pop-Location
           Get-Content $env:RUNNER_TEMP/core-safety-base-timing.log -Tail 30
-          python -m scripts.quality.timing_attribution decide --head-log gate-report.txt --base-log $env:RUNNER_TEMP/core-safety-base-timing.log --base-sha $env:BASE_SHA
+          python -m scripts.quality.timing_attribution decide --head-log gate-report.txt --base-log $env:RUNNER_TEMP/core-safety-base-timing.log --base-exit-code $baseCode --base-sha $env:BASE_SHA
           exit $LASTEXITCODE
       - name: Upload gate evidence
         if: always()

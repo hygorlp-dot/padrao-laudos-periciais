@@ -19,14 +19,14 @@ ROOT = Path(__file__).resolve().parents[1]
 PROTECTED_TIMING_SURFACE_SHA256 = {
     # V7-4A (#259): workflow re-orchestrated into sharded jobs + closed-set
     # aggregator; V7-4 (#256 "2-III"): hybrid BASE x HEAD attribution in core-gate.
-    ".github/workflows/core-safety.yml": "536f550d7b7192aed9d3295f26954bafa6a9982c79f01dfb0fa340b6fca078ef",
+    ".github/workflows/core-safety.yml": "baebaea5b8d0cf4b3e7b16278596fa7ae58f71793fcda54dcdb74776e855389e",
     "scripts/quality/__init__.py": "b3824e776de859b9a48131b04cfc738c925badc4d42c0475eaf919e4e1665e5b",
     "scripts/quality/verify_core.py": "ae2e5928db5917fd4d9f4e9ad8ec9c13e65ebd4ade9f533ab0235b3440275598",
     "scripts/quality/architecture_analyzer.py": "2b7863088b9958818e94d2ed854d265378c80caa218b84e0a4903b0370c30a5e",
     "scripts/quality/capability_analyzer.py": "a082879716d75e2b35c271ab89b93b13b4e56163592cb4f522b924eace766303",
     # V7-4: a decisao temporal vive aqui; fixada junto do workflow que a executa.
     "scripts/quality/metrics.py": "ee747bc47a466dbbbb0a9e4236810f77a9307bfdde282183e93e8f496925c71c",
-    "scripts/quality/timing_attribution.py": "7c4b35a5370451acd5fbaf30a7eca17d711e4162aad6a738cf349211e29f48c7",
+    "scripts/quality/timing_attribution.py": "3d543bb33c6dfa04ccd98dde5d8161f0ff546c5258df76798de5760348092407",
 }
 
 
