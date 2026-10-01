@@ -16,7 +16,23 @@ class GetCaseIntake:
     extractor: object
 
     def execute(self, workspace_id):
-        record, case = self.get_analysis.execute(workspace_id)
+        record, case, _base, _availability, proposals, inventory = self._resolve(workspace_id)
+        return record, case, proposals, inventory
+
+    def execute_for_command(self, workspace_id):
+        """Base de MUTACAO (mesmo contrato de `GetCaseAnalysis.execute_for_command`).
+
+        A Analise do Caso lida pelo GET e uma projecao da disponibilidade decidida
+        pelo perito; gravar essa projecao diverge do predecessor persistido e o Save
+        recusa ("source extraction is immutable"). As propostas saem da projecao
+        (peca excluida nao propoe nada); a escrita parte do persistido.
+        """
+        record, _case, base, availability, proposals, _inventory = self._resolve(workspace_id)
+        return record, base, availability, proposals
+
+    def _resolve(self, workspace_id):
+        record, base, availability = self.get_analysis.execute_for_command(workspace_id)
+        case = base.project_effective_availability(availability)
         if case.source_inventory_stale or case.stale_document_ids:
             raise RepositoryConflict("case intake requires current source inventory")
         physical = {}
@@ -38,7 +54,7 @@ class GetCaseIntake:
             for proposal in extract_questions(document, pages):
                 identity = sha256(f"{workspace_id}:{proposal.proposal_id}".encode()).hexdigest()
                 proposals.append(replace(proposal, proposal_id=identity))
-        return record, case, tuple(proposals), inventory_proposals(case.documents, pages_by_document)
+        return record, case, base, availability, tuple(proposals), inventory_proposals(case.documents, pages_by_document)
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,7 +66,7 @@ class AcceptCaseQuestions:
     def execute(self, workspace_id, *, proposal_ids, expected_revision):
         if type(proposal_ids) is not list or not proposal_ids or any(type(v) is not str for v in proposal_ids) or len(set(proposal_ids)) != len(proposal_ids):
             raise ValueError("question selection is invalid")
-        record, case, proposals, _inventory = self.get_intake.execute(workspace_id)
+        record, case, availability, proposals = self.get_intake.execute_for_command(workspace_id)
         if type(expected_revision) is not int or record.revision != expected_revision:
             raise RepositoryConflict("question source revision changed")
         candidates = {p.proposal_id: p for p in proposals}
@@ -67,10 +83,10 @@ class AcceptCaseQuestions:
             source = SourceProvenance(str(workspace_id), document.document_id, document.source_sha256, span, case.source_revision, f"OCCURRENCE-{token}")
             questions.append(PericialQuestion(f"PERICIAL-QUESTION-{token}", proposal.text, (), (), (source,), source_question=proposal.source))
         if tuple(questions) == case.questions:
-            return record, case
+            return record, case.project_effective_availability(availability)
         updated = replace(case, questions=tuple(questions))
         saved = self.save_analysis.execute(workspace_id, updated, expected_revision, allow_item_append=True)
-        return saved, updated
+        return saved, updated.project_effective_availability(availability)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,14 +99,15 @@ class ConfirmDocumentInventory:
     def execute(self, workspace_id, *, values, expected_revision):
         if type(values) is not dict or set(values) != {"category", "status", "source_document_ids", "reason"} or type(values["source_document_ids"]) is not list:
             raise ValueError("document inventory confirmation is invalid")
-        record, case = self.get_analysis.execute(workspace_id)
+        record, case, availability = self.get_analysis.execute_for_command(workspace_id)
         if type(expected_revision) is not int or record.revision != expected_revision or case.source_inventory_stale or case.stale_document_ids:
             raise RepositoryConflict("document inventory source revision changed")
         _, profile = self.get_expert_profile.execute(workspace_id)
         decision = DocumentInventoryDecision(**{**values, "source_document_ids": tuple(values["source_document_ids"])}, confirmed_by=profile.profile_id, confirmed_at=self.clock.now().isoformat())
-        available = {d.document_id for d in case.documents if d.content_available}
+        # Presenca so se apoia em peca disponivel E nao excluida pelo perito (#251).
+        available = {d.document_id for d in case.documents if availability.get(d.document_id, d.content_available)}
         if not set(decision.source_document_ids) <= available:
             raise ValueError("document inventory presence requires available source")
         updated = replace(case, document_inventory=tuple(item for item in case.document_inventory if item.category != decision.category) + (decision,))
         saved = self.save_analysis.execute(workspace_id, updated, expected_revision, allow_inventory_confirmation=True)
-        return saved, updated
+        return saved, updated.project_effective_availability(availability)
