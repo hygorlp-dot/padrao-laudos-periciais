@@ -30,13 +30,14 @@ class VisitContext:
     confirmed_at: str
 
     def __post_init__(self):
-        if type(self.date) is not str or re.fullmatch(r"\d{4}-\d{2}-\d{2}", self.date) is None:
+        if type(self.date) is not str or re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", self.date) is None:
             raise ValueError("physical visit date is invalid")
         date.fromisoformat(self.date)
         for value, nullable in ((self.start_time, False), (self.end_time, True)):
             if value is None and nullable:
                 continue
-            if type(value) is not str or re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value) is None:
+            # [0-9], nao \d: \d aceita digitos Unicode que o schema publicado recusa.
+            if type(value) is not str or re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value) is None:
                 raise ValueError("physical visit time is invalid")
         if self.end_time is not None and self.end_time < self.start_time:
             raise ValueError("visit end precedes start on the recorded date")

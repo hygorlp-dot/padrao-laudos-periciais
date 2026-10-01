@@ -170,13 +170,21 @@ class SaveInspectionSession:
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("Inspection Session clock requires timezone")
+            # Mesma regra da Analise do Caso: a escrita valida o schema que a leitura
+            # valida. Sem isso, um valor que o dominio aceita e o schema recusa era
+            # gravado com 200 e toda leitura seguinte falhava (sessao perdida).
+            payload = inspection_session_to_mapping(session)
+            try:
+                _VALIDATOR.validate(payload)
+            except ValidationError as exc:
+                raise ValueError("Inspection Session payload violates its published schema") from exc
             return self.revisions.append_if_latest(
                 workspace_id=workspace_id,
                 artifact_kind=INSPECTION_SESSION_ARTIFACT_KIND,
                 artifact_id=INSPECTION_SESSION_ARTIFACT_ID,
                 revision_id=str(self.ids.new_uuid()),
                 created_at=created_at.isoformat(),
-                payload=inspection_session_to_mapping(session),
+                payload=payload,
                 expected_revision=expected_revision,
                 expected_dependencies=({
                     "artifact_kind": getattr(planning_record, "artifact_kind", "PERICIAL_PLANNING_SNAPSHOT_V1"),

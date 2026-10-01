@@ -15,6 +15,8 @@ test("imports exact question without transcription and keeps not-found separate 
   await user.click(screen.getByText("Importar quesitos e conferir documentos usuais"));
   await user.click(screen.getByRole("button", { name: "Buscar nos documentos importados" }));
   await user.click(await screen.findByLabelText("Parte autora · quesito 01)"));
+  // Lista parcial nunca parece completa: o aviso aparece mesmo com propostas.
+  expect(screen.getByText(/Confira com os autos/)).toBeInTheDocument();
   await user.click(screen.getByRole("button", { name: "Adicionar quesitos selecionados à análise" }));
   await waitFor(() => expect(acceptCaseQuestions).toHaveBeenCalledWith(expect.any(String), 2, ["proposal"]));
   expect(confirmDocumentInventory).not.toHaveBeenCalled();

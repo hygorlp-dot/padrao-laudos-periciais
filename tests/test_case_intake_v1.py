@@ -205,7 +205,7 @@ def _paged_text_pdf(pages):
     from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
     def literal(text):
-        return "(" + "".join(chr(b) if 32 <= b < 127 and b not in b"()\\" else "\%03o" % b for b in text.encode("cp1252")) + ")"
+        return "(" + "".join(chr(b) if 32 <= b < 127 and b not in b"()\\" else "\\%03o" % b for b in text.encode("cp1252")) + ")"
 
     writer = PdfWriter()
     for lines in pages:
@@ -321,5 +321,71 @@ def test_question_origin_never_leaks_past_its_own_heading():
     assert [(p.source.origin, p.text) for p in extract_questions(doc, (unknown,))] == [("CLAIMANT", "Ha umidade?")]
     unrecognized = PdfTextPage(1, "QUESITOS DO JUIZO\n1. Ha umidade?\nQUESITOS COMPLEMENTARES APRESENTADOS NA REPLICA\n2. Quem responde?")
     assert [(p.source.origin, p.text) for p in extract_questions(doc, (unrecognized,))] == [("COURT", "Ha umidade?")]
+    dispositive = PdfTextPage(1, "QUESITOS DO JUIZO\n1. Ha vicios construtivos no imovel?\nDiante do exposto, determino:\n"
+                                 "1. Intimem-se as partes para indicar assistentes tecnicos.\n2. Deposite a autora os honorarios periciais.")
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (dispositive,))] == [("COURT", "Ha vicios construtivos no imovel?")]
     supplementary = PdfTextPage(1, "QUESITOS SUPLEMENTARES DOS REUS\n3) Houve manutencao?")
     assert [(p.source.origin, p.source.original_number) for p in extract_questions(doc, (supplementary,))] == [("DEFENDANT", "3)")]
+
+
+@pytest.mark.parametrize("pages,expected", [
+    pytest.param(
+        ("QUESITOS DA PARTE AUTORA\n1. Queira o Sr. Perito descrever as patologias do imóvel, informando\no seguinte:\n"
+         "a) localização;\nb) extensão;\nc) causa provável.\n2. Os vícios decorrem de falha construtiva?\n3. Qual o custo de reparo?",),
+        [("1.", "Queira o Sr. Perito descrever as patologias do imóvel, informando\no seguinte:\na) localização;\nb) extensão;\nc) causa provável."),
+         ("2.", "Os vícios decorrem de falha construtiva?"), ("3.", "Qual o custo de reparo?")],
+        id="continuacao_terminada_em_dois_pontos"),
+    pytest.param(
+        ("QUESITOS DA PARTE RÉ\nDos vícios construtivos:\n1. Há fissuras nas alvenarias?\n2. Há infiltração na cobertura?\n"
+         "Da manutenção:\n3. O morador realizou a manutenção prevista no manual?",),
+        [("1.", "Há fissuras nas alvenarias?"), ("2.", "Há infiltração na cobertura?\nDa manutenção:"),
+         ("3.", "O morador realizou a manutenção prevista no manual?")],
+        id="subtitulo_tematico"),
+    pytest.param(
+        ("QUESITOS DO JUÍZO\n1. Há vícios construtivos no imóvel?\n2. Quais?\nNúmero do documento:\n21051315224400000000000",
+         "3. Qual a causa provável?\n4. Qual o custo de reparo?"),
+        [("1.", "Há vícios construtivos no imóvel?"), ("2.", "Quais?"), ("3.", "Qual a causa provável?"), ("4.", "Qual o custo de reparo?")],
+        id="rodape_pje_entre_paginas"),
+    pytest.param(
+        ("QUESITOS DO JUIZO\n1. Ha fissuras?\nResposta:\n2. Ha infiltracao?\nResposta:\n3. Qual a causa?\nResposta:",),
+        [("1.", "Ha fissuras?"), ("2.", "Ha infiltracao?"), ("3.", "Qual a causa?")],
+        id="espaco_de_resposta"),
+])
+def test_common_question_layouts_are_neither_truncated_nor_dropped(pages, expected):
+    """Revisao da PR #255 (P1, revisor, rodada 2): a primeira correcao do vazamento de
+    origem tratava QUALQUER rotulo curto terminado em ":" como fim de secao e truncava ou
+    descartava quesitos legitimos. So a parte dispositiva do ato encerra a secao; espaco de
+    resposta e rodape PJe so fecham o quesito em curso."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    proposals = extract_questions(doc, tuple(PdfTextPage(number, text) for number, text in enumerate(pages, 1)))
+    assert [(p.source.original_number, p.text) for p in proposals] == expected
+
+
+@pytest.mark.parametrize("second_section,expected_origin", [
+    ("II - QUESITOS DA RE", "DEFENDANT"),
+    ("III. QUESITOS DA PARTE AUTORA", "CLAIMANT"),
+    ("b) Quesitos da re", "DEFENDANT"),
+    ("Seguem os quesitos da re:", "DEFENDANT"),
+    ("Intimem-se as partes para, no prazo de 15 dias:", None),
+    ("DETERMINO", None),
+])
+def test_every_common_section_boundary_resets_or_declares_the_origin(second_section, expected_origin):
+    """Revisao da PR #255 (P1, auditor, rodada 2): enumeradores romanos/letras, introducao
+    curta e parte dispositiva sem dois-pontos deixavam o quesito seguinte herdar "Juizo"."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, f"QUESITOS DO JUIZO\n1. Ha fissuras?\n{second_section}\n1. Seguiu o projeto?")
+    expected = [("COURT", "Ha fissuras?")] + ([(expected_origin, "Seguiu o projeto?")] if expected_origin else [])
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == expected
+
+
+def test_a_continuation_line_that_mentions_questions_is_not_a_heading():
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    page = PdfTextPage(1, "QUESITOS DA PARTE AUTORA\n1. Queira o perito responder, com base\nnos quesitos do juizo\n2. Ha umidade?")
+    assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == [
+        ("CLAIMANT", "Queira o perito responder, com base\nnos quesitos do juizo"), ("CLAIMANT", "Ha umidade?")]
