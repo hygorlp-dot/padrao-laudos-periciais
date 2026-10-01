@@ -15,7 +15,9 @@ candidate cost.
 
 ## Decision
 
-- One policy (`HYBRID`) for pull requests, `main` and local runs.
+- One policy (`HYBRID`) for pull requests and `main`. A local `verify_core --full` emits the
+  same `PASS`/`ATTRIBUTION_REQUIRED` evidence but does not run the BASE attribution, which
+  only the protected workflow performs.
 - The semantic full gate is unchanged and blocking; timing never hides a semantic,
   coverage, hotspot or privacy finding.
 - `config/quality-baseline.json` `full_gate_max_seconds` is explicitly redefined to
