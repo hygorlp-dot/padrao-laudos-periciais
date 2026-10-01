@@ -73,6 +73,69 @@ mecanismo de escopo/support-artifact equivalente ao construído para
 arquitetura. Manter o script intacto evita essa segunda autorização para
 uma mudança que é puramente de orquestração de CI.
 
+## Sharding do regression (V7-4A, #259)
+
+O job requerido `core-safety` passou a ser um agregador closed-set sobre jobs
+independentes do mesmo SHA, sem alterar `scripts/quality/verify_core.py`
+(byte-idêntico, artefato capability-protected) nem as constantes da política
+temporal (`full_gate_max_seconds = 60`, `STRICT`/`PR_ADVISORY`):
+
+- `architecture`: a suíte de arquitetura, como antes, em runner próprio;
+- `core-gate`: `verify_core --full` inalterado; seu `regression` cobre a
+  partição que carrega coverage (complemento do manifest);
+- `regression-shard`: o MESMO comando `regression` do juiz (extraído por
+  `scripts.quality.core_safety_plan`, nunca copiado) sobre cada shard de
+  `config/core-safety-shards-v1.json`, em runner próprio, com coverage e
+  inventário de node IDs (`scripts.quality.core_safety_nodes`);
+- `inventory`: coleta de referência do regression integral (sem shards) e da
+  partição do gate;
+- `core-safety`: `python -m scripts.quality.core_safety_shards aggregate`.
+
+O agregador falha fechado quando qualquer job não termina em `success`
+(inclusive `skipped`/`cancelled`), quando falta ou sobra shard, quando a
+evidência tem SHA, manifest ou schema divergentes, quando um node falha ou não
+executa, quando `gate ∪ shards ≠ regression integral` ou há sobreposição
+(shards: node IDs exatos contra a coleta integral; gate: mesmo conjunto de
+arquivos e contagem exata por arquivo, porque há IDs parametrizados que embutem
+bytes dependentes de relógio e mudam entre processos sem mudar o node),
+quando o coverage de um shard não está contido no do gate
+(`PARTITION_COVERAGE_DRIFT`) ou quando o coverage combinado regride contra
+`config/quality-baseline.json`. Ele reconstrói a lista fechada de 16 checks do
+`verify_core` e reporta `SEMANTIC_STATUS` e `TIMING_STATUS` separadamente; uma
+falha só temporal continua vermelha exatamente como antes.
+
+**Escopo cronometrado (explícito, não silencioso).** Como em #63/#64, o
+`OBSERVED_SECONDS` do `verify_core` passa a medir o `verify_core` do job
+`core-gate`, cujo `regression` contém só a partição do gate; os shards rodam
+fora dessa janela de 60 s, limitados apenas pelo `timeout-minutes` dos jobs, e
+seu tempo aparece como `SHARD_DURATION`/`seconds` na evidência e no agregador.
+Se o orçamento temporal deve cobrir o wall-clock dos shards é decisão de
+política de #109/#111, não desta otimização.
+Com a política híbrida (#263, decisão "2-III"), a atribuição BASE × HEAD roda
+no job `core-gate` e mede a BASE com a partição do manifest da própria BASE
+(ou o regression integral, se a BASE ainda não tiver shards), mantendo o mesmo
+escopo de medição dos dois lados.
+
+**Premissa residual.** A execução real do `regression` dentro do `verify_core`
+não é inventariada por node (o juiz é byte-idêntico e não emite IDs); ela é
+provada pelo exit 0 do juiz, como no BASE, e pela coleta independente da mesma
+partição no job `inventory` (mesmos arquivos e contagem por arquivo). Falhas
+fechadas conhecidas que podem gerar vermelho legítimo exigindo ação: coverage
+de um shard fora do gate (mover o arquivo para o gate) e ID parametrizado
+dependente de relógio dentro de um shard (manter o arquivo no gate); shard
+sem nenhum dado de coverage gravado também falha fechado.
+
+Arquivo de teste novo cai automaticamente na partição do gate (complemento):
+nada some silenciosamente. Mover um arquivo para um shard exige que seu
+coverage medido já esteja contido no do gate — o que é provado a cada execução,
+não presumido. A partição é escolhida por tempo medido
+(`.github/workflows/core-safety-profile.yml`, não-dispositivo).
+
+Shards rodam em runners separados (sem `pytest-xdist`, sem workspace
+compartilhado). Os testes de Word nativo continuam `skip` nos runners GitHub
+sem Microsoft Word/pywin32, como antes; isso não substitui a matriz Word nativa
+do Human RC.
+
 ## Evolução
 
 Para adicionar boundary, invariante ou fixture:

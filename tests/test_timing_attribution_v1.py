@@ -72,7 +72,10 @@ def test_workflow_makes_attribution_mandatory_and_identical_for_pr_and_main():
     assert "timing_attribution requires-base" in step and "timing_attribution decide" in step
     assert "if ($LASTEXITCODE -ne 3) { exit 1 }" in step and step.rstrip().endswith("exit $LASTEXITCODE")
     verify = next(block for block in blocks if block.startswith("name: Verify frozen Core V1"))
-    assert "Tee-Object" in verify and "exit $LASTEXITCODE" in verify
+    # Sharded core-gate (#259): o log do HEAD é capturado em gate-report.txt e o
+    # exit code do verify_core é propagado ao fim do passo.
+    assert "python -m scripts.quality.verify_core --full *> gate-report.txt" in verify
+    assert "$code = $LASTEXITCODE" in verify and verify.rstrip().endswith("exit $code")
     assert "continue-on-error" not in workflow
 
 

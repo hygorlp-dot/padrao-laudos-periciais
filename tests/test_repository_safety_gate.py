@@ -17,7 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 PROTECTED_TIMING_SURFACE_SHA256 = {
-    ".github/workflows/core-safety.yml": "b23b1fb74ce72390b006195f18bf5736ab0d5efa4427f7c966223ab7787ac50d",
+    # V7-4A (#259): workflow re-orchestrated into sharded jobs + closed-set
+    # aggregator; V7-4 (#256 "2-III"): hybrid BASE x HEAD attribution in core-gate.
+    ".github/workflows/core-safety.yml": "536f550d7b7192aed9d3295f26954bafa6a9982c79f01dfb0fa340b6fca078ef",
     "scripts/quality/__init__.py": "b3824e776de859b9a48131b04cfc738c925badc4d42c0475eaf919e4e1665e5b",
     "scripts/quality/verify_core.py": "ae2e5928db5917fd4d9f4e9ad8ec9c13e65ebd4ade9f533ab0235b3440275598",
     "scripts/quality/architecture_analyzer.py": "2b7863088b9958818e94d2ed854d265378c80caa218b84e0a4903b0370c30a5e",
