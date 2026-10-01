@@ -171,7 +171,7 @@ class ReviewCaseAnalysisItem:
     def execute(self, workspace_id, *, target_item_id: str, action: str, corrected_value: str | None, reviewer: str, reason: str, expected_revision: int):
         if action not in {"CONFIRM", "CORRECT", "REJECT"}:
             raise ValueError("Case Analysis review action is invalid")
-        record, snapshot = self.get_analysis.execute(workspace_id)
+        record, snapshot, availability = self.get_analysis.execute_for_command(workspace_id)
         if record.revision != expected_revision or snapshot.stale_document_ids or snapshot.source_inventory_stale:
             raise RepositoryConflict("Case Analysis review source or revision is stale")
         item = next((candidate for candidate in snapshot.material_items if candidate.item_id == target_item_id), None)
@@ -196,7 +196,10 @@ class ReviewCaseAnalysisItem:
         )
         reviewed = replace(snapshot, human_reviews=(*snapshot.human_reviews, decision))
         saved = self.save_analysis.execute(workspace_id, reviewed, expected_revision, allow_review_transition=True)
-        return saved, reviewed
+        # Grava-se o persistido, mas devolve-se o read-model: devolver a base de escrita
+        # faria a interface mostrar a peca excluida de volta como disponivel e a
+        # cobertura como completa, ate a proxima leitura.
+        return saved, reviewed.project_effective_availability(availability)
 
 
 @dataclass(frozen=True, slots=True)
@@ -237,7 +240,16 @@ class StartCaseAnalysis:
             # decomposto NAO foi entendida. Conta-la como analisada produziria
             # COMPLETE sobre um conjunto que sabidamente tem resto nao
             # processado -- terminar o processamento nao prova completude.
-            understood = not getattr(item, "pje_blocked", False)
+            # Nem export PJe bloqueado nem importacao interrompida podem declarar-se
+            # analisados: antes, um import respondido como 500 deixava a fonte gravada
+            # e a cobertura fechava COMPLETE sobre ela.
+            # Nem ler um PDF ilegivel como "nao e PJe" pode fechar cobertura: a
+            # conversao para PdfIlegivel tira o 500, mas o documento segue sem leitura.
+            understood = not (
+                getattr(item, "pje_blocked", False)
+                or getattr(item, "import_incomplete", False)
+                or getattr(item, "content_unread", False)
+            )
             composed.append(CaseDocument(
                 document_id=f"DOC-{len(composed) + 1:03d}", storage_content_id=str(item.content_id),
                 source_sha256=item.checksum_sha256, sequence=len(composed) + 1,
@@ -331,10 +343,15 @@ class AddCaseAnalysisItem:
     ids: object
 
     def execute(self, workspace_id, *, item_kind: str, text: str, source_document_id: str, page_or_span: str, technical_subjects: tuple[str, ...], values: dict, expected_revision: int):
-        record, snapshot = self.get_analysis.execute(workspace_id)
+        record, snapshot, availability = self.get_analysis.execute_for_command(workspace_id)
         if record.revision != expected_revision or snapshot.stale_document_ids or snapshot.source_inventory_stale:
             raise RepositoryConflict("Case Analysis item source or revision is stale")
         document = next((item for item in snapshot.documents if item.document_id == source_document_id), None)
+        # Um documento que o perito excluiu continua inventariado, mas nao pode
+        # ser origem de item novo: seria reintroduzir pela analise o que a
+        # decisao profissional tirou dela.
+        if document is not None and not availability.get(document.document_id, document.content_available):
+            raise ValueError("Case Analysis item source was excluded by the professional")
         if document is None or type(text) is not str or not text.strip() or type(page_or_span) is not str or not page_or_span.strip():
             raise ValueError("Case Analysis item source input is invalid")
         if type(technical_subjects) is not tuple or any(type(item) is not str or not item.strip() for item in technical_subjects) or type(values) is not dict:
@@ -366,7 +383,7 @@ class AddCaseAnalysisItem:
         field = field_by_kind[item_kind]
         amended = replace(snapshot, **{field: (*getattr(snapshot, field), item)})
         saved = self.save_analysis.execute(workspace_id, amended, expected_revision, allow_item_append=True)
-        return saved, amended
+        return saved, amended.project_effective_availability(availability)
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,6 +392,22 @@ class GetCaseAnalysis:
     list_documents: object | None
 
     def execute(self, workspace_id):
+        record, projected, _availability = self._resolve(workspace_id, project_availability=True)
+        return record, projected
+
+    def execute_for_command(self, workspace_id):
+        """Base de MUTACAO: o snapshot persistido, mais a disponibilidade vigente.
+
+        A projecao de disponibilidade e um read-model. Se ela alcancar o caminho
+        de escrita, o comando amenda um snapshot que diverge do predecessor
+        persistido, e `SaveCaseAnalysis` recusa com "source extraction is
+        immutable" -- transformando toda exclusao profissional em paralisia da
+        analise. Quem escreve parte do persistido; a disponibilidade vem ao lado,
+        para recusar que um item novo cite documento que o perito excluiu.
+        """
+        return self._resolve(workspace_id, project_availability=False)
+
+    def _resolve(self, workspace_id, *, project_availability: bool):
         record = self.get_latest_revision.execute(
             workspace_id,
             CASE_ANALYSIS_ARTIFACT_KIND,
@@ -399,10 +432,12 @@ class GetCaseAnalysis:
         # mutavel; a extracao de fontes do snapshot e imutavel. Sem projetar uma
         # sobre a outra na leitura, uma exclusao decidida depois do bootstrap
         # seria aceita, persistida e completamente inerte.
-        reconciled = reconciled.project_effective_availability(_effective_availability(sources))
+        availability = _effective_availability(sources)
+        if project_availability:
+            reconciled = reconciled.project_effective_availability(availability)
         unindexed = set(authoritative) - {document.storage_content_id for document in snapshot.documents}
         return record, replace(
             reconciled,
             source_inventory_stale=bool(unindexed),
             unindexed_source_count=len(unindexed),
-        )
+        ), availability

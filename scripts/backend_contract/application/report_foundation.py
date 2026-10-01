@@ -304,6 +304,25 @@ def _with_property_staleness(snapshot, get_property_record, workspace_id):
     return replace(snapshot, state=ReportState.DRAFT, review_decisions=(), coverage=replace(snapshot.coverage, complete=False), upstream_stale=True, upstream_stale_reasons=(*snapshot.upstream_stale_reasons, *reasons))
 
 
+def _refuse_new_answers_to_excluded_questions(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, predecessor: ReportSnapshot | None) -> None:
+    """Resposta a quesito derivado de peca excluida nao entra como autoridade nova.
+
+    A resposta ja gravada no predecessor, sob o MESMO vinculo de fontes, segue (laudo
+    legado continua revisavel e substituivel); nova versao e revinculo e julga tudo.
+    """
+    if predecessor is not None and predecessor.source_snapshot != snapshot.source_snapshot:
+        predecessor = None
+    recorded = predecessor.answers if predecessor is not None else ()
+    excluded = _excluded_questions(case)
+    if any(answer.question_id in excluded and answer not in recorded for answer in snapshot.answers):
+        raise ValueError("Report Snapshot cannot answer a question derived from a document excluded by the professional")
+
+
+def _excluded_questions(case: CaseAnalysisSnapshot) -> set[str]:
+    """Quesitos derivados de peca excluida pelo perito: nao sao exigidos nem respondidos."""
+    return {item.item_id for item in case.questions if case.derived_from_unavailable(item)}
+
+
 def _validate_answer_chains(snapshot: ReportSnapshot, technical: TechnicalSnapshot) -> None:
     findings = {item.finding_id: item for item in technical.findings}
     proposals = {item.proposal_id: item for item in technical.finding_proposals}
@@ -339,20 +358,43 @@ def _validate_claim_provenance(
     inspection: InspectionSession,
     technical: TechnicalSnapshot,
     pathology: ConstructionDefectAnalysisSnapshot | None,
+    baseline=None,
 ) -> None:
     sources = _claim_sources(snapshot.source_snapshot, case, inspection, technical, pathology)
     bound = [provenance for claim in snapshot.claims for provenance in claim.provenance]
     bound.extend(row.provenance for row in snapshot.findings_table or ())
+    # Fonte que o predecessor ja gravava sob o MESMO vinculo nao e rejulgada pela exclusao:
+    # o vinculo identico (digests das autoridades) garante a identidade, e o laudo legado
+    # segue revisavel e substituivel como na main. O que entra NOVO passa pelo filtro; a
+    # nova versao (revinculo) nao tem baseline e descarta o que perdeu fonte. O predecessor
+    # so e lido se alguma entrada falhar no filtro (`baseline` devolve o snapshot ou None).
+    loaded = []
+
+    def recorded():
+        if not loaded:
+            loaded.append(baseline() if baseline is not None else None)
+        return loaded[0]
+
+    def recorded_provenance():
+        previous = recorded()
+        if previous is None:
+            return ()
+        return (*(provenance for claim in previous.claims for provenance in claim.provenance), *(row.provenance for row in previous.findings_table or ()))
+
     for provenance in bound:
         identities, revision = sources[provenance.source_kind]
-        if provenance.source_id not in identities or provenance.source_revision != revision:
+        if (provenance.source_id not in identities or provenance.source_revision != revision) and provenance not in recorded_provenance():
             raise ValueError("Report Snapshot claim provenance is not present in bound upstream authority")
     validate_technical_findings_table(snapshot, technical)
     context_sources = _context_sources(case, technical)
     for item in snapshot.context_matrix:
-        if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field]:
+        if item.status is ContextStatus.PRESENT and item.source_id not in context_sources[item.field] and item not in (recorded().context_matrix if recorded() is not None else ()):
             raise ValueError("Report Snapshot context provenance is not present in bound upstream authority")
-    if snapshot.state is ReportState.APPROVED and {item.question_id for item in snapshot.answers} != {item.question_id for item in technical.question_links}:
+    # Exige-se o mesmo conjunto que o seletor oferece: quesito derivado de peca excluida
+    # sai da exigencia (a UI o esconde). Resposta legada a ele nao impede a aprovacao.
+    excluded_questions = _excluded_questions(case)
+    required_questions = {item.question_id for item in technical.question_links if item.question_id not in excluded_questions}
+    if snapshot.state is ReportState.APPROVED and not required_questions <= {item.question_id for item in snapshot.answers}:
         raise ValueError("approved Report Snapshot must answer every bound technical question")
 
 
@@ -377,9 +419,14 @@ def validate_technical_findings_table(snapshot: ReportSnapshot, technical: Techn
 def _claim_sources(binding: ReportSourceSnapshot, case, inspection, technical, pathology) -> dict[str, tuple[set[str], int | None]]:
     """Every citable identity per source kind, with the revision the binding names."""
     return {
-        "ALLEGATION": ({item.item_id for item in case.claims}, binding.case_analysis_revision),
-        "COURT_DECISION": ({item.item_id for item in case.decisions}, binding.case_analysis_revision),
-        "CASE_DOCUMENT": ({item.document_id for item in case.documents}, binding.case_analysis_revision),
+        # Nao basta filtrar o documento: alegacao e decisao EXTRAIDAS dele tambem
+        # deixam de ser autoridade -- senao a exclusao volta pela porta dos derivados.
+        "ALLEGATION": ({item.item_id for item in case.claims if not case.derived_from_unavailable(item)}, binding.case_analysis_revision),
+        "COURT_DECISION": ({item.item_id for item in case.decisions if not case.derived_from_unavailable(item)}, binding.case_analysis_revision),
+        # Documento excluido pelo perito continua inventariado, mas deixa de ser
+        # autoridade documental: uma afirmacao do laudo apoiada nele tornaria a
+        # exclusao meramente cosmetica na tela.
+        "CASE_DOCUMENT": ({item.document_id for item in case.documents if item.content_available}, binding.case_analysis_revision),
         "FIELD_OBSERVATION": ({item.observation_id for item in inspection.observations}, binding.inspection_session_revision),
         "MEASUREMENT": ({item.measurement_id for item in inspection.measurements}, binding.inspection_session_revision),
         "PATHOLOGY": (set(pathology.effective_pat_ids) if pathology is not None else set(), binding.construction_defect_analysis_revision),
@@ -389,11 +436,14 @@ def _claim_sources(binding: ReportSourceSnapshot, case, inspection, technical, p
 
 
 def _context_sources(case, technical) -> dict[str, set[str]]:
-    documents = {item.document_id for item in case.documents}
-    claims = {item.item_id for item in case.claims}
-    decisions = {item.item_id for item in case.decisions}
-    participants = {item.participant_id for item in case.judicial_context.participants}
-    questions = {item.item_id for item in case.questions} | {item.question_id for item in technical.question_links}
+    documents = {item.document_id for item in case.documents if item.content_available}
+    claims = {item.item_id for item in case.claims if not case.derived_from_unavailable(item)}
+    decisions = {item.item_id for item in case.decisions if not case.derived_from_unavailable(item)}
+    participants = {item.participant_id for item in case.judicial_context.participants if not case.derived_from_unavailable(item)}
+    excluded_questions = {item.item_id for item in case.questions if case.derived_from_unavailable(item)}
+    questions = (
+        {item.item_id for item in case.questions} | {item.question_id for item in technical.question_links}
+    ) - excluded_questions
     return {
         "PROCESS_NUMBER": documents | decisions,
         "COURT": documents | decisions,
@@ -479,6 +529,7 @@ class SaveReportSnapshot:
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Report Snapshot authority guard is unavailable")
         with self.authority_guard():
+            predecessor = None
             current = _current(
                 workspace_id,
                 (
@@ -491,9 +542,18 @@ class SaveReportSnapshot:
             )
             if _reconcile(snapshot, current[-1]).upstream_stale or _site_location_reasons(snapshot, self.get_site_location, workspace_id) or _property_reasons(snapshot, self.get_property_record, workspace_id) or _process_reasons(snapshot, self.get_process_record, workspace_id):
                 raise ValueError("Report Snapshot upstream authority is stale")
+            def baseline():
+                if expected_revision is None or allow_new_version:
+                    return None
+                record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
+                if record is None:  # sem predecessor gravado: nada a preservar
+                    return None
+                previous = validated_report_snapshot_from_mapping(thaw_payload(record.payload))
+                return previous if previous.source_snapshot == snapshot.source_snapshot else None
+
             _validate_answer_chains(snapshot, current[5])
             _validate_claim_provenance(
-                snapshot, current[1], current[3], current[5], current[9]
+                snapshot, current[1], current[3], current[5], current[9], baseline
             )
             if expected_revision is not None:
                 predecessor_record = self.get_latest_revision.execute(workspace_id, REPORT_SNAPSHOT_ARTIFACT_KIND, REPORT_SNAPSHOT_ARTIFACT_ID)
@@ -509,6 +569,7 @@ class SaveReportSnapshot:
                 material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table", "site_location", "figures", "property_record", "process_record")
                 if not allow_new_version and predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
                     raise ValueError("Report Snapshot material change requires a new draft before professional review")
+            _refuse_new_answers_to_excluded_questions(snapshot, current[1], None if allow_new_version else predecessor)
             created_at = self.clock.now()
             if created_at.tzinfo is None or created_at.utcoffset() is None:
                 raise ValueError("Report Snapshot clock requires timezone")
@@ -889,6 +950,8 @@ class StartReportVersion:
                     raise ValueError("answer lost its cited table")
                 if not set(answer.claim_ids) <= {item.claim_id for item in kept_claims}:
                     raise ValueError("answer lost its cited claims")
+                if answer.question_id in _excluded_questions(case):
+                    raise ValueError("answer cites a question derived from an excluded document")
                 # The chain check reads only the claims and the answer.
                 _validate_answer_chains(SimpleNamespace(claims=kept_claims, answers=(answer,)), technical)
             except ValueError:
@@ -934,6 +997,8 @@ def _answer_for_question(snapshot: ReportSnapshot, case: CaseAnalysisSnapshot, t
     the cited claims are the report paragraphs that cite that finding or its
     decision.  Nothing here is inferred: a link that does not exist is refused.
     """
+    if question_id in _excluded_questions(case):
+        raise ValueError("Report answer cannot cite a question derived from a document excluded by the professional")
     if (question_id, finding_id) not in {(item.question_id, item.finding_id) for item in technical.question_links}:
         raise ValueError("Report answer requires an effective finding linked to the question")
     finding = next((item for item in technical.findings if item.finding_id == finding_id), None)
@@ -993,8 +1058,8 @@ class ListReportSources:
             for item in case.documents if item.content_available
         ]
         sources = [
-            *({"kind": "ALLEGATION", "id": item.item_id, "label": item.text} for item in case.claims),
-            *({"kind": "COURT_DECISION", "id": item.item_id, "label": item.text} for item in case.decisions),
+            *({"kind": "ALLEGATION", "id": item.item_id, "label": item.text} for item in case.claims if not case.derived_from_unavailable(item)),
+            *({"kind": "COURT_DECISION", "id": item.item_id, "label": item.text} for item in case.decisions if not case.derived_from_unavailable(item)),
             *documents,
             *({"kind": "FIELD_OBSERVATION", "id": item.observation_id, "label": item.raw_observation} for item in inspection.observations),
             *({"kind": "MEASUREMENT", "id": item.measurement_id, "label": f"{item.quantity}: {item.raw_value} {item.raw_unit}"} for item in inspection.measurements),
@@ -1005,13 +1070,15 @@ class ListReportSources:
         entities = {item.entity_id: item for item in case.judicial_context.entities}
         participants = [
             {"id": item.participant_id, "label": getattr(entities.get(item.entity_id), "raw_name", item.participant_id)}
-            for item in case.judicial_context.participants
+            for item in case.judicial_context.participants if not case.derived_from_unavailable(item)
         ]
         document_options = [{"id": item["id"], "label": item["label"]} for item in documents]
-        decisions = [{"id": item.item_id, "label": item.text} for item in case.decisions]
-        claims = [{"id": item.item_id, "label": item.text} for item in case.claims]
+        # O seletor nao oferece o que o save recusaria: derivados de peca excluida.
+        decisions = [{"id": item.item_id, "label": item.text} for item in case.decisions if not case.derived_from_unavailable(item)]
+        claims = [{"id": item.item_id, "label": item.text} for item in case.claims if not case.derived_from_unavailable(item)]
         questions_text = {item.item_id: item.text for item in case.questions}
-        question_ids = list(dict.fromkeys(item.question_id for item in technical.question_links))
+        excluded_questions = {item.item_id for item in case.questions if case.derived_from_unavailable(item)}
+        question_ids = list(dict.fromkeys(item.question_id for item in technical.question_links if item.question_id not in excluded_questions))
         question_options = [{"id": question_id, "label": questions_text.get(question_id, question_id)} for question_id in question_ids]
         findings = {item.finding_id: item for item in technical.findings}
         questions = [

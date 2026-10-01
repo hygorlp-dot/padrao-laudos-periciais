@@ -128,4 +128,29 @@ describe("case analysis view", () => {
 
     expect(await screen.findByText("Fonte alterada — contexto judicial requer revisão")).toBeInTheDocument();
   });
+
+  test("flags items and participants derived from a document the professional excluded, and never offers it as a new source", async () => {
+    const excluded = structuredClone(SNAPSHOT);
+    excluded.documents = [
+      ...excluded.documents,
+      { ...excluded.documents[0], document_id: "DOC-002", sequence: 2, raw_type: "Contestação", content_available: false, analysis_revision: 1 },
+    ];
+    excluded.claims = [...excluded.claims, { ...ITEM, item_id: "CLAIM-002", text: "Alegação extraída da peça excluída.", provenance: [{ ...PROVENANCE[0], source_document_id: "DOC-002", occurrence_id: "OCC-CLAIM-002" }] }];
+    excluded.judicial_context.participants[1].provenance = [{ source_document_id: "DOC-002" }];
+    excluded.stale_document_ids = [];
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { revision: 1, updated_at: "2026-03-01T10:00:00-03:00", snapshot: excluded })));
+
+    render(<CaseAnalysisView workspaceId={WORKSPACE_ID} />);
+
+    // Só o item derivado da peça excluída é marcado, com o motivo certo.
+    expect(await screen.findAllByText("Fonte excluída da análise — rejeite o item ou reabilite a peça")).toHaveLength(1);
+    expect(screen.getByText("Fonte excluída da análise — identidade judicial requer revisão")).toBeInTheDocument();
+    // Exclusão não é fonte alterada: o aviso de deriva não aparece.
+    expect(screen.queryByText("Fonte alterada — revisão necessária")).not.toBeInTheDocument();
+    // O seletor de fonte de item novo não oferece a peça excluída.
+    const picker = screen.getByRole("combobox", { name: "Documento" });
+    const offered = Array.from(picker.querySelectorAll("option")).map((option) => option.getAttribute("value"));
+    expect(offered).toContain("DOC-001");
+    expect(offered).not.toContain("DOC-002");
+  });
 });

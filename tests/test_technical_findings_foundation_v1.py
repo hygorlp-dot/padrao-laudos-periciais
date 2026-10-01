@@ -477,8 +477,18 @@ def test_save_rejects_source_or_question_identity_absent_from_bound_upstreams():
     service = save_service(snapshot)
     links = list(snapshot.source_links)
     links[0] = replace(links[0], source_id="MEASUREMENT-UNKNOWN")
+    # Reescrever um vinculo ja gravado e barrado antes por append-only. Isso e
+    # correto, mas nao prova nada sobre autoridade de fonte: a mensagem abaixo
+    # vem de outra guarda.
     with pytest.raises(ValueError, match="origin or history"):
         service.execute(WorkspaceId.parse(snapshot.workspace_id), replace(snapshot, source_links=tuple(links)), 3, mutation_authority="PROFESSIONAL")
+    # O fecho de autoridade so e alcancado por um candidato integro que cite uma
+    # identidade inexistente; sem este caso, apagar a guarda nao ficaria vermelho.
+    with pytest.raises(ValueError, match="absent from bound upstream"):
+        save_service(empty_bound_snapshot()).execute(
+            WorkspaceId.parse(snapshot.workspace_id),
+            _proposal_citing("MEASUREMENT", "MEASUREMENT-UNKNOWN"), 3, mutation_authority="PROPOSAL",
+        )
     questions = list(snapshot.question_links)
     questions[0] = replace(questions[0], question_id="QUESTION-UNKNOWN")
     with pytest.raises(ValueError, match="question identity"):
@@ -631,3 +641,53 @@ def test_decision_follows_all_classified_evidence_and_method_inputs_cannot_be_hi
     methods = (replace(snapshot.method_applications[0], input_ids=("METHOD-INPUT-001", "METHOD-INPUT-HIDDEN")),)
     with pytest.raises(ValueError, match="classified"):
         replace(snapshot, method_applications=methods, method_inputs=snapshot.method_inputs + (hidden_input,), finding_proposals=tuple(proposals))
+
+
+def _proposal_citing(source_kind, source_id):
+    """Proposta estruturalmente valida cujo unico vinculo cita a fonte dada.
+
+    Passa pelo comando real em vez de montar o snapshot na mao: assim o
+    candidato ja nasce sem orfandade, sem auto-aprovacao e com a ordem de
+    append-only intacta, e a unica coisa que resta para o save julgar e a
+    autoridade da fonte citada.
+    """
+    harness = CommandHarness(empty_bound_snapshot())
+    AddEvidenceProposal(harness.get(), harness.save(), SequentialIds()).execute(
+        WorkspaceId.parse(harness.snapshot.workspace_id),
+        source_kind=source_kind, source_id=source_id,
+        proposition="Proposição sintética.", why_relevant="Relevância sintética.",
+        expected_revision=1,
+    )
+    return harness.snapshot
+
+
+def test_a_document_excluded_by_the_professional_is_not_evidentiary_authority():
+    """PROFESSIONAL_OVERRIDE na fronteira Case Analysis -> Technical Findings.
+
+    Um documento marcado indisponivel pelo perito continua INVENTARIADO: nao
+    some do processo e a decisao e reversivel. O que ele deixa de ser e
+    AUTORIDADE DOCUMENTAL -- uma constatacao tecnica nao pode cita-lo como fonte,
+    sob pena de a exclusao virar cosmetica na tela enquanto o laudo segue
+    apoiado nele.
+
+    O par negativo/positivo e deliberado. Sozinha, a recusa ficaria verde por
+    motivo errado: neste servico ha pelo menos tres guardas que disparam antes
+    (append-only, orfandade e imutabilidade de revisao) e todas recusariam um
+    candidato malfeito sem nunca julgar disponibilidade. E o DOC-001 aceito pelo
+    mesmo caminho que prova que o fator discriminante e a decisao profissional.
+    """
+    _case_record, case, _inspection_record, _inspection = upstreams()
+    availability = {item.document_id: item.content_available for item in case.documents}
+    assert availability["DOC-003"] is False and availability["DOC-001"] is True, (
+        "a fixture precisa de um documento excluido e um disponivel para isto significar algo"
+    )
+    predecessor = empty_bound_snapshot()
+    workspace = WorkspaceId.parse(predecessor.workspace_id)
+
+    with pytest.raises(ValueError, match="absent from bound upstream"):
+        save_service(predecessor).execute(
+            workspace, _proposal_citing("CASE_DOCUMENT", "DOC-003"), 3, mutation_authority="PROPOSAL",
+        )
+    save_service(predecessor).execute(
+        workspace, _proposal_citing("CASE_DOCUMENT", "DOC-001"), 3, mutation_authority="PROPOSAL",
+    )

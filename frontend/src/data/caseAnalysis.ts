@@ -60,6 +60,30 @@ export type InventoryDecision = { category: string; status: "PROFESSIONALLY_CONF
 export type InventoryProposal = { category: string; label: string; state: "PROPOSED_PRESENT" | "NOT_FOUND_IN_CURRENT_INGESTED_MATERIAL"; matches: { document_id: string; page: number; excerpt: string; method: string }[] };
 export type CaseIntake = { revision: number; questions: QuestionProposal[]; inventory: InventoryProposal[] };
 
+/*
+ * Elegibilidade de fonte, espelhando o backend. Um seletor só pode oferecer o que o
+ * save aceita: oferecer o que ele recusa leva o perito a um beco sem saída.
+ * Nada disto apaga histórico -- só tira o item da lista de escolha para decisões novas.
+ */
+
+/** Espelha `CaseAnalysisSnapshot.unavailable_document_ids`. */
+export function unavailableDocumentIds(snapshot: CaseAnalysisSnapshot): Set<string> {
+  return new Set(snapshot.documents.filter((document) => document.content_available === false).map((document) => String(document.document_id)));
+}
+
+/** Espelha `derived_from_unavailable` (lacunas não são oferecidas nestes seletores). */
+export function derivedFromUnavailable(item: AnalysisItem, unavailable: Set<string>): boolean {
+  return item.provenance.some((source) => unavailable.has(source.source_document_id));
+}
+
+/** Espelha `effective_reviewed_value(...) is not None`: a última revisão humana não é REJECT. */
+export function isEffectiveItem(snapshot: CaseAnalysisSnapshot, itemId: string): boolean {
+  const history = snapshot.human_reviews
+    .filter((review) => review.target_item_id === itemId)
+    .sort((a, b) => Number(a.revision) - Number(b.revision));
+  return history.length === 0 || history[history.length - 1].decision !== "REJECT";
+}
+
 export class CaseAnalysisApiError extends Error {
   constructor(public readonly kind: "not-found" | "invalid-response" | "unavailable", message: string) {
     super(message);

@@ -72,6 +72,9 @@ from .ports import (
 _PROCESS_CASE_ARTIFACT_KIND = "PROCESS_CASE"
 _PROCESS_CASE_ARTIFACT_ID = "PROCESS_CASE"
 _PROCESS_METADATA_EXTRACTION_KIND = "PROCESS_METADATA_EXTRACTION"
+# Estados em que nenhum texto foi extraido. Uma fonte assim nao pode contar como
+# analisada: "nao consegui ler" nao e "li e nao ha nada".
+_UNREAD_TEXT_STATES = frozenset({"ERROR", "TEXT_EXTRACTION_UNAVAILABLE"})
 _PROCESS_METADATA_CONFIRMATION_KIND = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_CONFIRMATION_ID = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_SOURCE_CONFIRMATION_KIND = "PROCESS_METADATA_SOURCE_CONFIRMATION"
@@ -756,14 +759,6 @@ class ImportCaseDocumentWithMetadata:
                     extracted_at=extracted_at,
                 )
             pje_inventory = _pje_inventory_payload(record, persisted, text, self.pje_intake)
-        self.revisions.append(
-            workspace_id=record.workspace_id,
-            artifact_kind=_PROCESS_METADATA_EXTRACTION_KIND,
-            artifact_id=str(record.content_id),
-            revision_id=str(_generated_uuid(self.ids)),
-            created_at=_generated_timestamp(self.clock),
-            payload=document_metadata_payload(extracted),
-        )
         if pje_inventory is not None:
             pje_inventory = _carry_forward_availability_decisions(
                 self.revisions.latest(
@@ -778,6 +773,19 @@ class ImportCaseDocumentWithMetadata:
                 artifact_id=_pje_intake_artifact_id(record.content_id), revision_id=str(_generated_uuid(self.ids)),
                 created_at=_generated_timestamp(self.clock), payload=pje_inventory,
             )
+        # A revisao de metadados e a ULTIMA escrita da importacao, de proposito:
+        # `ListCaseDocumentsWithPjeInventory` le a sua ausencia como "importacao nao
+        # concluida". Gravada antes do inventario, uma falha entre as duas deixava a
+        # fonte parecendo concluida e a cobertura fechava COMPLETE sobre um export
+        # PJe que nunca foi decomposto.
+        self.revisions.append(
+            workspace_id=record.workspace_id,
+            artifact_kind=_PROCESS_METADATA_EXTRACTION_KIND,
+            artifact_id=str(record.content_id),
+            revision_id=str(_generated_uuid(self.ids)),
+            created_at=_generated_timestamp(self.clock),
+            payload=document_metadata_payload(extracted),
+        )
         return record, True
 
 
@@ -807,6 +815,13 @@ class PjeIndexedCaseDocument:
     # sustentada. Ela continua sendo material legitimo, e nao pode ser
     # apresentada como plenamente analisada.
     pje_blocked: bool = False
+    # A importacao gravou os bytes mas nao chegou ao fim (sem a revisao de metadados
+    # que toda importacao concluida grava por ultimo). A fonte existe, mas nada nela
+    # foi analisado -- nao pode contar para cobertura completa.
+    import_incomplete: bool = False
+    # A importacao terminou, mas nenhum leitor extraiu texto (estado ERROR ou
+    # TEXT_EXTRACTION_UNAVAILABLE). Os bytes existem; nada deles foi lido.
+    content_unread: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -838,8 +853,16 @@ class ListCaseDocumentsWithPjeInventory:
             blocked = inventory is not None and inventory["status"] != "OK"
             if blocked:
                 inventory = None
+            completed = self.revisions.latest(
+                workspace_id, _PROCESS_METADATA_EXTRACTION_KIND, str(item.content_id)
+            )
+            text_state = (
+                thaw_payload(completed.payload).get("text_state") if completed is not None else None
+            )
             indexed.append(PjeIndexedCaseDocument(
                 item.content_id, item.checksum_sha256, item.original_filename, inventory, blocked,
+                import_incomplete=completed is None,
+                content_unread=text_state in _UNREAD_TEXT_STATES,
             ))
         return tuple(indexed)
 

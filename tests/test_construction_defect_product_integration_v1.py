@@ -954,3 +954,94 @@ def test_backup_restore_reopens_exact_approved_pat_graph(tmp_path):
         assert restored.effective_pat_ids == ("PAT-001",)
     finally:
         staging.discard()
+
+
+
+@pytest.mark.parametrize("state", ["efetiva", "rejeitada", "peca_excluida"])
+def test_adapter_admits_only_effective_claims_from_available_sources(state):
+    """Revisao da #251 (SA251R-01): o adapter aceitava qualquer alegacao da analise.
+
+    A saida que o produto orienta para uma exclusao ("rejeite o item") levava o texto
+    rejeitado, da peca excluida, direto ao motor de patologias. So entra o que a
+    Analise do Caso sustenta hoje. O `match` aponta a guarda especifica, e o controle
+    (alegacao efetiva, peca disponivel) chega ao motor.
+    """
+    from dataclasses import replace
+
+    process_case, case_analysis, planning, inspection = _canonical_inputs()
+    claim = next(item for item in case_analysis.claims if item.item_id == "CLAIM-001")
+    if state == "rejeitada":
+        base = next(review for review in case_analysis.human_reviews if review.target_item_id == "CLAIM-001")
+        rejection = replace(
+            base, review_id="REVIEW-REJECT-CLAIM-001", decision="REJECT",
+            original_extraction=claim.text, corrected_value=claim.text,
+            revision=max(review.revision for review in case_analysis.human_reviews) + 1,
+        )
+        case_analysis = replace(case_analysis, human_reviews=(*case_analysis.human_reviews, rejection))
+        assert case_analysis.effective_reviewed_value("CLAIM-001") is None
+    elif state == "peca_excluida":
+        case_analysis = case_analysis.project_effective_availability({claim.provenance[0].source_document_id: False})
+        assert case_analysis.derived_from_unavailable(claim)
+
+    context = ObservationContext(
+        observation_id="OBS-001", manifestation="Condicao superficial observada", system="VEDACOES",
+        element="Parede", outcome=ObservationOutcome.CONFORMING, methods=("INSPECAO_VISUAL",),
+        measurement_ids=("MEASUREMENT-001",), photo_ids=("PHOTO-001",),
+        claim_ids=("CLAIM-001",), question_ids=(),
+    )
+
+    def run():
+        return ConstructionDefectAnalysisAdapter().execute(
+            process_case=process_case, case_analysis=case_analysis, planning=planning,
+            inspection=inspection, observation_contexts=(context,),
+        )
+
+    if state == "efetiva":
+        assert any(link.canonical_id == "CLAIM-001" for link in run().identity_links)
+    else:
+        with pytest.raises(ValueError, match="unknown Case Analysis claim"):
+            run()
+
+
+
+@pytest.mark.parametrize("linked", ["alegacao_e_quesito", "so_quesito"])
+def test_an_approved_pat_loses_report_authority_when_its_claim_source_is_excluded_and_regains_it_on_re_enable(linked):
+    """Auditoria da #251, rodada 3 (SA251R3-03): a exclusao so grava o inventario PJe; o
+    registro persistido da Analise do Caso nao muda, entao o vinculo por checksum da
+    Analise de Vicios nao a percebia -- um PAT aprovado ANTES da exclusao seguia
+    autoridade do laudo apoiado na peca retirada.
+
+    Agora a reconciliacao olha a disponibilidade das alegacoes/quesitos vinculados:
+    stale com motivo proprio enquanto a peca estiver fora; reabilitar desfaz, sem
+    reescrever nada.
+    """
+    from types import SimpleNamespace
+
+    from scripts.backend_contract.application.report_foundation import _claim_sources
+
+    services = _application_services()
+    from dataclasses import replace as _replace
+
+    # "so_quesito": o caminho do quesito isolado (sem alegacao vinculada) tambem precisa
+    # derrubar a autoridade do PAT -- sem ele, retirar os quesitos da reconciliacao passava.
+    context = _application_context() if linked == "alegacao_e_quesito" else _replace(_application_context(), claim_ids=())
+    record, _proposal = services.start.execute(WORKSPACE_ID, observation_contexts=(context,))
+    _r, reviewed = services.review.execute(
+        WORKSPACE_ID, pat_id="PAT-001", action="APPROVE", professional_id="PROFESSIONAL-001",
+        reason="Revisao profissional do PAT sintetico.", expected_revision=record.revision,
+    )
+    assert reviewed.effective_pat_ids == ("PAT-001",)
+    available = services.case.value
+    claim = next(item for item in available.claims if item.item_id == "CLAIM-001")
+    binding = SimpleNamespace(case_analysis_revision=3, inspection_session_revision=5, construction_defect_analysis_revision=2, technical_snapshot_revision=1)
+    empty = SimpleNamespace(observations=(), measurements=(), findings=(), decisions=(), question_links=())
+
+    services.case.value = available.project_effective_availability({claim.provenance[0].source_document_id: False})
+    _rec, excluded = services.get.execute(WORKSPACE_ID)
+    assert excluded.upstream_stale and "Case Analysis source excluded by the professional" in excluded.upstream_stale_reasons
+    assert "PAT-001" not in _claim_sources(binding, services.case.value, empty, empty, excluded)["PATHOLOGY"][0]
+
+    services.case.value = available
+    _rec, restored = services.get.execute(WORKSPACE_ID)
+    assert not restored.upstream_stale, restored.upstream_stale_reasons
+    assert "PAT-001" in _claim_sources(binding, available, empty, empty, restored)["PATHOLOGY"][0]

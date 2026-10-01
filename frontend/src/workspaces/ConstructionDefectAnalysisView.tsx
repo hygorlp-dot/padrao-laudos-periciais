@@ -3,7 +3,7 @@ import { formatDateTime, stateLabel } from "../ui/labels";
 import { useExpertIdentity } from "../data/expertIdentity";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
 
-import { getCaseAnalysis, type CaseAnalysisEnvelope } from "../data/caseAnalysis";
+import { derivedFromUnavailable, getCaseAnalysis, isEffectiveItem, unavailableDocumentIds, type AnalysisItem, type CaseAnalysisEnvelope } from "../data/caseAnalysis";
 import {
   ConstructionDefectAnalysisApiError,
   effectivePathologyReview,
@@ -223,6 +223,12 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
   if (state.kind === "error") return <section className="status-state status-state--error" role="alert"><span className="state-mark" aria-hidden="true">!</span><div><h2>Não foi possível carregar a análise</h2><p>As autoridades locais necessárias não estão disponíveis ou não passaram pela validação canônica.</p><button className="text-action" type="button" onClick={() => { setState({ kind: "loading" }); setReloadVersion((current) => current + 1); }}>Tentar novamente</button></div></section>;
 
   const snapshot = state.analysis?.snapshot;
+  // Espelha o adapter de vícios: só item efetivo (não rejeitado) e não derivado de peça excluída.
+  const caseMap = state.caseAnalysis.snapshot;
+  const unavailable = unavailableDocumentIds(caseMap);
+  const eligible = (item: AnalysisItem) => isEffectiveItem(caseMap, item.item_id) && !derivedFromUnavailable(item, unavailable);
+  const eligibleClaims = caseMap.claims.filter(eligible);
+  const eligibleQuestions = caseMap.questions.filter(eligible);
   const blocked = busy || snapshot?.upstream_stale || snapshot?.gate === "BLOQUEADO_PARA_REDACAO";
   return <section className="pathology-workbench" aria-labelledby="pathology-title">
     <header className="planning-overview"><div><h2 id="pathology-title">Análise de manifestações construtivas</h2><p>Registros da vistoria → proposta de análise (PAT) → sua revisão profissional. Alegação, evidência e conclusão permanecem distintas.</p></div><div className="planning-readiness"><strong>{snapshot ? stateLabel(snapshot.gate) : "Ainda não iniciada"}</strong><span>{snapshot ? `revisão ${state.analysis?.revision}` : "selecione os vínculos observados"}</span></div></header>
@@ -236,8 +242,8 @@ export function ConstructionDefectAnalysisView({ workspaceId }: { workspaceId: s
       <label>Sistema construtivo, se identificado<input value={system} onChange={(event) => setSystem(event.target.value)}/></label><label>Elemento, se identificado<input value={element} onChange={(event) => setElement(event.target.value)}/></label>
       <fieldset><legend>Medições do mesmo item</legend>{availableMeasurements.length ? availableMeasurements.map((item, index) => <label key={item.measurement_id}><input type="checkbox" checked={measurementIds.includes(item.measurement_id)} onChange={(event) => setMeasurementIds(toggle(measurementIds, item.measurement_id, event.target.checked))}/>Medição {index + 1} · {item.quantity}: {item.raw_value} {item.raw_unit}</label>) : <p>Nenhuma medição vinculável.</p>}</fieldset>
       <fieldset><legend>Fotografias do mesmo item</legend>{availablePhotos.length ? availablePhotos.map((item, index) => <label key={item.photo_id}><input type="checkbox" checked={photoIds.includes(item.photo_id)} onChange={(event) => setPhotoIds(toggle(photoIds, item.photo_id, event.target.checked))}/>Fotografia {index + 1} · {item.caption}</label>) : <p>Nenhuma fotografia vinculável.</p>}</fieldset>
-      <label>Alegação relacionada<select value={claimId} onChange={(event) => setClaimId(event.target.value)}><option value="">Nenhuma</option>{state.caseAnalysis.snapshot.claims.map((item, index) => <option key={item.item_id} value={item.item_id}>Registro {index + 1} · {item.text}</option>)}</select></label>
-      <label>Quesito relacionado<select value={questionId} onChange={(event) => setQuestionId(event.target.value)}><option value="">Nenhum</option>{state.caseAnalysis.snapshot.questions.map((item, index) => <option key={item.item_id} value={item.item_id}>Registro {index + 1} · {item.text}</option>)}</select></label>
+      <label>Alegação relacionada<select value={claimId} onChange={(event) => setClaimId(event.target.value)}><option value="">Nenhuma</option>{eligibleClaims.map((item, index) => <option key={item.item_id} value={item.item_id}>Registro {index + 1} · {item.text}</option>)}</select></label>
+      <label>Quesito relacionado<select value={questionId} onChange={(event) => setQuestionId(event.target.value)}><option value="">Nenhum</option>{eligibleQuestions.map((item, index) => <option key={item.item_id} value={item.item_id}>Registro {index + 1} · {item.text}</option>)}</select></label>
       <button className="primary-action" disabled={busy}>Gerar proposta PAT</button>
     </form></section>}
 
