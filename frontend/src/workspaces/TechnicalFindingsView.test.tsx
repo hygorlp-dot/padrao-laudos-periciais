@@ -97,6 +97,21 @@ describe("technical findings workbench", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("não continue");
   });
 
+  test("a stale chain offers an explicit empty successor and keeps the previous chain as history", async () => {
+    const stale = { ...envelope, revision: 4, snapshot: { ...snapshot, upstream_stale: true, upstream_stale_reasons: ["inspection session content changed"], coverage: { ...snapshot.coverage, complete: false } } };
+    const technical = vi.fn().mockResolvedValueOnce(response(200, stale)).mockResolvedValueOnce(response(200, { ...envelope, revision: 5 }));
+    const fetchMock = routed(technical);
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<TechnicalFindingsView workspaceId={ID} />);
+    expect(await screen.findByText(/permanecem no histórico/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Iniciar nova cadeia técnica" }));
+    await waitFor(() => expect(technicalCalls(fetchMock)).toHaveLength(2));
+    const [url, init] = technicalCalls(fetchMock)[1] as [string, RequestInit];
+    expect(url).toBe(`/app-api/v1/workspaces/${ID}/technical-snapshot/successor`);
+    expect(JSON.parse(String(init.body))).toEqual({ expected_revision: 4 });
+  });
+
   test("fails closed when the response belongs to another workspace", async () => {
     const other = "22222222-2222-4222-8222-222222222222";
     vi.stubGlobal("fetch", routed(vi.fn(() => Promise.resolve(response(200, { ...envelope, snapshot: { ...snapshot, workspace_id: other, source_snapshot: { ...snapshot.source_snapshot, workspace_id: other } } })))));

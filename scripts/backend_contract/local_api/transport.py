@@ -163,6 +163,7 @@ class LocalApiServices:
     save_technical_snapshot: object | None = None
     get_technical_snapshot: object | None = None
     start_technical_snapshot: object | None = None
+    start_successor_technical_snapshot: object | None = None
     add_technical_evidence_proposal: object | None = None
     review_technical_evidence: object | None = None
     select_technical_method: object | None = None
@@ -170,6 +171,7 @@ class LocalApiServices:
     review_technical_finding: object | None = None
     get_construction_defect_analysis: object | None = None
     start_construction_defect_analysis: object | None = None
+    start_successor_construction_defect_analysis: object | None = None
     review_pathology: object | None = None
     save_expert_profile: object | None = None
     get_expert_profile: object | None = None
@@ -940,6 +942,22 @@ class LocalApi:
                     )
                 return _error(405, "METHOD_NOT_ALLOWED")
 
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("construction-defect-analysis", "successor"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                service = self._services.start_successor_construction_defect_analysis
+                if service is None:
+                    return _error(503, "CONSTRUCTION_DEFECT_ANALYSIS_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_revision", "observation_contexts"} or type(dto["observation_contexts"]) is not list or not dto["observation_contexts"]:
+                    raise ValueError("Construction Defect Analysis successor request is invalid")
+                record, snapshot = service.execute(
+                    workspace_id, expected_revision=dto["expected_revision"],
+                    observation_contexts=validated_observation_contexts_from_mapping(dto["observation_contexts"]),
+                )
+                return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": construction_defect_analysis_to_validated_mapping(snapshot)})
+
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("construction-defect-analysis", "pathology-reviews"):
                 if normalized_method != "POST":
                     return _error(405, "METHOD_NOT_ALLOWED")
@@ -1237,6 +1255,10 @@ class LocalApi:
                     "finding-proposals": (
                         self._services.propose_technical_finding,
                         {"method_application_id", "technical_proposition", "scope", "limitation", "uncertainty", "uncertainty_impact", "contrary_evidence_ids", "expected_revision"},
+                    ),
+                    "successor": (
+                        self._services.start_successor_technical_snapshot,
+                        {"expected_revision"},
                     ),
                     "finding-reviews": (
                         self._services.review_technical_finding,
