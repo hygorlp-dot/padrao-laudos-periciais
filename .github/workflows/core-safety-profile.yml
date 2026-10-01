@@ -171,32 +171,45 @@ jobs:
           "[run]`ndynamic_context = test_function`n" | Set-Content prof.coveragerc
           $argv = @(python -m scripts.quality.core_safety_plan --stage regression | ConvertFrom-Json)
           $rest = @($argv[1..($argv.Count - 1)]) -replace '^--data-file=.*$', '--data-file=ctx.data'
-          $rest = @($rest[0..2]) + @('--rcfile=prof.coveragerc') + @($rest[3..($rest.Count - 1)])
+          $rest = @($rest[0..2]) + @('--rcfile=prof.coveragerc') + @($rest[3..($rest.Count - 1)]) + @('--junitxml=ctx.xml')
           $sw = [Diagnostics.Stopwatch]::StartNew()
           & $argv[0] @rest *> ctx.log
           $sw.Stop(); "CTX_SECONDS {0:N3} exit={1}" -f $sw.Elapsed.TotalSeconds, $LASTEXITCODE
           Get-Content ctx.log -Tail 3
           @'
-          import collections, json, re
+          import collections, json, re, xml.etree.ElementTree as ET
           from coverage import CoverageData
           data = CoverageData("ctx.data"); data.read()
-          contexts = sorted(data.measured_contexts())
-          print("SAMPLE_CTX", contexts[:8], len(contexts))
-          owners = sorted({c.split(".")[0] if c else "<no-test-context>" for c in contexts})
-          lines_by = collections.defaultdict(set); arcs_by = collections.defaultdict(set)
-          for owner in owners:
-              data.set_query_contexts(["^$"] if owner == "<no-test-context>" else ["^" + re.escape(owner) + r"\."])
+          seconds = collections.Counter()
+          for case in ET.parse("ctx.xml").getroot().iter("testcase"):
+              seconds["tests/" + case.get("classname", "").split(".")[1] + ".py"] += float(case.get("time") or 0)
+          def owner_of(ctx):
+              parts = ctx.split(".")
+              return "tests/" + (parts[1] if parts[0] == "tests" else parts[0]) + ".py"
+          contexts = [c for c in data.measured_contexts() if c]
+          sets = collections.defaultdict(set)
+          for owner in sorted({owner_of(c) for c in contexts}):
+              stem = owner[len("tests/"):-3]
+              data.set_query_contexts(["^(tests\\.)?" + re.escape(stem) + r"\."])
               for path in data.measured_files():
-                  lines_by[owner].update((path, n) for n in (data.lines(path) or ()))
-                  arcs_by[owner].update((path, a) for a in (data.arcs(path) or ()))
-          data.set_query_contexts(None)
-          all_lines = {(p, n) for p in data.measured_files() for n in (data.lines(p) or ())}
-          all_arcs = {(p, a) for p in data.measured_files() for a in (data.arcs(p) or ())}
-          line_owners = collections.Counter(i for s in lines_by.values() for i in s)
-          arc_owners = collections.Counter(i for s in arcs_by.values() for i in s)
-          report = {o: [len(lines_by[o]), len(arcs_by[o]),
-                        sum(1 for i in lines_by[o] if line_owners[i] == 1),
-                        sum(1 for i in arcs_by[o] if arc_owners[i] == 1)] for o in owners}
-          print("TOTAL_DISTINCT lines", len(all_lines), "arcs", len(all_arcs))
-          print("CONTRIBUTION [lines, arcs, unique_lines, unique_arcs]", json.dumps(report))
+                  sets[owner].update(("L", path, n) for n in (data.lines(path) or ()))
+                  sets[owner].update(("A", path, a) for a in (data.arcs(path) or ()))
+          universe = set().union(*sets.values())
+          gate, covered = [], set()
+          while covered != universe:
+              best = max((f for f in sets if f not in gate),
+                         key=lambda f: (len(sets[f] - covered) / max(seconds[f], 0.05), -seconds[f]))
+              if not sets[best] - covered:
+                  break
+              gate.append(best); covered |= sets[best]
+          print("PER_FILE_SECONDS", json.dumps(dict(seconds.most_common())))
+          print("CONTEXT_OWNERS", json.dumps({o: len(s) for o, s in sorted(sets.items())}))
+          print("GREEDY_GATE", json.dumps(sorted(gate)), "GATE_SECONDS", round(sum(seconds[f] for f in gate), 1),
+                "TOTAL_SECONDS", round(sum(seconds.values()), 1), "COVERED", len(covered), "UNIVERSE", len(universe))
+          rest = sorted((f for f in seconds if f not in gate), key=lambda f: -seconds[f])
+          for k in range(2, 7):
+              bins = [[0.0, []] for _ in range(k)]
+              for f in rest:
+                  b = min(bins, key=lambda x: x[0]); b[0] += seconds[f]; b[1].append(f)
+              print("LPT", k, [round(b[0], 1) for b in bins])
           '@ | python -
