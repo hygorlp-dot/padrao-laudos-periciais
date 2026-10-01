@@ -113,8 +113,12 @@ Se o orçamento temporal deve cobrir o wall-clock dos shards é decisão de
 política de #109/#111, não desta otimização.
 Com a política híbrida (#263, decisão "2-III"), a atribuição BASE × HEAD roda
 no job `core-gate` e mede a BASE com a partição do manifest da própria BASE
-(ou o regression integral, se a BASE ainda não tiver shards), mantendo o mesmo
-escopo de medição dos dois lados.
+(ou o regression integral, se a BASE ainda não tiver shards). O escopo só é
+idêntico quando os dois lados têm manifest — o caso normal a partir de #261;
+com BASE anterior a #261 a BASE mede mais trabalho e a comparação favorece o
+candidato. Mover arquivos do gate para shards também encurta a janela
+cronometrada do próprio candidato; ambos são questões de política de
+#109/#111.
 
 **Premissa residual.** A execução real do `regression` dentro do `verify_core`
 não é inventariada por node (o juiz é byte-idêntico e não emite IDs); ela é
