@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from hashlib import sha256
 
 from ..case_analysis import PericialQuestion, SourceProvenance
-from ..case_intake import DocumentInventoryDecision, extract_questions, inventory_proposals
+from ..case_intake import QUESTION_ORIGINS, DocumentInventoryDecision, extract_questions, inventory_proposals, question_evidence
 from .models import PrivateContentId
 from .ports import RepositoryConflict, RepositoryIntegrityError
 
@@ -63,9 +63,18 @@ class AcceptCaseQuestions:
     save_analysis: object
     ids: object
 
-    def execute(self, workspace_id, *, proposal_ids, expected_revision):
-        if type(proposal_ids) is not list or not proposal_ids or any(type(v) is not str for v in proposal_ids) or len(set(proposal_ids)) != len(proposal_ids):
+    def execute(self, workspace_id, *, selections, expected_revision):
+        # Cada quesito selecionado traz a ORIGEM confirmada pelo perito. A extracao so a
+        # propoe (titulo do documento); heuristica de texto livre erra em layouts
+        # incomuns, e uma origem errada gravada sem decisao profissional nao teria volta.
+        if (
+            type(selections) is not list or not selections
+            or any(type(v) is not dict or set(v) != {"proposal_id", "origin"} or type(v["proposal_id"]) is not str or v["origin"] not in QUESTION_ORIGINS for v in selections)
+            or len({v["proposal_id"] for v in selections}) != len(selections)
+        ):
             raise ValueError("question selection is invalid")
+        confirmed = {v["proposal_id"]: v["origin"] for v in selections}
+        proposal_ids = list(confirmed)
         record, case, availability, proposals = self.get_intake.execute_for_command(workspace_id)
         if type(expected_revision) is not int or record.revision != expected_revision:
             raise RepositoryConflict("question source revision changed")
@@ -75,13 +84,15 @@ class AcceptCaseQuestions:
         questions = list(case.questions)
         for identity in proposal_ids:
             proposal = candidates[identity]
-            if any(q.source_question == proposal.source and q.text == proposal.text and any(p.source_document_id == proposal.document_id for p in q.provenance) for q in questions):
+            if any(q.source_question is not None and question_evidence(q.source_question) == question_evidence(proposal.source) and q.text == proposal.text
+                   and any(p.source_document_id == proposal.document_id for p in q.provenance) for q in questions):
                 continue
             document = next(d for d in case.documents if d.document_id == proposal.document_id)
             token = self.ids.new_uuid().hex.upper()
             span = f"p. {proposal.source.page_start}" + (f"-{proposal.source.page_end}" if proposal.source.page_start != proposal.source.page_end else "")
             source = SourceProvenance(str(workspace_id), document.document_id, document.source_sha256, span, case.source_revision, f"OCCURRENCE-{token}")
-            questions.append(PericialQuestion(f"PERICIAL-QUESTION-{token}", proposal.text, (), (), (source,), source_question=proposal.source))
+            questions.append(PericialQuestion(f"PERICIAL-QUESTION-{token}", proposal.text, (), (), (source,),
+                                              source_question=replace(proposal.source, origin=confirmed[identity])))
         if tuple(questions) == case.questions:
             return record, case.project_effective_availability(availability)
         updated = replace(case, questions=tuple(questions))

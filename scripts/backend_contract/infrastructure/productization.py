@@ -927,7 +927,9 @@ class VerifyWorkspaceBackup:
                             question_source_proposals[cache_key] = extract_questions(document, extracted.pages)
                         except Exception as exc:
                             raise RepositoryIntegrityError("backup question source evidence cannot be verified locally") from exc
-                    if not any((p.text, p.source) == (question.text, question.source_question) for p in question_source_proposals[cache_key]):
+                    # A evidencia literal tem de sair dos bytes; a origem e decisao do perito.
+                    from ..case_intake import question_evidence
+                    if not any((p.text, question_evidence(p.source)) == (question.text, question_evidence(question.source_question)) for p in question_source_proposals[cache_key]):
                         raise RepositoryIntegrityError("backup question source evidence diverges from document bytes")
             elif record.artifact_kind == "PROPERTY_RECORD_V1":
                 property_record = property_record_from_mapping(thaw_payload(record.payload))

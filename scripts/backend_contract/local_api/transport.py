@@ -1270,7 +1270,7 @@ class LocalApi:
                 service = self._services.accept_case_questions if action == "questions" else self._services.confirm_document_inventory
                 if service is None:
                     return _error(503, "CASE_ANALYSIS_UNAVAILABLE")
-                if set(dto) != ({"proposal_ids", "expected_revision"} if action == "questions" else {"values", "expected_revision"}):
+                if set(dto) != ({"selections", "expected_revision"} if action == "questions" else {"values", "expected_revision"}):
                     raise ValueError("case intake command is invalid")
                 record, snapshot = service.execute(workspace_id, **dto)
                 return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": case_analysis_to_mapping(snapshot)})

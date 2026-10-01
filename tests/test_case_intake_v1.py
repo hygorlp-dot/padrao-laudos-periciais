@@ -58,7 +58,7 @@ def test_real_intake_accepts_literal_questions_once_and_backup_rejects_forged_ex
         status, proposed = _http(runtime, "GET", root + "/case-analysis/intake")
         assert status == 200 and len(proposed["questions"]) == 2
         chosen = proposed["questions"][0]
-        body = {"proposal_ids": [chosen["proposal_id"]], "expected_revision": proposed["revision"]}
+        body = {"selections": [{"proposal_id": chosen["proposal_id"], "origin": chosen["source"]["origin"]}], "expected_revision": proposed["revision"]}
         status, accepted = _http(runtime, "POST", root + "/case-analysis/questions", body)
         assert status == 200 and len(accepted["snapshot"]["questions"]) == 1
         question = accepted["snapshot"]["questions"][0]
@@ -161,7 +161,7 @@ def test_accepting_questions_after_a_professional_exclusion_keeps_the_exclusion(
         status, intake = _request(runtime, "GET", root + "/case-analysis/intake")
         assert status == 200 and len(intake["questions"]) == 1, intake
         status, accepted = _request(runtime, "POST", root + "/case-analysis/questions", value={
-            "proposal_ids": [intake["questions"][0]["proposal_id"]], "expected_revision": intake["revision"]})
+            "selections": [{"proposal_id": intake["questions"][0]["proposal_id"], "origin": intake["questions"][0]["source"]["origin"]}], "expected_revision": intake["revision"]})
         assert status == 200, accepted
         assert [item["text"] for item in accepted["snapshot"]["questions"]] == ["A parede apresenta umidade?"]
         assert _find(accepted["snapshot"], "DOC-PJE-002")["content_available"] is False
@@ -267,7 +267,7 @@ def test_an_oversized_question_block_is_not_proposed_and_the_analysis_stays_read
         assert status == 200
         assert [item["text"] for item in intake["questions"]] == ["Quesito curto sintetico?"]
         status, accepted = http(runtime, "POST", root + "/case-analysis/questions",
-                                {"proposal_ids": [intake["questions"][0]["proposal_id"]], "expected_revision": intake["revision"]})
+                                {"selections": [{"proposal_id": intake["questions"][0]["proposal_id"], "origin": intake["questions"][0]["source"]["origin"]}], "expected_revision": intake["revision"]})
         assert status == 200, accepted
         assert http(runtime, "GET", root + "/case-analysis")[0] == 200
     finally:
@@ -459,3 +459,125 @@ def test_prose_and_dispositive_boundaries_never_inherit_the_previous_origin(boun
     page = PdfTextPage(1, f"QUESITOS DA PARTE AUTORA\n1. Ha umidade?\n{boundary}\n1. Houve manutencao?")
     expected_rows = [("CLAIMANT", "Ha umidade?")] + ([(expected, "Houve manutencao?")] if expected else [])
     assert [(p.source.origin, p.text) for p in extract_questions(doc, (page,))] == expected_rows
+
+
+
+def test_the_question_origin_is_the_professional_decision_at_acceptance(tmp_path):
+    """Revisao da PR #255 (rodada 4): quatro rodadas mostraram que a heuristica de texto
+    livre erra a origem em layouts incomuns -- e a origem proposta era gravada sem decisao
+    profissional e sem correcao possivel. Agora o perito confirma a origem de cada quesito
+    no aceite (proposta != decisao). O verify do backup confere a evidencia literal contra
+    os bytes; a origem e a decisao registrada."""
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+    from scripts.backend_contract.infrastructure.productization import VerifyWorkspaceBackup
+    from tests.test_local_api_v1 import http_request
+    from tests.test_product_integration_oracle_v1 import TOKEN, _reseal
+    from tests.test_property_record_v1 import _text_pdf
+
+    runtime, root, _case, http = _intake_workspace(tmp_path, _text_pdf(["QUESITOS DA PARTE AUTORA", "01) A parede apresenta umidade?"]))
+    try:
+        status, intake = http(runtime, "GET", root + "/case-analysis/intake")
+        proposal = intake["questions"][0]
+        assert status == 200 and proposal["source"]["origin"] == "CLAIMANT"
+        assert proposal["section_heading"] == "QUESITOS DA PARTE AUTORA" and proposal["section_page"] == 1
+        for invalid in ({"proposal_ids": [proposal["proposal_id"]]},
+                        {"selections": [{"proposal_id": proposal["proposal_id"]}]},
+                        {"selections": [{"proposal_id": proposal["proposal_id"], "origin": "EXPERT"}]}):
+            assert http(runtime, "POST", root + "/case-analysis/questions", {**invalid, "expected_revision": intake["revision"]})[0] == 400
+        status, accepted = http(runtime, "POST", root + "/case-analysis/questions", {
+            "selections": [{"proposal_id": proposal["proposal_id"], "origin": "DEFENDANT"}], "expected_revision": intake["revision"]})
+        assert status == 200, accepted
+        question = accepted["snapshot"]["questions"][0]
+        assert question["source_question"]["origin"] == "DEFENDANT"  # a decisao do perito, nao a proposta
+        assert question["source_question"]["excerpt"] == proposal["source"]["excerpt"] and question["text"] == proposal["text"]
+        status, again = http(runtime, "POST", root + "/case-analysis/questions", {
+            "selections": [{"proposal_id": proposal["proposal_id"], "origin": "CLAIMANT"}], "expected_revision": accepted["revision"]})
+        assert status == 200 and again["revision"] == accepted["revision"]  # mesma evidencia: nao duplica
+        status, _headers, backup = http_request(runtime.server, "POST", root + "/backup", value={}, headers={"X-Local-API-Token": TOKEN})
+        assert status == 200
+        VerifyWorkspaceBackup().execute(backup)  # origem decidida nao invalida a evidencia
+        forged = json.loads(backup)
+        for revision in forged["artifact_revisions"]:
+            if revision["artifact_kind"] == "CASE_ANALYSIS_SNAPSHOT_V1" and revision["revision"] == accepted["revision"]:
+                revision["payload"]["questions"][0]["source_question"]["method"] = "NUMBERED_OCR_V1"
+        with pytest.raises(RepositoryIntegrityError, match="question source evidence"):
+            VerifyWorkspaceBackup().execute(_reseal(forged))  # evidencia adulterada continua recusada
+    finally:
+        runtime.close()
+
+
+def test_each_proposal_shows_the_heading_and_what_follows_in_the_document():
+    """O perito confere a fronteira e a origem antes de aceitar: a linha do titulo que
+    sugeriu a origem e o texto que vem logo depois do bloco."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    proposals = extract_questions(doc, (PdfTextPage(1, "QUESITOS DO JUIZO\n1. Ha fissuras?\n2. Ha umidade?\nNestes termos."),))
+    assert [(p.section_heading, p.section_page, p.context_after) for p in proposals] == [
+        ("QUESITOS DO JUIZO", 1, "2. Ha umidade?\nNestes termos."), ("QUESITOS DO JUIZO", 1, ""),
+    ]
+
+
+@pytest.mark.parametrize("pages,expected", [
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. Esclareça o perito:\na) se ratifica as respostas aos quesitos do juízo;\nb) se há umidade na sala;\n2. Há fissuras?",),
+                 [("CLAIMANT", "Esclareça o perito:\na) se ratifica as respostas aos quesitos do juízo;\nb) se há umidade na sala;"), ("CLAIMANT", "Há fissuras?")],
+                 id="subitem_que_menciona_quesitos"),
+    pytest.param(("QUESITOS DO JUIZO\n1. HA INFILTRACAO NO BANHEIRO?\nDISPOSITIVO DE DESCARGA E REGISTROS ESTAO EM FUNCIONAMENTO?\n2. HA FISSURAS?",),
+                 [("COURT", "HA INFILTRACAO NO BANHEIRO?\nDISPOSITIVO DE DESCARGA E REGISTROS ESTAO EM FUNCIONAMENTO?"), ("COURT", "HA FISSURAS?")],
+                 id="ocr_vocabulario_tecnico_dispositivo"),
+    pytest.param(("QUESITOS DO JUIZO\n1. HA DEFEITO NO TELHADO? QUAIS AS\nPROVIDENCIAS NECESSARIAS PARA O REPARO?\n2. HA FISSURAS?",),
+                 [("COURT", "HA DEFEITO NO TELHADO? QUAIS AS\nPROVIDENCIAS NECESSARIAS PARA O REPARO?"), ("COURT", "HA FISSURAS?")],
+                 id="ocr_continuacao_providencias"),
+    pytest.param(("QUESITOS DA PARTE RE\n1. QUEIRA O PERITO INFORMAR SE RATIFICA AS RESPOSTAS DADAS AOS\nQUESITOS DO JUIZO\n2. HA FISSURAS NA FACHADA?",),
+                 [("DEFENDANT", "QUEIRA O PERITO INFORMAR SE RATIFICA AS RESPOSTAS DADAS AOS\nQUESITOS DO JUIZO"), ("DEFENDANT", "HA FISSURAS NA FACHADA?")],
+                 id="ocr_continuacao_igual_a_titulo"),
+    pytest.param(("QUESITOS DO JUIZO\n1. HA FISSURAS?\nAS RESPOSTAS AOS QUESITOS ANTERIORES SE APLICAM A FACHADA?\n2. HA UMIDADE?",),
+                 [("COURT", "HA FISSURAS?\nAS RESPOSTAS AOS QUESITOS ANTERIORES SE APLICAM A FACHADA?"), ("COURT", "HA UMIDADE?")],
+                 id="frase_que_menciona_quesitos_nao_e_titulo"),
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. O perito ratifica as respostas dadas aos\nQuesitos do Juizo\nno laudo anterior?\n2. Há umidade?",),
+                 [("CLAIMANT", "O perito ratifica as respostas dadas aos\nQuesitos do Juizo\nno laudo anterior?"), ("CLAIMANT", "Há umidade?")],
+                 id="continuacao_capitalizada"),
+    pytest.param(("QUESITOS DA PARTE AUTORA\n1. Há umidade?\n2. Quanto aos quesitos do juízo:\n3. Há fissuras?",),
+                 [("CLAIMANT", "Há umidade?"), ("CLAIMANT", "Quanto aos quesitos do juízo:"), ("CLAIMANT", "Há fissuras?")],
+                 id="quesito_numerado_com_introducao"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há vícios?\n2. Quesitos complementares da parte ré, deferidos:\n2.1. A obra seguiu o projeto aprovado?",),
+                 [("COURT", "Há vícios?")], id="titulo_numerado_nao_reconhecido"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há vícios?\n4. QUESITOS SUPLEMENTARES\n1. Houve manutenção?",),
+                 [("COURT", "Há vícios?")], id="titulo_numerado_sem_designacao"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há fissuras?\n(b) Quesitos da parte ré\n1. Seguiu o projeto?",),
+                 [("COURT", "Há fissuras?"), ("DEFENDANT", "Seguiu o projeto?")], id="titulo_entre_parenteses"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há fissuras?\n- QUESITOS DA RÉ\n1. Seguiu o projeto?",),
+                 [("COURT", "Há fissuras?"), ("DEFENDANT", "Seguiu o projeto?")], id="titulo_com_travessao"),
+    pytest.param(("QUESITOS DO JUIZO\n1. Há fissuras?\n\"QUESITOS DA RÉ\"\n1. Seguiu o projeto?",),
+                 [("COURT", "Há fissuras?"), ("DEFENDANT", "Seguiu o projeto?")], id="titulo_entre_aspas"),
+])
+def test_round_four_layouts_keep_text_whole_and_never_inherit_origin(pages, expected):
+    """Revisao da PR #255 (rodada 4, P1 revisor e auditor): linha que nao fecha a frase
+    ("...dadas aos", "informar:", "na sala;") e sempre continuacao, em qualquer caixa;
+    vocabulario tecnico ("dispositivo de descarga") nao encerra secao; titulo numerado nao
+    reconhecido zera a origem; marcas tipograficas nao escondem um titulo."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    proposals = extract_questions(doc, tuple(PdfTextPage(number, text) for number, text in enumerate(pages, 1)))
+    assert [(p.source.origin, p.text) for p in proposals] == expected
+
+
+@pytest.mark.parametrize("middle", [
+    "numero do documento de habite-se coincide com o alvara",
+    "assinado eletronicamente pelo sindico",
+    "1234567890123",
+    "Número do documento: 4567",  # mesmo formato do rodape, mas no meio da pagina: e conteudo
+])
+def test_pje_page_marks_are_only_dropped_at_the_page_edges(middle):
+    """Revisao da PR #255 (rodada 4, P1 auditor): o filtro de rodape removia linhas de
+    conteudo do meio do quesito e o trecho gravado deixava de ser literal. Marca de pagina
+    so no formato real e so nas bordas da pagina."""
+    from scripts.backend_contract.case_intake import extract_questions
+
+    doc = replace(upstreams()[1].documents[0], page_count_or_span="Documento completo")
+    filler = "\n".join(f"linha {n}" for n in range(2, 6))
+    page = PdfTextPage(1, f"QUESITOS DO JUIZO\n{filler}\n1. Informe o perito se o\n{middle}\ne se a obra foi concluida?\n2. Ha umidade?\n{filler}")
+    proposals = extract_questions(doc, (page,))
+    assert proposals[0].text == f"Informe o perito se o\n{middle}\ne se a obra foi concluida?"
+    assert middle in proposals[0].source.excerpt

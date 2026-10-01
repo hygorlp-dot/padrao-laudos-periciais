@@ -1,12 +1,11 @@
 import { useState } from "react";
-import { acceptCaseQuestions, CASE_ANALYSIS_TEXT_MAX, confirmDocumentInventory, getCaseIntake, type CaseAnalysisEnvelope, type CaseIntake, type InventoryDecision, type InventoryProposal } from "../data/caseAnalysis";
+import { acceptCaseQuestions, CASE_ANALYSIS_TEXT_MAX, confirmDocumentInventory, getCaseIntake, type CaseAnalysisEnvelope, type CaseIntake, type InventoryDecision, type InventoryProposal, type QuestionOrigin } from "../data/caseAnalysis";
 import { questionOriginLabel } from "../ui/labels";
 
-// Mesma identidade que o servidor usa para nao duplicar: a fonte inteira (origem,
-// numero, paginas, trecho e metodo). So texto e numero confundiam quesitos iguais de
-// origens diferentes e marcavam como "ja adicionado" o que nao foi.
-function sameQuestionSource(stored: CaseIntake["questions"][number]["source"] | null | undefined, proposed: CaseIntake["questions"][number]["source"]) {
-  return !!stored && stored.origin === proposed.origin && stored.original_number === proposed.original_number && stored.page_start === proposed.page_start && stored.page_end === proposed.page_end && stored.excerpt === proposed.excerpt && stored.method === proposed.method;
+// Mesma identidade que o servidor usa para nao duplicar: a evidencia literal (numero,
+// paginas, trecho e metodo). A origem fica de fora porque e decisao do perito no aceite.
+function sameQuestionEvidence(stored: CaseIntake["questions"][number]["source"] | null | undefined, proposed: CaseIntake["questions"][number]["source"]) {
+  return !!stored && stored.original_number === proposed.original_number && stored.page_start === proposed.page_start && stored.page_end === proposed.page_end && stored.excerpt === proposed.excerpt && stored.method === proposed.method;
 }
 
 function InventoryRow({ proposal, workspaceId, envelope, onSaved }: { proposal: InventoryProposal; workspaceId: string; envelope: CaseAnalysisEnvelope; onSaved: (value: CaseAnalysisEnvelope) => void }) {
@@ -33,6 +32,8 @@ function InventoryRow({ proposal, workspaceId, envelope, onSaved }: { proposal: 
 export function CaseIntakePanel({ workspaceId, envelope, onSaved }: { workspaceId: string; envelope: CaseAnalysisEnvelope; onSaved: (value: CaseAnalysisEnvelope) => void }) {
   const [intake, setIntake] = useState<CaseIntake | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
+  // Origem confirmada pelo perito para cada quesito marcado (pre-preenchida com a proposta).
+  const [origins, setOrigins] = useState<Record<string, QuestionOrigin>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
   const stale = envelope.snapshot.source_inventory_stale || envelope.snapshot.stale_document_ids.length > 0;
@@ -43,11 +44,15 @@ export function CaseIntakePanel({ workspaceId, envelope, onSaved }: { workspaceI
     {intake && <>
       <h3>Quesitos encontrados</h3>
       {!intake.questions.length ? <p>Nenhum bloco numerado com origem explícita foi identificado. A ausência de resultado não comprova que o processo não tenha quesitos.</p> : <p>Confira com os autos: só são propostos blocos numerados sob um título de quesitos com origem explícita, e trechos muito longos ficam de fora. Quesitos ausentes desta lista podem ser adicionados manualmente.</p>}
-      {intake.questions.map((q) => { const exists = envelope.snapshot.questions.some((item) => item.text === q.text && sameQuestionSource(item.source_question, q.source) && item.provenance.some((p) => p.source_document_id === q.document_id)); return <div className="analysis-section" key={q.proposal_id}>
+      {intake.questions.map((q) => { const exists = envelope.snapshot.questions.some((item) => item.text === q.text && sameQuestionEvidence(item.source_question, q.source) && item.provenance.some((p) => p.source_document_id === q.document_id)); const checked = !exists && selected.includes(q.proposal_id); return <div className="analysis-section" key={q.proposal_id}>
         <label className="checkbox-label"><input type="checkbox" disabled={busy || exists} checked={exists || selected.includes(q.proposal_id)} onChange={(e) => setSelected((prior) => e.target.checked ? [...prior, q.proposal_id] : prior.filter((v) => v !== q.proposal_id))}/>{questionOriginLabel(q.source.origin)} · quesito {q.source.original_number}{exists ? " · já adicionado" : ""}</label>
-        <p style={{ whiteSpace: "pre-wrap" }}>{q.text}</p><details><summary>Ver trecho original · página {q.source.page_start}{q.source.page_end !== q.source.page_start ? `–${q.source.page_end}` : ""}</summary><p>{String(envelope.snapshot.documents.find((d) => d.document_id === q.document_id)?.raw_type ?? "Documento")} · {q.source.method.includes("OCR") ? "Leitura local por OCR" : "Texto do PDF"}</p><p style={{ whiteSpace: "pre-wrap" }}>{q.source.excerpt}</p></details>
+        {q.section_heading && <p className="field-hint">Origem sugerida pelo título “{q.section_heading}”{q.section_page ? ` (página ${q.section_page})` : ""}</p>}
+        {checked && <label>Origem do quesito (confirme com os autos)<select value={origins[q.proposal_id] ?? q.source.origin} disabled={busy} onChange={(e) => setOrigins((prior) => ({ ...prior, [q.proposal_id]: e.target.value as QuestionOrigin }))}><option value="COURT">{questionOriginLabel("COURT")}</option><option value="CLAIMANT">{questionOriginLabel("CLAIMANT")}</option><option value="DEFENDANT">{questionOriginLabel("DEFENDANT")}</option></select></label>}
+        <p style={{ whiteSpace: "pre-wrap" }}>{q.text}</p>
+        {q.context_after && <p className="field-hint">Segue no documento: <span style={{ whiteSpace: "pre-wrap" }}>{q.context_after}</span></p>}
+        <details><summary>Ver trecho original · página {q.source.page_start}{q.source.page_end !== q.source.page_start ? `–${q.source.page_end}` : ""}</summary><p>{String(envelope.snapshot.documents.find((d) => d.document_id === q.document_id)?.raw_type ?? "Documento")} · {q.source.method.includes("OCR") ? "Leitura local por OCR" : "Texto do PDF"}</p><p style={{ whiteSpace: "pre-wrap" }}>{q.source.excerpt}</p></details>
       </div>; })}
-      {intake.questions.length > 0 && <button className="primary-action" type="button" disabled={busy || selected.length === 0 || stale} onClick={async () => { setBusy(true); setError(false); try { const updated = await acceptCaseQuestions(workspaceId, envelope.revision, selected); setSelected([]); onSaved(updated); } catch { setError(true); } finally { setBusy(false); } }}>Adicionar quesitos selecionados à análise</button>}
+      {intake.questions.length > 0 && <button className="primary-action" type="button" disabled={busy || selected.length === 0 || stale} onClick={async () => { setBusy(true); setError(false); try { const updated = await acceptCaseQuestions(workspaceId, envelope.revision, selected.map((id) => ({ proposal_id: id, origin: origins[id] ?? intake.questions.find((q) => q.proposal_id === id)!.source.origin }))); setSelected([]); setOrigins({}); onSaved(updated); } catch { setError(true); } finally { setBusy(false); } }}>Adicionar quesitos selecionados à análise</button>}
       <h3>Documentos usuais</h3>{intake.inventory.map((proposal) => <InventoryRow key={`${proposal.category}:${envelope.revision}`} proposal={proposal} workspaceId={workspaceId} envelope={envelope} onSaved={onSaved}/>)}
     </>}
   </details>;
