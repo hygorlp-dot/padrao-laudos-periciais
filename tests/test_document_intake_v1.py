@@ -24,6 +24,7 @@ from scripts.backend_contract.application.ports import (
     PrivateContentTooLarge,
     UnsupportedCaseDocument,
 )
+from scripts.backend_contract.application.content_roles import PrivateContentRoles
 from scripts.backend_contract.application.services import (
     GetPrivateContent,
     ImportCaseDocument,
@@ -71,6 +72,12 @@ class FixedClock:
 class FixedIds:
     def new_uuid(self):
         return CONTENT_ID.value
+
+
+class _NoRoles:
+    # Workspace sem nenhum registro de papel: todo PDF importado e fonte do caso.
+    def latest(self, workspace_id, kind, artifact_id):
+        return None
 
 
 class MemoryContents:
@@ -150,7 +157,7 @@ def document_services(*, max_bytes=1024):
     )
     return (
         ImportCaseDocument(store),
-        ListCaseDocuments(ListPrivateContents(workspaces, contents)),
+        ListCaseDocuments(ListPrivateContents(workspaces, contents), PrivateContentRoles(_NoRoles())),
         ReadCaseDocument(GetPrivateContent(workspaces, contents)),
     )
 

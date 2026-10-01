@@ -22,6 +22,12 @@ from .content import (
     SeekableContent,
     as_seekable_content,
 )
+from .content_roles import (
+    PRIVATE_CONTENT_ROLE_KIND,
+    PrivateContentRole,
+    PrivateContentRoles,
+    private_content_role_payload,
+)
 from .ocr_cache import RevisionOcrPageCache
 from .pje_party_table import PjePartyTableState, parse_pje_party_table
 from .process_metadata import (
@@ -323,6 +329,49 @@ class StorePrivateContent:
             raise RepositoryIntegrityError(
                 "metadados retornados pelo armazenamento privado divergem"
             )
+        return stored
+
+
+@dataclass(frozen=True, slots=True)
+class StoreDeliverySupportingFile:
+    """Arquivo de apoio a entrega: guardado como conteudo privado e marcado como tal.
+
+    O papel e gravado logo depois dos bytes, antes de responder. Se o processo cair
+    entre as duas escritas, o arquivo fica sem papel e e lido como antes desta
+    correcao (fonte do caso, visivel no inventario) -- nunca como entrega valida.
+    """
+
+    contents: StorePrivateContent
+    revisions: ArtifactRevisionRepository
+    clock: Clock
+    ids: IdGenerator
+
+    def __post_init__(self):
+        if type(self.contents) is not StorePrivateContent:
+            raise TypeError("serviço de conteúdo privado inválido")
+
+    def execute(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        original_filename: str,
+        content: bytes | SeekableContent,
+        media_type: str | None,
+        origin: PrivateContentOrigin,
+    ) -> PrivateContentMetadata:
+        stored = self.contents.execute(
+            workspace_id=workspace_id, original_filename=original_filename,
+            content=content, media_type=media_type, origin=origin,
+        )
+        self.revisions.append_if_latest(
+            workspace_id=stored.workspace_id,
+            artifact_kind=PRIVATE_CONTENT_ROLE_KIND,
+            artifact_id=str(stored.content_id),
+            revision_id=str(_generated_uuid(self.ids)),
+            created_at=_generated_timestamp(self.clock),
+            payload=private_content_role_payload(stored, PrivateContentRole.DELIVERY_SUPPORT),
+            expected_revision=None,
+        )
         return stored
 
 
@@ -792,16 +841,24 @@ class ImportCaseDocumentWithMetadata:
 @dataclass(frozen=True, slots=True)
 class ListCaseDocuments:
     contents: ListPrivateContents
+    # Origem de armazenamento nao e papel semantico: um PDF de apoio a entrega
+    # tambem e USER_IMPORT, mas nao e peca dos autos (#253). O registro de
+    # papeis e obrigatorio: sem ele nao ha como separar os dois.
+    roles: PrivateContentRoles
 
     def __post_init__(self):
         if type(self.contents) is not ListPrivateContents:
             raise TypeError("serviço de listagem privada inválido")
+        if type(self.roles) is not PrivateContentRoles:
+            raise TypeError("registro de papéis de conteúdo privado inválido")
 
     def execute(self, workspace_id: WorkspaceId) -> tuple[PrivateContentMetadata, ...]:
         return tuple(
             _case_document_metadata(record)
             for record in self.contents.execute(workspace_id)
-            if record.media_type == "application/pdf" and record.origin is PrivateContentOrigin.USER_IMPORT
+            if record.media_type == "application/pdf"
+            and record.origin is PrivateContentOrigin.USER_IMPORT
+            and self.roles.role_of(record) is None
         )
 
 

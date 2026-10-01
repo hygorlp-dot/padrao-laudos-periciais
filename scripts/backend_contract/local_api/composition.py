@@ -36,6 +36,7 @@ from ..infrastructure.productization import (
     RestoreWorkspaceBackup,
     VerifyWorkspaceBackup,
 )
+from ..application.content_roles import PrivateContentRoles
 from ..application.services import (
     AppendArtifactRevision,
     CreateWorkspace,
@@ -60,6 +61,7 @@ from ..application.services import (
     OpenPrivateContentStream,
     SaveProcessCase,
     SetPjeDocumentAvailability,
+    StoreDeliverySupportingFile,
     StorePrivateContent,
 )
 from ..infrastructure.private_filesystem import LocalPrivateContentStore, _validate_trusted_local_device
@@ -330,6 +332,7 @@ def build_local_api(
     import_case_document = None
     import_inspection_photo = None
     generic_store = None
+    store_delivery_supporting_file = None
     get_private_content = None
     list_case_documents = None
     case_analysis_documents = None
@@ -352,7 +355,10 @@ def build_local_api(
             server_config.max_document_body_bytes,
         )
         get_private_content = GetPrivateContent(store.workspaces, private_store)
-        list_case_documents = ListCaseDocuments(ListPrivateContents(store.workspaces, private_store))
+        list_case_documents = ListCaseDocuments(
+            ListPrivateContents(store.workspaces, private_store), PrivateContentRoles(store.revisions)
+        )
+        store_delivery_supporting_file = StoreDeliverySupportingFile(generic_store, store.revisions, local_clock, local_ids)
         import_case_document = ImportCaseDocumentWithMetadata(
             ImportCaseDocument(generic_store),
             open_case_document,
@@ -809,7 +815,7 @@ def build_local_api(
         review_delivery_snapshot=review_delivery_snapshot,
         render_delivery_package=render_delivery_package,
         attach_delivery_artifact=attach_delivery_artifact,
-        store_delivery_supporting_file=generic_store,
+        store_delivery_supporting_file=store_delivery_supporting_file,
         verify_delivery_package=verify_delivery_package,
         finalize_delivery_snapshot=finalize_delivery_snapshot,
         deliver_delivery_snapshot=deliver_delivery_snapshot,
