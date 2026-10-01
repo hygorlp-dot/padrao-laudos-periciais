@@ -831,6 +831,11 @@ def test_pericial_planning_bridge_allowlist_is_exact():
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning/successor", "GET") is None
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning/other", "POST") is None
     assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/pericial-planning", "DELETE") is None
+    for action in ("successor", "reuse"):
+        assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/inspection-session/{action}", "POST") == f"/v1/workspaces/{workspace_id}/inspection-session/{action}"
+        assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/inspection-session/{action}", "GET") is None
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/inspection-session/reuse-candidates", "GET") == f"/v1/workspaces/{workspace_id}/inspection-session/reuse-candidates"
+    assert _proxy_target(f"/app-api/v1/workspaces/{workspace_id}/inspection-session/reuse-candidates", "POST") is None
 
 
 def test_inspection_session_bridge_allowlist_is_exact():

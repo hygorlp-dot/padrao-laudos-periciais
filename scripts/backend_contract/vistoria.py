@@ -62,6 +62,26 @@ class InstrumentCondition(StrEnum):
     CALIBRATION_VALID = "CALIBRATION_VALID"
 
 
+class ReusedRecordKind(StrEnum):
+    OBSERVATION = "OBSERVATION"
+    MEASUREMENT = "MEASUREMENT"
+    PHOTO = "PHOTO"
+    STATEMENT = "STATEMENT"
+    ACCESS_OCCURRENCE = "ACCESS_OCCURRENCE"
+    LIMITATION = "LIMITATION"
+
+
+# Colecao da sessao e identidade de cada tipo de registro reaproveitavel.
+REUSABLE_RECORD_COLLECTIONS = {
+    ReusedRecordKind.OBSERVATION: ("observations", "observation_id"),
+    ReusedRecordKind.MEASUREMENT: ("measurements", "measurement_id"),
+    ReusedRecordKind.PHOTO: ("photos", "photo_id"),
+    ReusedRecordKind.STATEMENT: ("statements", "statement_id"),
+    ReusedRecordKind.ACCESS_OCCURRENCE: ("access_occurrences", "occurrence_id"),
+    ReusedRecordKind.LIMITATION: ("limitations", "limitation_id"),
+}
+
+
 class AccessOutcome(StrEnum):
     FULL_ACCESS = "FULL_ACCESS"
     PARTIAL_ACCESS = "PARTIAL_ACCESS"
@@ -430,6 +450,34 @@ class InspectionReview:
 
 
 @dataclass(frozen=True, slots=True)
+class InspectionReuseDecision:
+    """Decisao do perito de trazer um registro de campo de uma vistoria anterior.
+
+    O registro copiado guarda o conteudo original (horario de captura, bytes da
+    foto, texto); esta decisao guarda de onde ele veio e quem decidiu. O estado do
+    item, revisoes e constatacoes nunca vem junto: o item atual exige julgamento atual.
+    """
+
+    decision_id: str
+    source_session_id: str
+    source_session_revision: int
+    source_record_kind: ReusedRecordKind
+    source_record_id: str
+    target_record_id: str
+    target_item_id: str
+    decided_by: str
+    decided_at: str
+
+    def __post_init__(self):
+        required = ("decision_id", "source_session_id", "source_record_id", "target_record_id", "target_item_id", "decided_by")
+        if not all(_text(getattr(self, name)) for name in required) or type(self.source_record_kind) is not ReusedRecordKind:
+            raise ValueError("inspection reuse decision is invalid")
+        if type(self.source_session_revision) is not int or self.source_session_revision < 1:
+            raise ValueError("inspection reuse source revision is invalid")
+        _timestamp(self.decided_at)
+
+
+@dataclass(frozen=True, slots=True)
 class InspectionSession:
     schema_version: str
     session_id: str
@@ -463,6 +511,7 @@ class InspectionSession:
     upstream_stale: bool = False
     upstream_stale_reasons: tuple[str, ...] = ()
     visit_context: VisitContext | None = None
+    reuse_decisions: tuple[InspectionReuseDecision, ...] = ()
 
     def __post_init__(self):
         if self.visit_context is not None and type(self.visit_context) is not VisitContext:
@@ -556,6 +605,15 @@ class InspectionSession:
         limitation_owner = {item.limitation_id: item.inspection_item_id for item in self.limitations}
         if any(planning_by_item[limitation_owner[item.limitation_id]] != item.planning_item_id for item in self.missing_items):
             raise ValueError("missing inspection item limitation ownership is invalid")
+        if type(self.reuse_decisions) is not tuple or any(type(item) is not InspectionReuseDecision for item in self.reuse_decisions):
+            raise ValueError("inspection reuse decisions are invalid")
+        _texts(tuple(item.decision_id for item in self.reuse_decisions))
+        _texts(tuple(item.target_record_id for item in self.reuse_decisions))
+        for decision in self.reuse_decisions:
+            collection, identity = REUSABLE_RECORD_COLLECTIONS[decision.source_record_kind]
+            target = next((record for record in getattr(self, collection) if getattr(record, identity) == decision.target_record_id), None)
+            if decision.source_session_id == self.session_id or target is None or target.inspection_item_id != decision.target_item_id:
+                raise ValueError("inspection reuse decision does not bind a record of this session")
         counts = {state: sum(item.state is state for item in self.items) for state in ExecutionState}
         expected = (len(self.items), counts[ExecutionState.PENDING], counts[ExecutionState.COMPLETED], counts[ExecutionState.PARTIAL], counts[ExecutionState.NOT_EXECUTED], counts[ExecutionState.NOT_APPLICABLE], counts[ExecutionState.BLOCKED])
         actual = (self.coverage.total_items, self.coverage.pending_items, self.coverage.completed_items, self.coverage.partial_items, self.coverage.not_executed_items, self.coverage.not_applicable_items, self.coverage.blocked_items)
@@ -571,7 +629,7 @@ def _record(cls: type[T], value: object) -> T:
         raise ValueError(f"invalid {cls.__name__} payload")
     converted = dict(value)
     annotations = cls.__annotations__
-    enum_fields = [("observation_type", ObservationType), ("state", ExecutionState), ("kind", LimitationKind), ("capture_timestamp_reliability", TimestampReliability), ("outcome", AccessOutcome)]
+    enum_fields = [("source_record_kind", ReusedRecordKind), ("observation_type", ObservationType), ("state", ExecutionState), ("kind", LimitationKind), ("capture_timestamp_reliability", TimestampReliability), ("outcome", AccessOutcome)]
     if cls is InstrumentStatus:
         enum_fields.append(("status", InstrumentCondition))
     for name, enum_cls in enum_fields:
@@ -595,12 +653,19 @@ _COLLECTION_TYPES = {
 
 
 def inspection_session_from_mapping(value: object) -> InspectionSession:
-    required = {field.name for field in fields(InspectionSession)} - {"visit_context"}
-    if type(value) is not dict or set(value) - {"visit_context"} != required:
+    optional = {"visit_context", "reuse_decisions"}
+    required = {field.name for field in fields(InspectionSession)} - optional
+    if type(value) is not dict or set(value) - optional != required:
         raise ValueError("invalid Inspection Session payload")
     converted: dict[str, Any] = dict(value)
     if "visit_context" in converted:
         converted["visit_context"] = VisitContext.from_mapping(converted["visit_context"])
+    if "reuse_decisions" in converted:
+        # Ausente e vazio sao a mesma coisa; gravar a lista vazia mudaria o digest
+        # de sessoes que nunca reaproveitaram nada.
+        if type(converted["reuse_decisions"]) is not list or not converted["reuse_decisions"]:
+            raise ValueError("invalid reuse_decisions payload")
+        converted["reuse_decisions"] = tuple(_record(InspectionReuseDecision, item) for item in converted["reuse_decisions"])
     converted["plan_snapshot"] = _record(InspectionPlanSnapshot, converted["plan_snapshot"])
     converted["coverage"] = _record(InspectionCoverage, converted["coverage"])
     for name, cls in _COLLECTION_TYPES.items():
@@ -620,4 +685,6 @@ def inspection_session_to_mapping(value: InspectionSession) -> dict[str, Any]:
     result = json.loads(json.dumps(asdict(value), ensure_ascii=False))
     if value.visit_context is None:
         result.pop("visit_context")
+    if not value.reuse_decisions:
+        result.pop("reuse_decisions")
     return result

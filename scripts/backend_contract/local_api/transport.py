@@ -145,6 +145,9 @@ class LocalApiServices:
     get_inspection_session: object | None = None
     start_inspection_session: object | None = None
     confirm_inspection_visit: object | None = None
+    start_successor_inspection_session: object | None = None
+    inspection_reuse_candidates: object | None = None
+    reuse_inspection_records: object | None = None
     get_case_intake: object | None = None
     accept_case_questions: object | None = None
     confirm_document_inventory: object | None = None
@@ -1410,6 +1413,41 @@ class LocalApi:
                     200,
                     {"revision": record.revision, "updated_at": record.created_at, "snapshot": pericial_planning_to_mapping(snapshot)},
                 )
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("inspection-session", "successor"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.start_successor_inspection_session is None:
+                    return _error(503, "INSPECTION_SESSION_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_revision", "responsible_professional", "location_context", "participant_references"} or type(dto["participant_references"]) is not list:
+                    raise ValueError("Inspection Session successor request is invalid")
+                record, snapshot = self._services.start_successor_inspection_session.execute(
+                    workspace_id, expected_revision=dto["expected_revision"],
+                    responsible_professional=dto["responsible_professional"], location_context=dto["location_context"],
+                    participant_references=tuple(dto["participant_references"]),
+                )
+                return _json_response(201, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_validated_mapping(snapshot)})
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("inspection-session", "reuse-candidates"):
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.inspection_reuse_candidates is None:
+                    return _error(503, "INSPECTION_SESSION_UNAVAILABLE")
+                return _json_response(200, self._services.inspection_reuse_candidates.execute(self._workspace_id(raw_segments[2])))
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("inspection-session", "reuse"):
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.reuse_inspection_records is None:
+                    return _error(503, "INSPECTION_SESSION_UNAVAILABLE")
+                workspace_id = self._workspace_id(raw_segments[2])
+                dto = self._request_dto(request_headers, body)
+                if set(dto) != {"expected_revision", "selections"}:
+                    raise ValueError("Inspection reuse request is invalid")
+                record, snapshot = self._services.reuse_inspection_records.execute(workspace_id, expected_revision=dto["expected_revision"], selections=dto["selections"])
+                return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": inspection_session_to_validated_mapping(snapshot)})
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("inspection-session", "visit-context"):
                 if normalized_method != "POST":
