@@ -27,7 +27,10 @@ candidate cost.
 - Above it the status is `ATTRIBUTION_REQUIRED` and the mandatory workflow step
   "Timing attribution BASE vs HEAD" measures the exact BASE commit (PR base SHA, or
   `github.event.before` on `main`) on the same runner and blocks only when
-  `HEAD > BASE × 1.10` (material delta attributable to the candidate).
+  `HEAD − BASE > max(60 s, BASE × 0.10)`, the materiality rule authorized by the human
+  decision on #109 (material delta attributable to the candidate). The absolute 60-second
+  floor absorbs single-sample runner variance: on `main` `04dfb71` the same tree measured
+  151.0 s on the PR and 172.2 s on push, so a 10%-only threshold produced a false red.
 - Missing, duplicated, non-finite, negative or unknown evidence, an inexact BASE SHA,
   or a failed BASE checkout fails closed.
 - The full paired `BASE → HEAD → HEAD → BASE` protocol (#109) is reserved for the final

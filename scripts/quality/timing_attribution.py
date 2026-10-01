@@ -29,9 +29,11 @@ from pathlib import Path
 
 from .metrics import TIMING_STATUS_ATTRIBUTION_REQUIRED
 
-# Delta relativo a partir do qual o aumento de duracao e material e atribuido ao
-# candidato (mesmo criterio de 10% do desenho pareado da #109).
+# Regra autorizada pela decisao humana na #109: o delta do candidato e material
+# quando excede max(60 s, BASE * 0.10). O piso absoluto absorve a variancia de
+# runner de uma amostra unica, que sozinha passa de 10% no mesmo tree.
 MATERIAL_FRACTION = 0.10
+MATERIAL_MIN_SECONDS = 60.0
 EXIT_WITHIN_REFERENCE = 0
 EXIT_INVALID = 1
 EXIT_ATTRIBUTION_REQUIRED = 3
@@ -123,13 +125,15 @@ def decide(head: dict[str, object], base: dict[str, object]) -> dict[str, object
     base_seconds = float(base["observed"])
     if base_seconds <= 0:
         raise TimingEvidenceError("BASE timing evidence is empty")
-    limit = base_seconds * (1 + MATERIAL_FRACTION)
+    threshold = max(MATERIAL_MIN_SECONDS, base_seconds * MATERIAL_FRACTION)
+    delta = head_seconds - base_seconds
     return {
         "head_seconds": head_seconds,
         "base_seconds": base_seconds,
-        "delta_seconds": round(head_seconds - base_seconds, 3),
-        "material_limit_seconds": round(limit, 3),
-        "candidate_regression": head_seconds > limit,
+        "delta_seconds": round(delta, 3),
+        "material_threshold_seconds": round(threshold, 3),
+        "material_limit_seconds": round(base_seconds + threshold, 3),
+        "candidate_regression": delta > threshold,
     }
 
 
@@ -169,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"TIMING_ATTRIBUTION = INVALID ({exc})")
         return EXIT_INVALID
     print(f"BASE_SHA = {args.base_sha}")
-    for key in ("head_seconds", "base_seconds", "delta_seconds", "material_limit_seconds"):
+    for key in ("head_seconds", "base_seconds", "delta_seconds", "material_threshold_seconds", "material_limit_seconds"):
         print(f"{key.upper()} = {result[key]}")
     if result["candidate_regression"]:
         print("TIMING_ATTRIBUTION = CANDIDATE_REGRESSION")

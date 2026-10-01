@@ -56,6 +56,11 @@ def test_over_reference_requires_base(tmp_path):
     (1374.9, 1250.0, attribution.EXIT_WITHIN_REFERENCE),  # abaixo de 10%
     (1375.1, 1250.0, attribution.EXIT_INVALID),           # regressao material do candidato
     (1300.0, 900.0, attribution.EXIT_INVALID),
+    # Decisao humana na #109: material_threshold = max(60 s, BASE * 0.10).
+    (1340.0, 1250.0, attribution.EXIT_WITHIN_REFERENCE),  # 90 s < 10% da BASE (125 s)
+    (172.23367269999994, 151.3636335000001, attribution.EXIT_WITHIN_REFERENCE),  # main 04dfb71: +20,9 s < 60 s
+    (210.0, 150.0, attribution.EXIT_WITHIN_REFERENCE),    # delta = 60 s exatos nao excede
+    (210.1, 150.0, attribution.EXIT_INVALID),             # delta > 60 s com BASE curta
 ])
 def test_only_material_candidate_delta_blocks(tmp_path, capsys, head, base, expected):
     base_log = _base(tmp_path / "b", base, "FAIL", failing=("quality non-regression",), findings=(TIMING_FINDING,))
