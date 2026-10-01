@@ -37,6 +37,7 @@ from ..application.artifact_ownership import (
     PORTABLE_PRODUCT_ARTIFACT_KINDS,
     USER_DEFINED_ARTIFACT_KINDS,
 )
+from ..application.content_roles import validate_private_content_role_payload
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..application.construction_defect_analysis import (
@@ -427,6 +428,7 @@ _INTERNAL_ARTIFACT_VALIDATORS = {
     "PROCESS_METADATA_CONFIRMATION": _validate_confirmation,
     "PROCESS_METADATA_SOURCE_CONFIRMATION": _validate_source_confirmation,
     "OCR_PAGE_CACHE_V1": _validate_ocr_cache,
+    "PRIVATE_CONTENT_ROLE_V1": validate_private_content_role_payload,
 }
 
 
@@ -469,6 +471,8 @@ def _expected_internal_artifact_id(kind: str, payload: object) -> str | None:
         # metadados. Sem isso um inventario poderia ser restaurado sob a
         # identidade de outra fonte.
         return payload.get("storage_content_id") if type(payload.get("storage_content_id")) is str else None
+    if kind == "PRIVATE_CONTENT_ROLE_V1":
+        return payload.get("content_id") if type(payload.get("content_id")) is str else None
     if kind == "OCR_PAGE_CACHE_V1":
         names = ("document_sha256", "page_number", "engine", "engine_version", "model_version", "config_version")
         key = tuple(payload.get(name) for name in names)
@@ -959,6 +963,12 @@ class VerifyWorkspaceBackup:
                 inventory = validate_pje_intake_payload(thaw_payload(record.payload))
                 if private_authority.get(inventory["storage_content_id"]) != inventory["source_sha256"]:
                     raise RepositoryIntegrityError("backup PJe source authority is incomplete")
+            elif record.artifact_kind == "PRIVATE_CONTENT_ROLE_V1":
+                # O papel tira o conteudo do inventario de fontes do caso. Ele so
+                # pode ser restaurado junto com os bytes exatos que o receberam.
+                role = validate_private_content_role_payload(thaw_payload(record.payload))
+                if role["workspace_id"] != str(workspace_id) or private_authority.get(role["content_id"]) != role["checksum_sha256"]:
+                    raise RepositoryIntegrityError("backup private content role authority is incomplete")
             elif record.artifact_kind == "INSPECTION_SESSION_V1":
                 inspection = inspection_session_from_mapping(thaw_payload(record.payload))
                 media = (*inspection.photos, *inspection.videos, *inspection.sketches)
@@ -990,6 +1000,20 @@ class VerifyWorkspaceBackup:
                             validate_delivery_artifact(content, artifact.format.value)
                     except (KeyError, TypeError, ValueError) as exc:
                         raise RepositoryIntegrityError("backup delivery artifact is invalid") from exc
+        # Um papel tira o conteudo do inventario de fontes do caso. Se o pacote cita
+        # esse mesmo conteudo como fonte (Analise do Caso, inventario PJe, extracao de
+        # metadados), as duas afirmacoes sao contraditorias e restaurar o pacote
+        # congelaria a Analise do Caso. Nenhum fluxo do produto produz esse estado.
+        role_ids = {record.artifact_id for record in revisions if record.artifact_kind == "PRIVATE_CONTENT_ROLE_V1"}
+        if role_ids:
+            source_ids = set()
+            for record in revisions:
+                if record.artifact_kind == "CASE_ANALYSIS_SNAPSHOT_V1":
+                    source_ids.update(item.storage_content_id for item in case_analysis_from_mapping(thaw_payload(record.payload)).documents)
+                elif record.artifact_kind in {"PJE_INTAKE_V1", "PROCESS_METADATA_EXTRACTION"}:
+                    source_ids.add(record.artifact_id)
+            if role_ids & source_ids:
+                raise RepositoryIntegrityError("backup private content role contradicts case source authority")
         return value
 
 

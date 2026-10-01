@@ -39,6 +39,7 @@ APPLICATION_ARTIFACT_OWNERSHIP = {
         ArtifactOwnership("PROCESS_METADATA_CONFIRMATION", "Process Metadata Application Service", False),
         ArtifactOwnership("PROCESS_METADATA_SOURCE_CONFIRMATION", "Process Metadata Application Service", False),
         ArtifactOwnership("OCR_PAGE_CACHE_V1", "OCR Cache Application Service", False),
+        ArtifactOwnership("PRIVATE_CONTENT_ROLE_V1", "Private Content Role Application Service", False),
     )
 }
 
