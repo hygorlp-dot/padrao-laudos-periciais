@@ -1004,7 +1004,8 @@ def test_adapter_admits_only_effective_claims_from_available_sources(state):
 
 
 
-def test_an_approved_pat_loses_report_authority_when_its_claim_source_is_excluded_and_regains_it_on_re_enable():
+@pytest.mark.parametrize("linked", ["alegacao_e_quesito", "so_quesito"])
+def test_an_approved_pat_loses_report_authority_when_its_claim_source_is_excluded_and_regains_it_on_re_enable(linked):
     """Auditoria da #251, rodada 3 (SA251R3-03): a exclusao so grava o inventario PJe; o
     registro persistido da Analise do Caso nao muda, entao o vinculo por checksum da
     Analise de Vicios nao a percebia -- um PAT aprovado ANTES da exclusao seguia
@@ -1019,7 +1020,12 @@ def test_an_approved_pat_loses_report_authority_when_its_claim_source_is_exclude
     from scripts.backend_contract.application.report_foundation import _claim_sources
 
     services = _application_services()
-    record, _proposal = services.start.execute(WORKSPACE_ID, observation_contexts=(_application_context(),))
+    from dataclasses import replace as _replace
+
+    # "so_quesito": o caminho do quesito isolado (sem alegacao vinculada) tambem precisa
+    # derrubar a autoridade do PAT -- sem ele, retirar os quesitos da reconciliacao passava.
+    context = _application_context() if linked == "alegacao_e_quesito" else _replace(_application_context(), claim_ids=())
+    record, _proposal = services.start.execute(WORKSPACE_ID, observation_contexts=(context,))
     _r, reviewed = services.review.execute(
         WORKSPACE_ID, pat_id="PAT-001", action="APPROVE", professional_id="PROFESSIONAL-001",
         reason="Revisao profissional do PAT sintetico.", expected_revision=record.revision,

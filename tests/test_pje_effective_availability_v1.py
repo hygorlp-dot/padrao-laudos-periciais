@@ -619,38 +619,44 @@ def test_review_command_response_shows_the_effective_state(tmp_path):
 
 
 def test_planning_save_guard_refuses_on_its_own():
-    """A guarda do Save do Planejamento, isolada da do Start (o revisor mostrou que so
-    remover as duas deixava o teste vermelho). O plano salvo nem chega a ser validado:
-    a recusa vem antes, com a mensagem propria."""
+    """A guarda do Save do Planejamento, isolada da do Start. O plano inicial e gerado pelo
+    proprio Start sobre a analise DISPONIVEL (proposta pura, como o produto a monta) e depois
+    salvo contra a analise com a peca excluida: so a guarda do Save pode recusar, e recusa
+    antes da validacao do vinculo, com a mensagem propria."""
+    import uuid
     from contextlib import nullcontext
 
     from scripts.backend_contract.application.models import WorkspaceId
-    from scripts.backend_contract.application.pericial_planning import SavePericialPlanning
-    from tests.test_pericial_planning_v1 import FIXTURE_PATH
-    from scripts.backend_contract.pericial_planning import pericial_planning_from_mapping
+    from scripts.backend_contract.application.pericial_planning import SavePericialPlanning, StartPericialPlanning
 
     case, _snapshot, _inspection = _fixture_case_and_findings()
-    plan = pericial_planning_from_mapping(json.loads(FIXTURE_PATH.read_text(encoding="utf-8")))
+    workspace = WorkspaceId.parse(case.workspace_id)
+    ids = SimpleNamespace(new_uuid=uuid.uuid4)
+    captured = []
+    StartPericialPlanning(
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3), case)),
+        SimpleNamespace(execute=lambda _w, snapshot, *_a, **_k: captured.append(snapshot) or SimpleNamespace(revision=1)),
+        ids,
+    ).execute(workspace, title="Plano sintetico")
+    (proposal,) = captured
+
     excluded = case.project_effective_availability({"DOC-001": False})
     service = SavePericialPlanning(
         SimpleNamespace(append_if_latest=lambda **_k: pytest.fail("nao pode gravar")),
         SimpleNamespace(execute=lambda *_a: pytest.fail("nao pode chegar a revisao")),
         SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3), excluded)),
-        nullcontext, SimpleNamespace(now=lambda: None), SimpleNamespace(new_uuid=lambda: None),
+        nullcontext, SimpleNamespace(now=lambda: None), ids,
     )
     with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
-        service.execute(WorkspaceId.parse(plan.workspace_id), plan, 1)
-
-
+        service.execute(workspace, proposal, None)
 
 def test_a_gap_extracted_from_a_document_later_excluded_blocks_planning_like_any_derived_item(tmp_path):
     """Revisao da #251 (F3): a isencao de lacunas por TIPO reabria o P0 -- uma lacuna
     criada enquanto a peca estava disponivel foi extraida do conteudo dela; excluida a
     peca, a lacuna ainda guiava o plano.
 
-    So a lacuna que ja nasceu sobre documento ausente fica isenta (coberta pela fixture
-    dos testes de Planejamento). Esta e a outra metade: lacuna derivada bloqueia, e
-    rejeita-la libera o plano.
+    A regra e uniforme: nenhuma lacuna fica isenta (ver derived_from_unavailable). Lacuna
+    derivada de peca excluida bloqueia o plano, e rejeita-la o libera.
     """
     pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-lacuna")
     runtime = _runtime(tmp_path)
@@ -701,3 +707,99 @@ def test_a_gap_created_in_a_re_enable_window_blocks_planning_after_re_exclusion(
         assert status == 400, f"plano montado sobre lacuna da peca excluida: {status} {plan}"
     finally:
         runtime.close()
+
+
+def test_a_legacy_plan_built_on_an_excluded_source_keeps_accepting_decisions(tmp_path, monkeypatch):
+    """Auditoria da #251, rodada 4 (SA251R4-01): um plano vindo da main, montado sobre uma
+    lacuna que citava a propria peca ausente, passava a recusar TODA decisao -- inclusive
+    sobre itens sem relacao com a peca. Na main a mesma decisao respondia 200.
+
+    A guarda do Save agora julga so o que o snapshot PASSA a referenciar. O plano legado e
+    simulado desligando exatamente as duas guardas que a main nao tinha; dai em diante, o
+    codigo atual puro. (Refazer um plano que ficou stale e o F7, #252, anterior a esta PR.)
+    """
+    from scripts.backend_contract.application import case_analysis as app_case
+    from scripts.backend_contract.application import pericial_planning as app_plan
+
+    pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-legado")
+    runtime = _runtime(tmp_path)
+    try:
+        workspace_id, material = _setup(runtime, pdf)
+        _set_available(runtime, workspace_id, material["content_id"], "DOC-PJE-002", False)
+        snapshot = _effective(runtime, workspace_id)
+        excluded = _find(snapshot, "DOC-PJE-002")["document_id"]
+        assert _add_item(runtime, workspace_id, "PERICIAL_QUESTION", "Quesito sintetico?", _find(snapshot, "DOC-PJE-001")["document_id"])[0] == 200
+
+        real = app_case.GetCaseAnalysis.execute_for_command
+        with monkeypatch.context() as legacy:  # era main: sem as duas guardas
+            legacy.setattr(app_case.GetCaseAnalysis, "execute_for_command", lambda self, w: (lambda r: (r[0], r[1], {k: True for k in r[2]}))(real(self, w)))
+            legacy.setattr(app_plan, "_refuse_new_references_to_unavailable_documents", lambda *a, **k: None)
+            assert _add_item(runtime, workspace_id, "EVIDENCE_GAP", "Anexo tecnico indicado nao esta disponivel.", excluded)[0] == 200
+            assert _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning", value={"title": "Plano legado"})[0] == 201
+
+        # Codigo atual: o plano legado segue decidivel.
+        status, plan = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pericial-planning")
+        assert status == 200 and plan["snapshot"]["upstream_stale"] is False
+        target = next(item for collection in ("inspection_requirements", "issues", "gaps", "risks", "required_documents") for item in plan["snapshot"][collection])
+        status, decided = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/pericial-planning/decisions", value={
+            "expected_revision": plan["revision"], "target_item_id": target["item_id"], "action": "APPROVE",
+            "reviewer": "PROFESSIONAL-001", "reason": "Revisao.", "decided_value": None,
+        })
+        assert status == 200, f"plano legado travado: {status} {decided}"
+    finally:
+        runtime.close()
+
+
+def test_planning_save_update_refuses_only_newly_introduced_references():
+    """Numa atualizacao, o Save julga so as referencias NOVAS: o que o predecessor ja
+    referenciava passa (plano legado segue decidivel), o que entra agora e recusado.
+
+    O plano e revinculado ao digest da analise COM a peca excluida para que a validacao
+    do vinculo passe -- assim so a guarda de referencias pode responder pela recusa.
+    """
+    import uuid
+    from contextlib import nullcontext
+    from dataclasses import replace
+
+    from scripts.backend_contract.application.models import ArtifactRevision, WorkspaceId
+    from scripts.backend_contract.application.pericial_planning import SavePericialPlanning, StartPericialPlanning
+    from scripts.backend_contract.pericial_planning import case_analysis_digest, pericial_planning_to_mapping
+
+    case, _snapshot, _inspection = _fixture_case_and_findings()
+    workspace = WorkspaceId.parse(case.workspace_id)
+    ids = SimpleNamespace(new_uuid=uuid.uuid4)
+    captured = []
+    StartPericialPlanning(
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3), case)),
+        SimpleNamespace(execute=lambda _w, snapshot, *_a, **_k: captured.append(snapshot) or SimpleNamespace(revision=1)),
+        ids,
+    ).execute(workspace, title="Plano sintetico")
+    excluded = case.project_effective_availability({"DOC-001": False})
+    plan = replace(captured[0], plan=replace(captured[0].plan, case_analysis_digest=case_analysis_digest(excluded)))
+    derived = {item.item_id for item in excluded.material_items if excluded.derived_from_unavailable(item)}
+    collection, index = next(
+        (name, position) for name in ("issues", "inspection_requirements", "required_documents", "risks", "gaps")
+        for position, item in enumerate(getattr(plan, name))
+        if set(item.derivation.case_analysis_item_ids) & derived
+    )
+    # Predecessor identico, exceto que aquele item citava um item NAO derivado (OBJECT-001,
+    # da DOC-002): as contagens do plano ficam intactas e so a referencia muda.
+    items = list(getattr(plan, collection))
+    items[index] = replace(items[index], derivation=replace(items[index].derivation, case_analysis_item_ids=("OBJECT-001",)))
+    assert "OBJECT-001" not in derived
+    without = replace(plan, **{collection: tuple(items)})
+
+    def service(previous):
+        record = ArtifactRevision(workspace, "PERICIAL_PLANNING_V1", "PERICIAL-PLANNING", str(uuid.uuid4()), 1,
+                                 "2026-09-30T12:00:00+00:00", "0" * 64, pericial_planning_to_mapping(previous))
+        return SavePericialPlanning(
+            SimpleNamespace(append_if_latest=lambda **_k: SimpleNamespace(revision=2)),
+            SimpleNamespace(execute=lambda *_a: record),
+            SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=3, artifact_kind="CASE_ANALYSIS_SNAPSHOT_V1",
+                                                             artifact_id="CASE-ANALYSIS", checksum_sha256="c" * 64), excluded)),
+            nullcontext, SimpleNamespace(now=lambda: __import__("datetime").datetime(2026, 9, 30, 12, tzinfo=__import__("datetime").UTC)), ids,
+        )
+
+    service(plan).execute(workspace, plan, 1)  # nada novo: passa, mesmo com derivados ja referenciados
+    with pytest.raises(ValueError, match="cannot build on items derived from a document excluded"):
+        service(without).execute(workspace, plan, 1)  # o item derivado entra agora: recusado
