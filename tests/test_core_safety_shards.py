@@ -322,7 +322,47 @@ def test_shard_running_other_files_cannot_hide_its_own(valid):
     _edit(evidence / "shard-beta/shard-evidence.json", swap)
     summary = _assert_fails(root, evidence, "SHARD_RAN_FOREIGN_FILES:beta")
     assert any(error.startswith("SHARD_FILES_WITHOUT_NODES:beta") for error in summary["errors"])
-    assert any(error.startswith("NODE_INVENTORY_OVERLAP") for error in summary["errors"])
+    assert any(error.startswith("NODE_INVENTORY_MISMATCH") for error in summary["errors"])
+
+
+def test_two_shards_reporting_the_same_node_is_an_overlap(valid):
+    root, evidence = valid
+
+    def steal(payload):
+        payload["nodes"] = _node_report(NODES["tests/test_b.py"] + NODES["tests/test_c.py"]
+                                        + NODES["tests/test_d.py"], collect_only=False)
+    _edit(evidence / "shard-beta/shard-evidence.json", steal)
+    _assert_fails(root, evidence, "NODE_INVENTORY_OVERLAP")
+
+
+def test_clock_dependent_node_id_in_gate_partition_is_proved_by_file_and_count(valid):
+    # Caso real (CI de #261): test_delivery_foundation_v1 parametriza com bytes
+    # de zip que embutem o timestamp DOS do import; o node é o mesmo, o ID
+    # muda entre a coleta integral e a coleta do gate (processos distintos).
+    root, evidence = valid
+    _edit(evidence / "inventory/inventory-evidence.json",
+          lambda p: p["gate"].update(collected=sorted(
+              node.replace("test_two", "test_two[\\xb1A]") for node in p["gate"]["collected"])))
+    summary = _aggregate(root, evidence)
+    assert summary["result"] == "PASS", summary["errors"]
+
+
+def test_gate_partition_losing_a_node_still_fails_by_count(valid):
+    root, evidence = valid
+    _edit(evidence / "inventory/inventory-evidence.json",
+          lambda p: p["gate"]["collected"].remove("tests/test_a.py::test_two"))
+    _assert_fails(root, evidence, "NODE_INVENTORY_MISMATCH")
+
+
+def test_clock_dependent_node_id_in_a_shard_fails_closed(valid):
+    # Em shard a igualdade é por ID exato: um ID instável lá não é aceito.
+    root, evidence = valid
+
+    def mutate(payload):
+        nodes = [n.replace("test_two[x]", "test_two[y]") for n in payload["nodes"]["collected"]]
+        payload["nodes"] = _node_report(nodes, collect_only=False)
+    _edit(evidence / "shard-beta/shard-evidence.json", mutate)
+    _assert_fails(root, evidence, "NODE_INVENTORY_MISMATCH")
 
 
 def test_altered_reference_inventory_fails_closed(valid):

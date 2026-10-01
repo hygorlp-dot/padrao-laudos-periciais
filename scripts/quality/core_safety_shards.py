@@ -453,19 +453,51 @@ def aggregate(evidence_dir: Path, *, sha: str, needs: dict, root: Path = ROOT,
         except ShardError as exc:
             fail(f"SHARD_EVIDENCE_INVALID:{shard_id}:{exc}")
 
-    # 6. inventário exato: gate ∪ shards == regression integral, partições disjuntas
-    union: set[str] = set(gate_nodes)
+    # 6. inventário: a coleta integral é a referência exata.
+    #    Shards: node IDs executados == referência restrita aos seus arquivos.
+    #    Gate: mesmo conjunto de arquivos e mesma contagem exata de nodes por
+    #    arquivo. (IDs do gate são coletados em OUTRO processo; um teste cujo
+    #    ID parametrizado embute bytes dependentes de relógio — ex.: zip com
+    #    timestamp DOS — muda de ID entre processos sem mudar de node. Por isso
+    #    o gate é provado por arquivo+contagem; shards, por ID exato.)
+    def by_file(nodes: set[str]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for node in nodes:
+            path = node.split("::", 1)[0]
+            counts[path] = counts.get(path, 0) + 1
+        return counts
+
+    full_by_file = by_file(full_nodes)
+    gate_by_file = by_file(gate_nodes)
+    shard_file_set = {path for shard_id in shard_ids for path in shard_files(manifest, shard_id)} if shard_ids else set()
+    expected_gate = {path: count for path, count in full_by_file.items() if path not in shard_file_set}
+    mismatches: list[str] = []
+    if gate_by_file != expected_gate:
+        diff = sorted(set(gate_by_file.items()) ^ set(expected_gate.items()))
+        mismatches.append(f"gate:{diff[:5]}")
+    covered = sum(gate_by_file.values())
     overlaps: list[str] = []
-    for shard_id, nodes in executed.items():
-        overlaps.extend(sorted(union & nodes)[:3])
-        union |= nodes
+    seen: set[str] = set()
+    for shard_id in shard_ids:
+        nodes = executed.get(shard_id)
+        if nodes is None:
+            continue
+        overlaps.extend(sorted(seen & nodes)[:3])
+        seen |= nodes
+        expected = {node for node in full_nodes if node.split("::", 1)[0] in set(shard_files(manifest, shard_id))}
+        if nodes != expected:
+            mismatches.append(f"{shard_id}:missing={sorted(expected - nodes)[:3]}:extra={sorted(nodes - expected)[:3]}")
+        covered += len(nodes)
     if overlaps:
         fail(f"NODE_INVENTORY_OVERLAP:{overlaps[:5]}")
-    inventory_ok = bool(full_nodes) and union == full_nodes and not overlaps \
+    unassigned = sorted(set(full_by_file) - set(expected_gate) - shard_file_set)
+    if unassigned:
+        mismatches.append(f"unassigned:{unassigned[:5]}")
+    inventory_ok = bool(full_nodes) and not mismatches and not overlaps and covered == len(full_nodes) \
         and set(executed) == set(shard_ids) and bool(shard_ids)
     if not inventory_ok:
-        fail(f"NODE_INVENTORY_MISMATCH:missing={sorted(full_nodes - union)[:5]}:extra={sorted(union - full_nodes)[:5]}")
-    rows.append(("node inventory", inventory_ok, f"{len(union)}/{len(full_nodes)} nodes"))
+        fail(f"NODE_INVENTORY_MISMATCH:{mismatches[:5]}:covered={covered}:expected={len(full_nodes)}")
+    rows.append(("node inventory", inventory_ok, f"{covered}/{len(full_nodes)} nodes"))
 
     # 7. coverage: shards ⊆ gate (equivalência ao regression integral) e não-regressão do combinado
     coverage_ok = False

@@ -93,7 +93,10 @@ independentes do mesmo SHA, sem alterar `scripts/quality/verify_core.py`
 O agregador falha fechado quando qualquer job não termina em `success`
 (inclusive `skipped`/`cancelled`), quando falta ou sobra shard, quando a
 evidência tem SHA, manifest ou schema divergentes, quando um node falha ou não
-executa, quando `gate ∪ shards ≠ regression integral` ou há sobreposição,
+executa, quando `gate ∪ shards ≠ regression integral` ou há sobreposição
+(shards: node IDs exatos contra a coleta integral; gate: mesmo conjunto de
+arquivos e contagem exata por arquivo, porque há IDs parametrizados que embutem
+bytes dependentes de relógio e mudam entre processos sem mudar o node),
 quando o coverage de um shard não está contido no do gate
 (`PARTITION_COVERAGE_DRIFT`) ou quando o coverage combinado regride contra
 `config/quality-baseline.json`. Ele reconstrói a lista fechada de 16 checks do
