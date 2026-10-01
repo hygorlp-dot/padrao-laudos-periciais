@@ -1,15 +1,32 @@
 {
   "schema_version": "1.0.0",
-  "generated_from": "POST_MAIN_LONGITUDINAL_PRODUCT_INTEGRITY_ORACLE_V1",
-  "current_main_sha": "75a9522dfcf80e75e65af9a1462d04daffd87047",
+  "generated_from": "POST_MAIN_LONGITUDINAL_PRODUCT_INTEGRITY_ORACLE_V1 + V7_FINAL_RC_ORACLE_V1",
+  "current_main_sha": "08263c5566e96a2cc3f4327d351906c314d5415b",
   "roadmap_v6_item_2": "COMPLETE",
-  "human_rc_ready": false,
+  "roadmap_v7": {
+    "tracking_issue": 256,
+    "V7-1_visit_facts_and_questions_intake": "COMPLETE",
+    "V7-2_F8_delivery_support_role": "COMPLETE",
+    "V7-3_F7_explicit_succession": "COMPLETE",
+    "V7-4_hybrid_timing_attribution": "COMPLETE",
+    "V7-5_docs_and_governance_reconciliation": "COMPLETE",
+    "V7-6_final_synthetic_oracle": "COMPLETE"
+  },
+  "human_rc_ready": true,
+  "human_rc_accepted": false,
+  "real_case_executed": false,
+  "packaging": "PACKAGING_GAP_NO_INSTALLER",
   "private_egress": false,
-  "timing_debt": {
-    "status": "NONBLOCKING_ASSURANCE_DEBT",
-    "threshold_seconds": 60,
-    "observed_seconds": 345.693,
-    "tracked_issue": 192
+  "timing_policy": {
+    "status": "HYBRID_BASE_HEAD_ATTRIBUTION_V1",
+    "human_decision": "2-III",
+    "reference_seconds": 60,
+    "material_threshold": "max(60 s, BASE * 0.10)",
+    "runtime_cost_issue": 259
+  },
+  "repository_visibility": {
+    "status": "HUMAN_DECISION_PENDING",
+    "blocks_synthetic_human_rc": false
   },
   "stages": [
     {"stage": 0, "name": "CORE_FOUNDATION", "status": "COMPLETE"},

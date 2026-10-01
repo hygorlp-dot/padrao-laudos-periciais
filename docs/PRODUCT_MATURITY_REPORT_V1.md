@@ -6,10 +6,26 @@ truth; it is not authorization to begin a later stage.
 
 ## Current-effective result
 
-- Protected main SHA: `75a9522dfcf80e75e65af9a1462d04daffd87047` (PR #203, Issue #202).
-- PR #196 longitudinal oracle is merged and has an independent post-main proof: `11 passed` using synthetic data only.
-  The final report-only/assurance SHA is recorded by the protected CI/review
-  package after stable freeze; no moving branch name substitutes for either.
+- Protected main SHA (evidence base): `08263c5566e96a2cc3f4327d351906c314d5415b`. The frozen
+  `FINAL_RC_CANDIDATE_SHA` is the merge of the V7-5/V7-6 reconciliation and is
+  recorded in Issues #256 and #238 (a commit cannot carry its own SHA).
+- Roadmap V7 (#256), pre-RC closure:
+  - V7-1 visit facts and quesitos intake (#255);
+  - V7-2 F8 — a delivery-support PDF never enters the case source inventory (#253, PR #257);
+  - V7-3 F7 — explicit, empty successors for a stale Planning (PR #258), Inspection
+    with professional, record-by-record reuse by lineage (PR #260), Technical Findings
+    and Construction Defect Analysis (PR #262); predecessors stay immutable;
+  - V7-4 hybrid timing attribution (decision `2-III`): the semantic gate blocks; above
+    the unchanged 60-second reference the same runner measures BASE and only a
+    candidate delta above `max(60 s, BASE × 0.10)` blocks, identically on pull requests
+    and `main` (sharded core-safety, #259 and #261);
+  - V7-5 this reconciliation;
+  - V7-6 `tests/test_v7_final_rc_oracle_v1.py`: the product as a real OS process,
+    killed and restarted on the same storage, covering F8, F7, PJe exclusion and
+    re-enable, workspace isolation, backup verify and, on the Windows runner,
+    staging → explicit promote → reopen in a new process.
+- The longitudinal oracle (`tests/test_product_integration_oracle_v1.py`) continues to
+  prove the full happy path on the same SHA.
 - Stages 0–9, 11 and 12 have implemented foundations covered by first-party
   boundary tests.
 - Stage 8 delivers the authoritative bound Word artifact and a derived PDF
@@ -17,9 +33,15 @@ truth; it is not authorization to begin a later stage.
   accepted only after structural and visual fidelity checks and bound by
   SHA-256 (#202, #203). Word stays authoritative; any refusal leaves the Word
   and no PDF.
-- Roadmap V6 Item 2, full product longitudinal reachability, is complete.
-- Stage 10 is `IMPLEMENTED_PROPOSAL_ONLY`; it is not autonomous authority and does not make Human RC ready.
-- `HUMAN_RC_READY = FALSE` and `PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE` because Stage 10 is proposal-only and human acceptance (Human RC) remains outstanding.
+- Stage 10 is `IMPLEMENTED_PROPOSAL_ONLY`; it is not autonomous authority.
+- `HUMAN_RC_READY = TRUE`: every automated pre-RC step is closed. Human acceptance
+  (`HUMAN_RC_WINDOWS_V2`, #238) has not been executed; `HUMAN_RC_ACCEPTED = FALSE`,
+  no real case has been run and there is no installer (`PACKAGING_GAP`).
+- `PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE` because Stage 10 is proposal-only
+  and human acceptance remains outstanding.
+- Repository visibility: GitHub reports the repository as public while earlier text
+  described it as private. Changing visibility is a pending human decision; it does
+  not block the synthetic Human RC. Real data is never versioned in any case.
 
 ## Historical status
 
@@ -78,6 +100,7 @@ append-only audit and token/cost ceilings are covered by first-party tests.
   60-second threshold; the post-main run observed 345.693 seconds. Semantic
   gates passed and the timing debt remains explicitly visible rather than being
   hidden by retries.
-- Human RC readiness: `FALSE`; professional acceptance is still required.
-- Historical timing debt remains nonblocking and tracked in Issue #192; this
-  reconciliation does not alter the 60-second threshold or hide the debt.
+- Human RC readiness: `TRUE`; professional acceptance (#238) is still required.
+- Historical timing debt (#192) is superseded by the hybrid attribution policy
+  (`docs/arquitetura/decisoes/ADR-hybrid-timing-attribution-v1.md`); the 60-second
+  reference is unchanged and the runtime cost is tracked in Issue #259.
