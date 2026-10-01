@@ -180,8 +180,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "inspection-photos" and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/inspection-photos"
-        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["pericial-planning", "decisions"] and method == "POST":
-            return f"/v1/workspaces/{remainder[0]}/pericial-planning/decisions"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "pericial-planning" and remainder[2] in {"decisions", "successor"} and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/pericial-planning/{remainder[2]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["report-snapshot", "reviews"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/report-snapshot/reviews"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["construction-defect-analysis", "pathology-reviews"] and method == "POST":

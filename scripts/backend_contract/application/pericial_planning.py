@@ -92,27 +92,29 @@ class SavePericialPlanning:
     clock: object
     ids: object
 
-    def execute(self, workspace_id, snapshot: PlanningSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False):
+    def execute(self, workspace_id, snapshot: PlanningSnapshot, expected_revision: int | None, *, allow_review_transition: bool = False, allow_succession: bool = False):
         if type(snapshot) is not PlanningSnapshot or str(workspace_id) != snapshot.workspace_id:
             raise ValueError("Pericial Planning workspace identity mismatch")
         if snapshot.upstream_stale:
             raise ValueError("stale Pericial Planning snapshots cannot be persisted")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("expected revision is invalid")
-        if expected_revision is None and (
+        if allow_succession and (expected_revision is None or allow_review_transition):
+            raise ValueError("Pericial Planning succession requires the stale predecessor revision")
+        if (expected_revision is None or allow_succession) and (
             snapshot.decisions or any(item.professional_review_status.value != "PENDING" for item in snapshot.material_items)
         ):
             raise ValueError("initial Pericial Planning must be proposal-only")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("Pericial Planning authority guard is unavailable")
         with self.authority_guard():
-            return self._execute_guarded(workspace_id, snapshot, expected_revision, allow_review_transition)
+            return self._execute_guarded(workspace_id, snapshot, expected_revision, allow_review_transition, allow_succession)
 
-    def _execute_guarded(self, workspace_id, snapshot: PlanningSnapshot, expected_revision: int | None, allow_review_transition: bool):
+    def _execute_guarded(self, workspace_id, snapshot: PlanningSnapshot, expected_revision: int | None, allow_review_transition: bool, allow_succession: bool):
         analysis_record, analysis = self.get_case_analysis.execute(workspace_id)
         if analysis.stale_document_ids or analysis.source_inventory_stale:
             raise ValueError("stale Case Analysis cannot authorize Pericial Planning")
-        if expected_revision is None:
+        if expected_revision is None or allow_succession:
             _refuse_new_references_to_unavailable_documents(analysis, snapshot)
         validate_against_case_analysis(snapshot, analysis, artifact_revision=analysis_record.revision)
         if expected_revision is not None:
@@ -124,10 +126,13 @@ class SavePericialPlanning:
             if previous_record.revision != expected_revision:
                 raise ValueError("expected Pericial Planning revision is not latest")
             previous = validated_pericial_planning_from_mapping(thaw_payload(previous_record.payload))
-            _refuse_new_references_to_unavailable_documents(analysis, snapshot, previous)
-            _validate_append_only_history(previous, snapshot)
-            if not allow_review_transition and snapshot.decisions != previous.decisions:
-                raise ValueError("Pericial Planning decisions require the professional review command")
+            if allow_succession:
+                _validate_succession(previous, snapshot, analysis_record, analysis)
+            else:
+                _refuse_new_references_to_unavailable_documents(analysis, snapshot, previous)
+                _validate_append_only_history(previous, snapshot)
+                if not allow_review_transition and snapshot.decisions != previous.decisions:
+                    raise ValueError("Pericial Planning decisions require the professional review command")
         created_at = self.clock.now()
         if created_at.tzinfo is None or created_at.utcoffset() is None:
             raise ValueError("Pericial Planning clock requires timezone")
@@ -228,6 +233,12 @@ class StartPericialPlanning:
     ids: object
 
     def execute(self, workspace_id, *, title: str):
+        snapshot = self.propose(workspace_id, title=title)
+        saved = self.save_planning.execute(workspace_id, snapshot, None)
+        return saved, snapshot
+
+    def propose(self, workspace_id, *, title: str) -> PlanningSnapshot:
+        """Monta um plano so de propostas sobre a Analise do Caso vigente."""
         record, analysis = self.get_case_analysis.execute(workspace_id)
         if analysis.stale_document_ids or analysis.source_inventory_stale or type(title) is not str or not title.strip():
             raise ValueError("current reviewed Case Analysis is required to start planning")
@@ -276,8 +287,50 @@ class StartPericialPlanning:
             external_support_requirements=(), risks=(), gaps=(), decisions=(),
             coverage=PlanningCoverage(total, 0, total, 0, 0, 0, 0, ReadinessStatus.PARTIAL, ("Itens materiais aguardam revisão profissional.",)),
         )
-        saved = self.save_planning.execute(workspace_id, snapshot, None)
+        return snapshot
+
+
+@dataclass(frozen=True, slots=True)
+class StartSuccessorPericialPlanning:
+    """Novo plano sobre a Analise do Caso vigente, quando o atual ficou para tras (#252).
+
+    O plano anterior nao e apagado nem "des-stalead": continua como revisao
+    imutavel do mesmo artefato, com todas as suas decisoes, no historico e no
+    backup. O sucessor nasce so de propostas -- nenhuma decisao antiga e
+    transportada ou promovida -- e passa a ser o plano corrente. So um plano
+    stale pode ser sucedido; um plano vigente continua recebendo decisoes.
+    """
+
+    get_planning: object
+    start_planning: StartPericialPlanning
+    save_planning: object
+
+    def execute(self, workspace_id, *, title: str, expected_revision: int):
+        if type(expected_revision) is not int or expected_revision < 1:
+            raise ValueError("expected revision is invalid")
+        # So a revisao lida aqui; se o plano continua vigente, o Save recusa sob a
+        # guarda de autoridade, contra a Analise lida na mesma transacao.
+        record, _current = self.get_planning.execute(workspace_id)
+        if record.revision != expected_revision:
+            raise RepositoryConflict("expected Pericial Planning revision is not latest")
+        snapshot = self.start_planning.propose(workspace_id, title=title)
+        saved = self.save_planning.execute(workspace_id, snapshot, expected_revision, allow_succession=True)
         return saved, snapshot
+
+
+def _validate_succession(previous: PlanningSnapshot, successor: PlanningSnapshot, analysis_record, analysis) -> None:
+    # Revalidado sob a guarda de autoridade, contra a Analise lida na mesma transacao:
+    # a sucessao so existe porque o predecessor deixou de refletir a analise vigente.
+    reconciled = previous.reconcile_upstream(
+        snapshot_id=analysis.snapshot_id,
+        revision=analysis_record.revision,
+        source_revision=analysis.source_revision,
+        digest=case_analysis_digest(analysis),
+    )
+    if not reconciled.upstream_stale:
+        raise ValueError("only a stale Pericial Planning can be succeeded")
+    if successor.plan.plan_id == previous.plan.plan_id or successor.snapshot_id == previous.snapshot_id:
+        raise ValueError("Pericial Planning successor requires a new plan identity")
 
 
 def _validate_append_only_history(previous: PlanningSnapshot, current: PlanningSnapshot) -> None:

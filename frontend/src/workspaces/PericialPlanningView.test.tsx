@@ -86,6 +86,25 @@ describe("pericial planning view", () => {
     expect(JSON.parse(String((fetchMock.mock.calls[1][1] as RequestInit).body))).toEqual({ title: "Plano da perícia" });
   });
 
+  test("offers an explicit successor plan when the analysis changed, keeping the stale plan as history", async () => {
+    const stale = { ...SNAPSHOT, upstream_stale: true, upstream_stale_reasons: ["Case Analysis content changed"] };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(200, { revision: 3, updated_at: "2026-08-30T19:00:00-03:00", snapshot: stale }))
+      .mockResolvedValueOnce(response(201, { revision: 4, updated_at: "2026-08-31T12:00:00+00:00", snapshot: SNAPSHOT }));
+    vi.stubGlobal("fetch", planningOnly(fetchMock));
+    const user = userEvent.setup();
+    render(<PericialPlanningView workspaceId={WORKSPACE_ID} />);
+    expect(await screen.findByText("Análise alterada — planejamento requer revisão")).toBeInTheDocument();
+    expect(screen.getByText(/permanecem no histórico/)).toBeInTheDocument();
+    await user.clear(screen.getByLabelText("Título do novo planejamento"));
+    await user.type(screen.getByLabelText("Título do novo planejamento"), "Plano revisto");
+    await user.click(screen.getByRole("button", { name: "Criar novo planejamento" }));
+    await waitFor(() => expect(screen.queryByText("Análise alterada — planejamento requer revisão")).not.toBeInTheDocument());
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(String(url)).toBe(`/app-api/v1/workspaces/${WORKSPACE_ID}/pericial-planning/successor`);
+    expect(JSON.parse(String(init.body))).toEqual({ expected_revision: 3, title: "Plano revisto" });
+  });
+
   test("returns focus to the originating review action after cancel", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response(200, { revision: 1, updated_at: "2026-08-30T19:00:00-03:00", snapshot: SNAPSHOT })));
     const user = userEvent.setup();

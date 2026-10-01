@@ -73,7 +73,7 @@ from ..infrastructure.field_mobile import DeviceOfflineVaultRegistry
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
 from ..application.case_analysis import AddCaseAnalysisItem, GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis, StartCaseAnalysis
-from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning
+from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning, StartSuccessorPericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession, ConfirmInspectionVisit
 from ..application.case_intake import GetCaseIntake, AcceptCaseQuestions, ConfirmDocumentInventory
 from ..application.field_mobile import GetOfflineInspection, ListPendingOfflineInspections, PrepareOfflineInspection, ReplaceRevokedOfflineDevice, RevokeOfflineDevice, SyncOfflineInspection, UpdateOfflineInspection
@@ -412,6 +412,7 @@ def build_local_api(
         local_ids,
     )
     get_pericial_planning = GetPericialPlanning(get_latest_artifact, get_case_analysis)
+    start_pericial_planning = StartPericialPlanning(get_case_analysis, save_pericial_planning, local_ids)
     get_inspection_session = GetInspectionSession(get_latest_artifact, get_pericial_planning)
     save_inspection_session = (
         SaveInspectionSession(
@@ -739,7 +740,8 @@ def build_local_api(
         ),
         save_pericial_planning=save_pericial_planning,
         get_pericial_planning=get_pericial_planning,
-        start_pericial_planning=StartPericialPlanning(get_case_analysis, save_pericial_planning, local_ids),
+        start_pericial_planning=start_pericial_planning,
+        start_successor_pericial_planning=StartSuccessorPericialPlanning(get_pericial_planning, start_pericial_planning, save_pericial_planning),
         review_pericial_planning=ReviewPericialPlanning(
             get_pericial_planning,
             save_pericial_planning,

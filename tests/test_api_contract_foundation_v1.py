@@ -39,6 +39,7 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
             "/v1/workspaces/{workspace_id}/construction-defect-analysis/pathology-reviews",
         "/v1/workspaces/{workspace_id}/pericial-planning",
         "/v1/workspaces/{workspace_id}/pericial-planning/decisions",
+        "/v1/workspaces/{workspace_id}/pericial-planning/successor",
         "/v1/workspaces/{workspace_id}/inspection-session",
             "/v1/workspaces/{workspace_id}/inspection-photos",
             "/v1/workspaces/{workspace_id}/offline-inspection",
