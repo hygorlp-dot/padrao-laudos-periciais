@@ -577,6 +577,7 @@ class ReportProcess:
             or len({item.participant_id for item in self.participants}) != len(self.participants)
             or type(self.participants_revision) is not int or self.participants_revision < 1
             or type(self.participants_checksum) is not str or not _SHA256.fullmatch(self.participants_checksum)
+            or any(item.review_state.value == "PROPOSED" for item in self.participants)
         ):
             raise ValueError("report participants binding is invalid")
         for field in fields(self):

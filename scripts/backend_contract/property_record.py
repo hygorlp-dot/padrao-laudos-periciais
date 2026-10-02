@@ -182,18 +182,29 @@ def _normalized(value):
     return "".join(c for c in unicodedata.normalize("NFD", value.casefold()) if not unicodedata.combining(c)).strip()
 
 
-_PARTY_ADDRESS_BLOCKERS = (
-    "residente", "domiciliad", "com endereco", "endereco eletronico", "com sede", "sede na", "sede no", "sede em",
-    "escritorio", "oab", "advogad", "cpf", "cnpj", "forum", "vara federal", "vara civel", "juizo", "tribunal",
-    "secao judiciaria", "apelacao", "recurso especial", "resp ", "agravo", "julgado", "rel.", "relator",
-    "jurisprudencia", "precedente", "acordao",
+# Endereco de parte, de advogado, de juizo ou de precedente nunca vira endereco
+# do imovel. Avaliado na frase inteira (as abreviacoes nao a cortam) e com
+# limite de palavra; fail-closed: na duvida, o perito preenche manualmente.
+_PARTY_ADDRESS_BLOCKERS = re.compile(
+    r"\b(?:residente|domiciliad\w*|com endereco|endereco eletronico|com sede|sede (?:na|no|em)|escritorio|oab|"
+    r"advogad\w*|patrono|procurador\w*|cpf|cnpj|forum|vara|juizo|tribunal|secao judiciaria|subsecao judiciaria|"
+    r"justica federal|justica estadual|poder judiciario|ministerio publico|defensoria|"
+    r"apelacao|recurso especial|resp|agravo|julgado|rel|relator\w*|des|desembargador\w*|min|ministro|"
+    r"jurisprudencia|precedente|acordao|ementa|"
+    r"tel|telefone|fone|fax|celular|whatsapp|e-mail|email|www)\b|@"
 )
+# Na linha de rotulo (nivel 1) so a qualificacao e o timbre institucional pesam;
+# CPF/CNPJ na linha do proprietario ou da construtora nao sao endereco de parte.
+_LABEL_QUALIFICATION_BLOCKERS = re.compile(
+    r"\b(?:residente|domiciliad\w*|com endereco|com sede|sede (?:na|no|em)|escritorio|oab|advogad\w*|patrono|"
+    r"procurador\w*|forum|vara|juizo|tribunal|secao judiciaria|justica federal|justica estadual|poder judiciario)\b"
+)
+_ADDRESS_FIELDS = frozenset({"street", "number", "complement", "unit", "block", "quadra", "neighborhood", "postal_code", "city", "state"})
 _SUBJECT_PROPERTY_CUES = (
     "imovel objeto", "objeto da acao", "objeto da lide", "objeto do contrato", "objeto deste contrato",
     "unidade habitacional", "unidade autonoma", "imovel financiado", "imovel adquirido", "imovel situado",
     "imovel localizado", "imovel vistoriado", "apartamento vistoriado", "imovel em questao", "imovel descrito",
-    "imovel da parte autora", "imovel do autor", "imovel da autora", "o imovel", "do imovel", "empreendimento",
-    "residencial", "conjunto habitacional", "condominio",
+    "imovel da parte autora", "imovel do autor", "imovel da autora", "conjunto habitacional",
 )
 _PERTINENT_DOCUMENTS = (
     "contrato de compra e venda", "contrato por instrumento particular", "contrato de financiamento",
@@ -202,6 +213,14 @@ _PERTINENT_DOCUMENTS = (
 )
 _INTRINSIC_FIELDS = {"development", "private_area_m2", "constructed_area_m2", "program", "habite_se_date", "contract_number", "contractual_value"}
 _SENTENCE_BREAK = re.compile(r"(?:\.\s|;\s|\n\s*\n)")
+# "Av. ", "Dr. ", "Rel. ", "nº. " nao terminam a frase.
+_ABBREVIATIONS = frozenset({
+    "av", "dr", "dra", "sr", "sra", "srs", "rel", "des", "min", "fls", "fl", "art", "arts", "n", "no", "nos",
+    "exmo", "exma", "ilmo", "ilma", "prof", "profa", "eng", "adv", "proc", "inc", "cf", "p", "pag", "pg", "r",
+    "trav", "rod", "est", "pca", "al", "lt", "qd", "bl", "ap", "apto", "cep", "vol", "ed", "edif",
+})
+_CONTEXT_REACH = 400
+_CONTEXT_AHEAD = 240
 _NUMBER_MARK = r"(?:n[o\u00ba\u00b0]\.?|n\.|numero)"
 
 
@@ -249,19 +268,40 @@ _PATTERNS = (
 )
 
 
+_PATTERN_BY_FIELD = {field: pattern for field, pattern, _group in _PATTERNS}
+
+
+def _proper_name_follows(value):
+    words = value.split()
+    return len(words) >= 2 and words[1][:1].isupper()
+
+
+def _is_sentence_break(folded, match):
+    if not match.group().startswith("."):
+        return True
+    word_end = match.start()
+    word_start = word_end
+    while word_start > 0 and folded[word_start - 1].isalpha():
+        word_start -= 1
+    word = folded[word_start:word_end]
+    return not (word in _ABBREVIATIONS or len(word) == 1)
+
+
 def _window(folded, start, end):
-    """A frase do achado: do ultimo limite de frase antes dele ate o seu fim."""
-    floor = max(0, start - 240)
-    head = folded[floor:start]
-    breaks = list(_SENTENCE_BREAK.finditer(head))
-    begin = floor + breaks[-1].end() if breaks else floor
-    line_start = folded.rfind("\n", 0, start)
-    stop = folded.find("\n", end)
-    stop = len(folded) if stop == -1 else stop
-    sentence_end = _SENTENCE_BREAK.search(folded, end)
-    if sentence_end is not None:
-        stop = min(stop, sentence_end.start() + 1)
-    return begin, stop, line_start
+    """A frase do achado, limitada a uma vizinhanca fixa (custo linear por achado)."""
+    floor = max(0, start - _CONTEXT_REACH)
+    begin = floor
+    for item in _SENTENCE_BREAK.finditer(folded, floor, start):
+        if _is_sentence_break(folded, item):
+            begin = item.end()
+    ceiling = min(len(folded), end + _CONTEXT_AHEAD)
+    stop = folded.find("\n", end, ceiling)
+    stop = ceiling if stop == -1 else stop
+    for item in _SENTENCE_BREAK.finditer(folded, end, stop):
+        if _is_sentence_break(folded, item):
+            stop = item.start() + 1
+            break
+    return begin, stop
 
 
 def _context_proposals(page, document_kind, folded, indices, label_spans=()):
@@ -276,25 +316,26 @@ def _context_proposals(page, document_kind, folded, indices, label_spans=()):
             position = bisect_right(label_starts, source) - 1
             if position >= 0 and source < label_spans[position][1]:
                 continue
-            begin, stop, _line = _window(folded, match.start(), match.end())
+            begin, stop = _window(folded, match.start(), match.end())
             context = folded[begin:stop]
-            if any(blocker in context for blocker in _PARTY_ADDRESS_BLOCKERS):
+            if _PARTY_ADDRESS_BLOCKERS.search(context):
                 continue
             value = _original(text, indices, match.start(group), match.end(group))
-            if field == "block":
-                value = value.upper() if len(value) <= 2 else value
-                original = _original(text, indices, match.start(group), match.end(group))
-                if value != original:
-                    value = original
             if not value:
                 continue
+            # "residencial" adjetivo ("uso residencial") nao e nome de empreendimento.
+            if field == "development" and not _proper_name_follows(value):
+                continue
             bound = any(cue in context for cue in _SUBJECT_PROPERTY_CUES)
-            if bound:
+            # Mais de uma unidade na mesma frase: o trecho nao diz qual e a do imovel.
+            ambiguous = field in {"unit", "block", "quadra", "number"} and len(_PATTERN_BY_FIELD[field].findall(context)) > 1
+            if bound and not ambiguous:
                 strength, method = "STRONG", f"CONTEXT_BOUND_{mode}_V2"
-            elif field in _INTRINSIC_FIELDS:
+            elif field in _INTRINSIC_FIELDS and document_kind and not ambiguous:
                 strength, method = "STRONG", f"DOCUMENT_PATTERN_{mode}_V2"
-            elif document_kind:
-                strength, method = "POSSIBLE", f"DOCUMENT_PATTERN_{mode}_V2"
+            elif document_kind or bound or field in _INTRINSIC_FIELDS:
+                strength = "POSSIBLE"
+                method = f"CONTEXT_BOUND_{mode}_V2" if bound else f"DOCUMENT_PATTERN_{mode}_V2"
             else:
                 continue
             excerpt = text[indices[begin]:indices[stop - 1] + 1].strip() if stop > begin else ""
@@ -304,7 +345,7 @@ def _context_proposals(page, document_kind, folded, indices, label_spans=()):
     return found
 
 
-def property_proposals(workspace_id, document_id, checksum, filename, pages, *, include_legacy_labels=False):
+def property_proposals(workspace_id, document_id, checksum, filename, pages, *, include_legacy_labels=False, logical_document_for=None):
     """Rotulo explicito, padroes por tipo de peca e propostas ligadas ao contexto.
 
     O nivel de rotulo e byte-identico ao V1: o fecho do backup reextrai essa
@@ -312,9 +353,12 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
     precedente nunca vira endereco do imovel. `include_legacy_labels` existe so
     para a verificacao de backup: aceita a evidencia de rotulo confirmada antes
     do filtro de endereco de parte, sem oferece-la de novo como proposta.
+    `logical_document_for(pagina)` delimita a peca do export PJe: o tipo de
+    peca pertinente (contrato, matricula, laudo) nao vaza para a peca seguinte.
     """
     aliases = {_normalized(alias): field for field, _label, _kind, labels in PROPERTY_FIELDS for alias in labels}
     proposals = []
+    seen = set()
 
     def add(field, value, excerpt, method, strength, page):
         if _DEFINITIONS[field][1] == "decimal":
@@ -326,14 +370,20 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
         evidence = PropertyEvidence(str(document_id), checksum, filename, page.number, excerpt, method, page.confidence, value)
         identity = json.dumps([str(workspace_id), field, asdict(evidence)], ensure_ascii=False, sort_keys=True)
         proposal = PropertyProposal(sha256(identity.encode()).hexdigest(), str(workspace_id), field, value, evidence, strength)
-        if all(item.proposal_id != proposal.proposal_id for item in proposals):
+        if proposal.proposal_id not in seen:
+            seen.add(proposal.proposal_id)
             proposals.append(proposal)
 
     document_kind = ""
+    current_piece = None
     for page in pages:
         mode = page.extraction_mode.value
         if mode not in {"NATIVE_TEXT", "OCR"}:
             continue
+        if logical_document_for is not None:
+            piece = logical_document_for(page.number)
+            if piece != current_piece:
+                current_piece, document_kind = piece, ""
         folded_page, page_indices = _folded(page.text)
         kind = next((item for item in _PERTINENT_DOCUMENTS if item in folded_page[:600]), "")
         if kind:
@@ -350,9 +400,12 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
             if field is None:
                 continue
             label_spans.append((offsets[index], offsets[index] + len(line)))
-            if not include_legacy_labels:
+            # So rotulo de endereco generico ("Logradouro:", "CEP:") depois de
+            # qualificacao de parte ou timbre institucional deixa de ser proposto;
+            # rotulo que nomeia o imovel ("Logradouro do imovel:") liga o dado.
+            if not include_legacy_labels and field in _ADDRESS_FIELDS and "imovel" not in _normalized(match[1]):
                 nearby = _folded(" ".join(lines[max(0, index - 2):index + 1]))[0]
-                if any(blocker in nearby for blocker in _PARTY_ADDRESS_BLOCKERS):
+                if _LABEL_QUALIFICATION_BLOCKERS.search(nearby):
                     continue
             add(field, match[2].strip(), line.strip(), f"LABEL_{mode}_V1", "STRONG", page)
         for field, value, excerpt, method, strength in _context_proposals(page, document_kind, folded_page, page_indices, tuple(label_spans)):

@@ -80,8 +80,13 @@ def _participants_summary(pole: str):
     def value(report):
         from .process_participants import ParticipantPole, participants_summary
         captured = report.process_record
-        if captured is None or captured.participants is None:
-            raise ValueError(f"template field PARTICIPANTS_{pole} requires confirmed participants")
+        if captured is None:
+            return "—"
+        if captured.participants is None:
+            # Pericia sem lista de participantes gravada: o texto legado, exato
+            # e sem corte; nunca falha a exportacao de uma pericia antiga.
+            legacy = {"ACTIVE": captured.parte_requerente, "PASSIVE": captured.parte_requerida}.get(pole, "")
+            return legacy.strip() or "—"
         return participants_summary(captured.participants, ParticipantPole(pole)) or "—"
     return value
 

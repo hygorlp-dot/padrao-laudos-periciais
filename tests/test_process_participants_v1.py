@@ -184,6 +184,14 @@ def _runtime(tmp_path):
     return runtime
 
 
+def _save_process(runtime, root):
+    from tests.test_product_integration_oracle_v1 import _http
+    status, process = _http(runtime, "GET", root + "/process-case")
+    assert status == 200
+    data = {**process["data"], "numero_processo": "0000000-00.2026.4.05.0000"}
+    assert _http(runtime, "POST", root + "/process-case", {"expected_revision": process["revision"], "data": data})[0] in (200, 201)
+
+
 def _import(runtime, root, pdf, filename):
     from tests.test_product_integration_oracle_v1 import _http
     status, _ = _http(runtime, "POST", root + "/materials", raw_body=pdf, headers={"Content-Type": "application/pdf", "X-Document-Filename": filename})
@@ -200,6 +208,8 @@ def test_product_flow_confirms_rejects_adds_and_survives_restart_and_backup(tmp_
         root = f"/v1/workspaces/{workspace['workspace_id']}"
         status, empty = _http(runtime, "GET", root + "/process-participants")
         assert status == 200 and empty["participants"] == [] and empty["proposals"] == [] and empty["revision"] is None
+        assert empty["process_record_saved"] is False
+        _save_process(runtime, root)
         _import(runtime, root, _cover([
             _HEADER,
             "ALFA SINTETICA (AUTORA) ADVOGADA UM (ADVOGADA)",
@@ -284,6 +294,7 @@ def test_backup_refuses_a_forged_participant_source(tmp_path):
         _, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Fonte forjada"})
         root = f"/v1/workspaces/{workspace['workspace_id']}"
         _import(runtime, root, _cover([_HEADER, "ALFA SINTETICA (AUTOR)"]), "capa.pdf")
+        _save_process(runtime, root)
         proposal = _http(runtime, "GET", root + "/process-participants")[1]["proposals"][0]
         assert _http(runtime, "POST", root + "/process-participants/decisions", {"action": "CONFIRM", "expected_revision": None, "payload": {"proposal_id": proposal["participant_id"]}})[0] == 200
         status, _, backup = http_request(runtime.server, "POST", root + "/backup", value={}, headers={"X-Local-API-Token": TOKEN})
@@ -342,7 +353,8 @@ def test_excluded_source_stops_proposals_and_marks_confirmed_participant_stale()
     record = SimpleNamespace(revision=1, created_at="2026-10-02T12:00:00+00:00", payload=_freeze_payload(participants_register_to_mapping(register)))
     excluded_document = replace(document, logical_documents=(replace(available, available=False),))
     excluded_texts = SimpleNamespace(execute=lambda _w: (excluded_document,))
-    service = GetProcessParticipants(SimpleNamespace(execute=lambda *_a: record), SimpleNamespace(), excluded_texts, ParticipantProposals(excluded_texts))
+    process_case = SimpleNamespace(execute=lambda _w: SimpleNamespace(revision=1, updated_at=None, data=None))
+    service = GetProcessParticipants(SimpleNamespace(execute=lambda *_a: record), process_case, excluded_texts, ParticipantProposals(excluded_texts))
     view = service.execute("w")
     assert view.proposals == () and view.stale_participant_ids == (confirmed.participant_id,)
     assert view.register.confirmed == (confirmed,)
@@ -399,11 +411,206 @@ def test_participants_are_isolated_between_workspaces(tmp_path):
         proposal = _http(runtime, "GET", root_a + "/process-participants")[1]["proposals"][0]
         status, other = _http(runtime, "GET", root_b + "/process-participants")
         assert status == 200 and other["proposals"] == [] and other["participants"] == []
+        _save_process(runtime, root_b)
         status, _ = _http(runtime, "POST", root_b + "/process-participants/decisions", {"action": "CONFIRM", "expected_revision": None, "payload": {"proposal_id": proposal["participant_id"]}})
         assert status == 400
         # O mesmo PDF na outra pericia e outra fonte: outra identidade.
         _import(runtime, root_b, _cover([_HEADER, "ALFA SINTETICA (AUTOR)"]), "capa-a.pdf")
         mirrored = _http(runtime, "GET", root_b + "/process-participants")[1]["proposals"][0]
         assert mirrored["participant_id"] != proposal["participant_id"]
+    finally:
+        runtime.close()
+
+
+# --- Revisao independente da PR #274.
+
+
+def _document(*pages, logical=()):
+    from scripts.backend_contract.application.case_document_texts import CaseDocumentText
+    return CaseDocumentText(_CONTENT, "a" * 64, "autos.pdf", tuple(pages), tuple(logical), False)
+
+
+def _text_page(text, number=1):
+    return SimpleNamespace(number=number, text=text, extraction_mode=SimpleNamespace(value="NATIVE_TEXT"))
+
+
+def _proposal_set(*pages):
+    from scripts.backend_contract.application.process_participants import ParticipantProposals
+    document = _document(*pages)
+    return ParticipantProposals(SimpleNamespace(execute=lambda _w: (document,))).execute("w")
+
+
+def test_legacy_text_longer_than_a_name_is_projected_whole_never_cut():
+    from scripts.backend_contract.process_participants import legacy_projection
+    many = ", ".join(f"AUTOR SINTETICO NUMERO {index:02d}" for index in range(15))
+    assert len(many) > 300
+    register, blocked = legacy_projection("w", many, "RÉ SINTÉTICA", "2026-10-02T12:00:00+00:00")
+    assert register.participants[0].name == many and blocked == ()
+    register, blocked = legacy_projection("w", "ALFA\x00BETA", "GAMA\x02", "2026-10-02T12:00:00+00:00")
+    assert register.participants == () and blocked == (ParticipantPole.ACTIVE, ParticipantPole.PASSIVE)
+
+
+def test_a_representative_never_crosses_a_section_or_table_header():
+    for separator in ("POLO PASSIVO", _HEADER):
+        parsed = parse_pje_participant_rows("\n".join([
+            _HEADER, "POLO ATIVO", "JOAO SINTETICO (AUTOR) MARIA ADV (ADVOGADO)", separator,
+            "PEDRO ADV CEF (ADVOGADO)", "CAIXA SINTETICA (REU)",
+        ]))
+        assert [(row.name, [item.name for item in row.representatives]) for row in parsed.rows] == [("JOAO SINTETICO", ["MARIA ADV"])]
+        assert parsed.terminated is True
+
+
+def test_inline_other_interested_prefix_does_not_leak_into_the_name():
+    rows = _rows(_HEADER + "\nOUTROS INTERESSADOS: UNIAO SINTETICA (TERCEIRO INTERESSADO)\n")
+    assert rows == [("OTHER", "TERCEIRO INTERESSADO", "UNIAO SINTETICA", [])]
+
+
+def test_an_odd_line_is_skipped_and_said_without_dropping_the_rest():
+    odd = "FULANO " * 50 + "(AUTOR)"
+    result = _proposal_set(_text_page("\n".join([_HEADER, "ALFA (AUTOR)", odd, "JO\x02AO (AUTOR)"])), _text_page(_HEADER + "\nBETA (REU)\n", 2))
+    assert [item.name for item in result.proposals] == ["ALFA", "BETA"]
+    assert result.interrupted_pages == (("autos.pdf", 1),)
+
+
+def test_table_continued_on_the_next_page_or_stopped_at_zero_rows_is_flagged():
+    continued = _proposal_set(
+        _text_page(_HEADER + "\nPOLO ATIVO\nAUTOR UM (AUTOR)\n"),
+        _text_page("AUTOR DOIS (AUTOR)\nPOLO PASSIVO\nCAIXA SINTETICA (REU)\n", 2),
+    )
+    assert ("autos.pdf", 2) in continued.interrupted_pages
+    stopped = _proposal_set(_text_page(_HEADER + "\nJOAO (LITISCONSORTE)\n"))
+    assert stopped.proposals == () and stopped.interrupted_pages == (("autos.pdf", 1),)
+
+
+def test_control_characters_never_reach_a_participant():
+    with pytest.raises(ValueError):
+        _participant(name="JO\x02AO")
+    with pytest.raises(ValueError):
+        _participant(origin=ParticipantOrigin.MANUAL, provenance=(), participant_id="PARTICIPANT-MAN-" + "A" * 32, name="LINHA\nDUPLA")
+
+
+def test_source_roles_keep_their_accents_in_the_report_line():
+    from scripts.backend_contract.process_participants import participant_line
+    result = _proposal_set(_text_page(_HEADER + "\nDEFENSORIA SINTETICA (ASSISTENTE TECNICO) FULANA (DEFENSOR PUBLICO)\n"))
+    line = participant_line(replace(result.proposals[0], review_state=ParticipantReviewState.CONFIRMED, decided_at="2026-10-02T12:00:00+00:00"))
+    assert "(assistente técnico)" in line and "(defensor público)" in line
+
+
+def test_same_name_in_the_same_pole_is_flagged_never_merged():
+    from scripts.backend_contract.application.process_participants import GetProcessParticipants, ParticipantProposals
+    document = _document(_text_page(_HEADER + "\nCAIXA ECONOMICA SINTETICA (REU)\nCAIXA ECONÔMICA SINTÉTICA (REU)\n"))
+    texts = SimpleNamespace(execute=lambda _w: (document,))
+    from scripts.backend_contract.application.models import ProcessCaseData
+    data = replace(ProcessCaseData.empty(), parte_requerida="Caixa Econômica Sintética")
+    process_case = SimpleNamespace(execute=lambda _w: SimpleNamespace(revision=1, updated_at="2026-10-02T12:00:00+00:00", data=data))
+    from scripts.backend_contract.application.ports import ArtifactRevisionNotFound
+
+    def missing(*_args):
+        raise ArtifactRevisionNotFound("none")
+
+    view = GetProcessParticipants(SimpleNamespace(execute=missing), process_case, texts, ParticipantProposals(texts)).execute("w")
+    assert len(view.proposals) == 2 and view.legacy_projection is True
+    assert [item.matches_id for item in view.duplicates] == ["PARTICIPANT-LEGACY-PASSIVE", "PARTICIPANT-LEGACY-PASSIVE"]
+
+
+def test_decisions_require_the_saved_process_and_restore_checks_the_source(tmp_path):
+    from tests.test_product_integration_oracle_v1 import _http
+    runtime = _runtime(tmp_path)
+    try:
+        _, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Sem processo"})
+        root = f"/v1/workspaces/{workspace['workspace_id']}"
+        manual = {"name": "ALFA", "pole": "ACTIVE", "procedural_role": "CLAIMANT", "source_role_label": "Autora", "person_type": "UNKNOWN", "representatives": []}
+        status, body = _http(runtime, "POST", root + "/process-participants/decisions", {"action": "ADD_MANUAL", "expected_revision": None, "payload": {"participant": manual}})
+        assert status == 409 and body["error"]["code"] == "PROCESS_RECORD_REQUIRED"
+        assert _http(runtime, "GET", root + "/process-participants")[1]["revision"] is None
+    finally:
+        runtime.close()
+
+
+def test_restore_of_a_rejected_source_whose_piece_was_excluded_is_refused():
+    from scripts.backend_contract.application.case_document_texts import LogicalDocumentSpan
+    from scripts.backend_contract.application.models import _freeze_payload
+    from scripts.backend_contract.application.process_participants import DecideProcessParticipants, GetProcessParticipants, ParticipantProposals
+    from contextlib import nullcontext
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    available = LogicalDocumentSpan("DOC-1", "Capa", "CAPA", 1, 1, True)
+    page = _text_page(_HEADER + "\nALFA (AUTOR)\n")
+    proposal = _proposal_set(page).proposals[0]
+    rejected = replace(proposal, provenance=(replace(proposal.provenance[0], logical_document_id="DOC-1"),), review_state=ParticipantReviewState.REJECTED, decided_at="2026-10-02T12:00:00+00:00")
+    register = ProcessParticipantsRegister("1.0.0", "w", (rejected,))
+    record = SimpleNamespace(revision=1, created_at="2026-10-02T12:00:00+00:00", payload=_freeze_payload(participants_register_to_mapping(register)))
+    excluded = _document(page, logical=(replace(available, available=False),))
+    texts = SimpleNamespace(execute=lambda _w: (excluded,))
+    process_case = SimpleNamespace(execute=lambda _w: SimpleNamespace(revision=1, updated_at=None, data=None))
+    reader = GetProcessParticipants(SimpleNamespace(execute=lambda *_a: record), process_case, texts, ParticipantProposals(texts))
+    decide = DecideProcessParticipants(
+        reader, SimpleNamespace(append_if_latest=lambda **_k: pytest.fail("must not write")), nullcontext,
+        SimpleNamespace(now=lambda: datetime(2026, 10, 2, tzinfo=timezone.utc)), SimpleNamespace(new_uuid=uuid4),
+    )
+    with pytest.raises(ValueError, match="source changed or was excluded"):
+        decide.execute("w", action="RESTORE", expected_revision=1, payload={"participant_id": rejected.participant_id})
+
+
+def test_report_participants_without_process_record_fail_closed_and_later_confirmations_make_it_stale():
+    from scripts.backend_contract.application.ports import ArtifactRevisionNotFound
+    from scripts.backend_contract.application.report_foundation import GetReportProcess, _process_reasons
+
+    def only_participants(_workspace, kind, _artifact):
+        if kind == "PROCESS_CASE":
+            raise ArtifactRevisionNotFound("none")
+        return SimpleNamespace()
+
+    with pytest.raises(ValueError, match="without the process record"):
+        GetReportProcess(SimpleNamespace(execute=only_participants)).execute("w")
+    confirmed = SimpleNamespace(workspace_id="w", confirmed_participants=(object(),))
+    getter = SimpleNamespace(execute=lambda _w: confirmed)
+    assert _process_reasons(SimpleNamespace(process_record=None), getter, "w") == ("process participants changed",)
+    empty = SimpleNamespace(execute=lambda _w: SimpleNamespace(workspace_id="w", confirmed_participants=()))
+    assert _process_reasons(SimpleNamespace(process_record=None), empty, "w") == ()
+
+
+def test_cover_fields_fall_back_to_the_exact_legacy_text():
+    from scripts.backend_contract.application.models import ProcessCaseData
+    from scripts.backend_contract.report_foundation import ReportProcess
+    from scripts.backend_contract.report_template import _FIELD_VALUES
+    from tests.test_report_foundation_v1 import bound_report
+    report = bound_report()
+    data = ProcessCaseData.empty().as_dict()
+    data.update(numero_processo="0000000-00.2026.4.05.0000", vara="1ª Vara Federal", parte_requerente="ALFA E BETA SINTETICAS", parte_requerida="")
+    legacy = replace(report, process_record=ReportProcess(workspace_id=report.workspace_id, source_revision=1, source_checksum="c" * 64, **data))
+    assert _FIELD_VALUES["PARTICIPANTS_ACTIVE"](legacy) == "ALFA E BETA SINTETICAS"
+    assert _FIELD_VALUES["PARTICIPANTS_PASSIVE"](legacy) == "—" and _FIELD_VALUES["PARTICIPANTS_OTHER"](legacy) == "—"
+    assert _FIELD_VALUES["PARTICIPANTS_ACTIVE"](replace(report, process_record=None)) == "—"
+
+
+@pytest.mark.parametrize("tamper", ["name", "excerpt", "span"])
+def test_backup_rederives_participant_name_excerpt_and_span_from_the_bytes(tmp_path, tamper):
+    from scripts.backend_contract.application.ports import RepositoryIntegrityError
+    from scripts.backend_contract.infrastructure.productization import VerifyWorkspaceBackup
+    from tests.test_product_integration_oracle_v1 import TOKEN, _http, _reseal, http_request
+    runtime = _runtime(tmp_path)
+    try:
+        _, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Fonte forjada"})
+        root = f"/v1/workspaces/{workspace['workspace_id']}"
+        _import(runtime, root, _cover([_HEADER, "ALFA SINTETICA (AUTOR)", "BETA SINTETICA (REU)"]), "capa.pdf")
+        _save_process(runtime, root)
+        proposal = _http(runtime, "GET", root + "/process-participants")[1]["proposals"][0]
+        assert _http(runtime, "POST", root + "/process-participants/decisions", {"action": "CONFIRM", "expected_revision": None, "payload": {"proposal_id": proposal["participant_id"]}})[0] == 200
+        status, _, backup = http_request(runtime.server, "POST", root + "/backup", value={}, headers={"X-Local-API-Token": TOKEN})
+        assert status == 200
+        VerifyWorkspaceBackup().execute(backup)
+        altered = json.loads(backup)
+        revision = next(r for r in altered["artifact_revisions"] if r["artifact_kind"] == "PROCESS_PARTICIPANTS_V1")
+        participant = revision["payload"]["participants"][0]
+        source = participant["provenance"][0]
+        if tamper == "name":
+            participant["name"] = "NOME FORJADO"
+        elif tamper == "excerpt":
+            source["excerpt"] = "NOME FORJADO (AUTOR)"
+        else:
+            source["source_start"] += 1
+        with pytest.raises(RepositoryIntegrityError, match="participant source"):
+            VerifyWorkspaceBackup().execute(_reseal(altered))
     finally:
         runtime.close()

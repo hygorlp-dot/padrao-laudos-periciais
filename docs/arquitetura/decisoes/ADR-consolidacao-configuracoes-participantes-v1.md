@@ -59,15 +59,42 @@ conteúdo privado do workspace).
   `parte_requerida` não vazias são projetadas na leitura como um participante
   `ACTIVE` e um `PASSIVE` de origem `LEGACY_PROCESS_CASE`, com o texto exato, sem
   dividir strings concatenadas. A primeira gravação materializa a projeção.
+  O texto legado nunca é cortado: o participante legado aceita até 4.000
+  caracteres (o de fonte ou manual, 300). Valor maior que isso, ou com caractere
+  que o Word não representa, não é projetado; a tela diz qual polo ficou de fora e
+  pede o registro das partes uma a uma.
+- Decisão sobre participantes exige os dados do processo já gravados
+  (`PROCESS_RECORD_REQUIRED`, 409). Assim todo participante confirmado tem uma
+  captura de processo que o leva ao laudo; registro sem processo no backup ou no
+  banco faz a captura do laudo falhar fechada.
+- Leitura da fonte: linha da tabela que não cabe num participante é ignorada e a
+  página entra em "leitura interrompida", sem derrubar as demais propostas.
+  Procurador em linha de continuação só se liga à parte da mesma seção. Tabela que
+  continua na página seguinte sem cabeçalho também é sinalizada.
+- Mesmo nome no mesmo polo (normalizado sem acento e pontuação) é sinalizado como
+  possível repetição, nunca fundido.
+- Restaurar um participante de fonte exige que a peça continue a mesma e não
+  excluída, como confirmar.
+- Qualquer decisão sobre participantes (inclusive descartar uma proposta) muda a
+  revisão capturada e deixa o laudo aprovado `stale`. Decisão consciente: a captura
+  fixa a revisão do registro inteiro para auditoria, e comparar só os confirmados
+  abriria uma segunda regra de vínculo.
+- O backup rederiva cada participante de fonte: relê a página dos bytes, reencontra
+  a linha pelo span e exige o mesmo trecho e o mesmo nome (salvo nome corrigido pelo
+  perito), e o mesmo procurador no span declarado.
 - `ProcessCaseData` mantém os campos escalares para ler dados antigos. Eles deixam
   de ser a autoridade de partes e a UI para de editá-los.
 - O laudo captura a coleção junto do processo (`ReportProcess.participants`, omitido
   quando ausente, para preservar mapping e digest de laudos antigos). A captura só
   passa a existir depois que o perito grava o registro, para que uma atualização
   do produto não torne laudos antigos `stale` sozinha.
-- Word: a capa resume os polos; a seção 1.1 relaciona todos os participantes. Os
-  campos singulares (`POLOATIVO`) continuam aceitos em modelos antigos e são
-  preenchidos com a relação completa do polo, nunca com o primeiro nome.
+- Word: a seção 1.1 relaciona todos os participantes confirmados, por polo. Os
+  campos `[[PARTICIPANTS_ACTIVE]]`, `[[PARTICIPANTS_PASSIVE]]` e
+  `[[PARTICIPANTS_OTHER]]` resumem cada polo para a capa (até três nomes e "e
+  outros N"). Sem registro gravado, usam o texto legado exato, ou "—"; nunca
+  falham a exportação de uma perícia antiga. O bookmark singular `POLOATIVO` de
+  modelos antigos é preservado, mas o produto não o preenche: não há vínculo que
+  represente vários participantes num campo singular sem omitir alguém.
 
 ### D2. Dados do imóvel em camadas (#269)
 
@@ -80,24 +107,40 @@ conteúdo privado do workspace).
   objeto do contrato, apartamento vistoriado, empreendimento).
 - `PARTY_ADDRESS != SUBJECT_PROPERTY_ADDRESS`: qualificação de parte
   ("residente e domiciliado"), endereço de advogado, de juízo ou de citação
-  jurisprudencial bloqueiam a proposta.
+  jurisprudencial bloqueiam a proposta. Os bloqueadores são avaliados na frase
+  inteira, com limite de palavra; abreviações ("Av.", "Dr.", "Rel.", "Des.", "nº")
+  não terminam a frase. Contatos de timbre (telefone, e-mail) também bloqueiam.
+- No nível 1, só rótulo de endereço genérico ("Logradouro:", "CEP:") depois de
+  qualificação de parte ou timbre institucional deixa de ser proposto. Rótulo que
+  nomeia o imóvel ("Logradouro do imóvel:") e rótulos que não são endereço
+  (proprietário com CPF, construtora com CNPJ) continuam propostos.
+- O tipo de peça pertinente vale só dentro da peça lógica do export PJe.
+  "Residencial" só nomeia empreendimento seguido de nome próprio. Mais de uma
+  unidade na mesma frase rebaixa a proposta para "possível".
+- Cada achado olha uma vizinhança fixa (400 caracteres antes, 240 depois): o custo
+  cresce com o texto, nunca com o quadrado dele.
 - Conflitos aparecem lado a lado. Nada é escolhido em silêncio.
 - A busca usa o cache OCR da perícia e respeita o ciclo `PROCESSING/READY` da #266.
 
 ### D3. Configurações de instalação (#270)
 
-- Nova tabela SQLite `installation_setting_revisions` (schema 2), append-only, com
-  `setting_kind`, `setting_id`, `revision`, `revision_id`, `created_at`,
-  `checksum_sha256` e `payload_json`. A migração 1 → 2 é aditiva, idempotente e
-  falha fechada em schema inesperado. Não existe `workspace_id = GLOBAL`.
+- Arquivo SQLite próprio da instalação, ao lado do banco das perícias
+  (`.<banco>.installation.sqlite3`, schema 1), com a tabela append-only
+  `installation_setting_revisions` (`setting_kind`, `setting_id`, `revision`,
+  `revision_id`, `created_at`, `checksum_sha256`, `payload_json`) e a tabela
+  `installation_assets` endereçada por SHA-256. Um arquivo separado não toca o
+  schema do banco das perícias (nenhuma migração nele) e deixa claro que nada da
+  instalação viaja no backup de uma perícia. Schema desconhecido, checksum ou
+  sequência inválidos falham fechados na abertura. Não existe
+  `workspace_id = GLOBAL`.
 - Tipos: `EXPERT_PROFILE_DEFAULT_V1`, `EDITORIAL_PROFILE_DEFAULT_V1`,
   `BRANDING_PROFILE_V1`, `DOCUMENT_PRESENTATION_PROFILE_V1`,
   `LEGAL_EDITORIAL_PROFILE_V1`, `DEFAULT_TEMPLATE_SELECTION_V1` e
   `INSTALLATION_ASSET_V1` (um `setting_id` por papel do ativo).
 - Restaurar uma revisão anterior grava uma nova revisão com o mesmo conteúdo.
-- Ativos de instalação (PNG/JPEG; SVG fora até prova em Word 16) ficam em
-  armazenamento próprio, endereçado por SHA-256, sob a raiz privada. Nunca entram em
-  Materiais, Análise ou fontes do caso.
+- Ativos de instalação (PNG/JPEG; SVG fora até prova em Word 16) ficam na tabela
+  `installation_assets` do arquivo da instalação, endereçados por SHA-256, locais e
+  privados. Nunca entram em Materiais, Análise ou fontes do caso.
 - Nova perícia: os padrões vigentes viram `WORKSPACE_SETTINGS_SNAPSHOT_V1`, com as
   revisões de origem. Os bytes dos ativos são copiados para o conteúdo privado da
   perícia com o papel `BRANDING_ASSET`. Assim o backup da perícia carrega o snapshot

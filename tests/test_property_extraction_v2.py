@@ -203,3 +203,84 @@ def test_product_confirms_a_contextual_proposal_and_backup_replays_it(tmp_path):
             VerifyWorkspaceBackup().execute(_reseal(altered))
     finally:
         runtime.close()
+
+
+# --- Revisao independente da PR #274: regressao do nivel 1 e vazamento de endereco de parte.
+
+
+def test_owner_and_builder_labels_with_tax_ids_are_still_proposed():
+    text = (
+        "MATRÍCULA 12.345\n"
+        "Proprietário: FULANO DE TAL SINTETICO, CPF 000.000.000-00\n"
+        "Construtora: EMPRESA SINTETICA LTDA, CNPJ 00.000.000/0001-00\n"
+        "Área privativa: 41,85 m²\n"
+        "Data do habite-se: 10/03/2015\n"
+    )
+    _, found = _found(_page(text))
+    assert {f for f, _ in found} >= {"owner", "construction_company", "private_area_m2", "habite_se_date"}
+
+
+def test_explicit_property_address_label_survives_a_qualified_party_line():
+    text = (
+        "Vendedor: EMPRESA SINTETICA LTDA, CNPJ 00.000.000/0001-00, com sede na Rua da Sede, 1\n"
+        "Comprador: FULANO SINTETICO, CPF 000.000.000-00, residente na Rua da Parte, 2\n"
+        "Logradouro do imóvel: Rua do Imóvel Sintético\n"
+        "Área privativa: 41,85 m²\n"
+    )
+    _, found = _found(_page(text))
+    assert ("street", "Rua do Imóvel Sintético") in found and ("private_area_m2", "41,85") in found
+
+
+def test_generic_address_label_after_party_qualification_is_not_proposed():
+    text = "FULANO SINTETICO, residente e domiciliado em\nLogradouro: Rua da Parte Sintética\nCEP: 50000-000\n"
+    _, found = _found(_page(text))
+    assert not {f for f, _ in found} & {"street", "postal_code"}
+    _, legacy = _found(_page(text), include_legacy_labels=True)
+    assert ("street", "Rua da Parte Sintética") in legacy
+
+
+@pytest.mark.parametrize("text", [
+    # A. Abreviacao "Av." nao abre frase nova depois de "residente".
+    "LAUDO\nFULANA SINTETICA, residente e domiciliada na Av. Boa Viagem Sintetica, nº 1500, Bairro Pina Sintetico, CEP 51011-000, requer.\n",
+    # B. Timbre de advogado sem a palavra escritorio.
+    "LAUDO\nRua do Sossego Sintetica, 120, Bairro Boa Vista Sintetica, Recife/PE - CEP 50050-080 - Tel (81) 0000-0000\n",
+    # C. Cabecalho de juizo.
+    "LAUDO\nPODER JUDICIÁRIO\nJUSTIÇA FEDERAL\nAv. Recife Sintetica, nº 6250, Bairro Jiquiá Sintetico, CEP 50865-900\n",
+    # F. Patrono.
+    "LAUDO\nPatrono: Dr. Beltrano Sintetico, Rua das Palmeiras Sinteticas, nº 45, Bairro Centro Sintetico, CEP 50000-000\n",
+    # G. Precedente com "Rel. Des." antes da pista do imovel.
+    "Nesse sentido (AC 0000000-00.0000.0.00.0000, Rel. Des. Fulano Sintetico), o imóvel situado na Rua X Sintetica, nº 10, Bairro Y Sintetico, foi avaliado.\n",
+])
+def test_party_counsel_court_and_precedent_addresses_never_become_property(text):
+    _, found = _found(_page(text))
+    assert not {f for f, _ in found} & {"street", "number", "neighborhood", "postal_code"}, found
+
+
+def test_document_kind_does_not_leak_into_the_next_logical_piece():
+    first = _page("LAUDO DE VISTORIA SINTETICO\nSem endereço nesta página.\n", number=1)
+    second = _page("Petição sintética.\nA reunião ocorreu na Rua Qualquer Sintetica, 77, Bairro Sem Relação.\n", number=2)
+    pieces = {1: "DOC-1", 2: "DOC-2"}
+    proposals = property_proposals("w", "d", "a" * 64, "autos.pdf", [first, second], logical_document_for=pieces.get)
+    assert not {p.field for p in proposals} & {"street", "neighborhood"}
+
+
+def test_residential_adjective_and_neighbor_units_are_not_strong():
+    _, found = _found(_page("O imóvel objeto da ação é de uso residencial unifamiliar, conforme a matrícula.\n"))
+    assert not any(field == "development" for field, _ in found)
+    proposals, _ = _found(_page("O imóvel objeto da ação, apartamento nº 302, fica ao lado do apartamento nº 101.\n"))
+    units = [p for p in proposals if p.field == "unit"]
+    assert units and all(p.strength == "POSSIBLE" for p in units)
+
+
+def test_single_long_line_stays_linear():
+    """Cada achado olha so a sua vizinhanca: o custo cresce com o texto, nao com o quadrado."""
+    import time
+
+    def elapsed(repeat):
+        page = _page("LAUDO\n" + "apto 1 " * repeat)
+        started = time.perf_counter()
+        _found(page)
+        return time.perf_counter() - started
+
+    small, large = elapsed(2_000), elapsed(16_000)
+    assert large < 8 * small * 2.5 and large < 10

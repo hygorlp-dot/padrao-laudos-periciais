@@ -411,6 +411,6 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
           <span className="revision-note">Revisão atual {visibleState.snapshot.revision}</span>
         ) : null}
       </div>
-    </form><ParticipantsPanel workspaceId={workspaceId} /><ExpertProfilePanel workspaceId={workspaceId} /><PropertyPanel workspaceId={workspaceId} /></>
+    </form><ParticipantsPanel workspaceId={workspaceId} processSaved={visibleState.snapshot.revision !== null} /><ExpertProfilePanel workspaceId={workspaceId} /><PropertyPanel workspaceId={workspaceId} /></>
   );
 }

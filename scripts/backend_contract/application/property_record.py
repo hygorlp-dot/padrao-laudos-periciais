@@ -84,16 +84,29 @@ class GetPropertyProposals:
     texts: object
 
     def execute(self, workspace_id):
-        proposals = []
+        return self.read(workspace_id)[0]
+
+    def read(self, workspace_id):
+        """Propostas e documentos ainda em leitura, numa unica releitura."""
+        proposals, pending = [], []
         for document in self.texts.execute(workspace_id):
             if document.reading_pending:
+                pending.append(document.filename)
                 continue
             pages = tuple(page for page in document.pages if not document.excluded(page.number))
-            proposals.extend(property_proposals(workspace_id, document.content_id, document.checksum_sha256, document.filename, pages))
-        return tuple(proposals)
+
+            def piece(number, document=document):
+                logical = document.logical_document_for(number)
+                return logical.document_id if logical is not None else None
+
+            proposals.extend(property_proposals(
+                workspace_id, document.content_id, document.checksum_sha256, document.filename, pages,
+                logical_document_for=piece,
+            ))
+        return tuple(proposals), tuple(pending)
 
     def pending_documents(self, workspace_id) -> tuple[str, ...]:
-        return tuple(document.filename for document in self.texts.execute(workspace_id) if document.reading_pending)
+        return self.read(workspace_id)[1]
 
 
 @dataclass(frozen=True, slots=True)

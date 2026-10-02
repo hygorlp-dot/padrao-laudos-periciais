@@ -31,6 +31,9 @@ MAX_REPRESENTATIVES = 64
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _PARTICIPANT_ID = re.compile(r"PARTICIPANT-(?:SRC-[0-9A-F]{24}|MAN-[0-9A-F]{32}|LEGACY-(?:ACTIVE|PASSIVE))")
 _NAME_LIMIT = 300
+# O campo legado nao tinha limite e costuma reunir varias partes num texto so;
+# a projecao preserva o texto exato ate este tamanho e nunca o corta.
+LEGACY_NAME_LIMIT = 4000
 _LABEL_LIMIT = 120
 _EXCERPT_LIMIT = 2000
 
@@ -74,8 +77,21 @@ POLE_LABELS = {
 }
 
 
-def _text(value: object, limit: int) -> bool:
-    return type(value) is str and bool(value.strip()) and value == value.strip() and len(value) <= limit and "\x00" not in value
+# Mesmo conjunto que o Word nao representa (delivery_renderer), mais quebras de
+# linha: nome, papel e registro sao uma linha so no item 1.1.
+_FORBIDDEN_INLINE = re.compile("[\x00-\x1f\x7f\x85\u2028\u2029\ud800-\udfff\ufffe\uffff]")
+_FORBIDDEN_EXCERPT = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]")
+
+
+def _text(value: object, limit: int, *, excerpt: bool = False) -> bool:
+    if type(value) is not str or not value.strip() or value != value.strip() or len(value) > limit:
+        return False
+    return (_FORBIDDEN_EXCERPT if excerpt else _FORBIDDEN_INLINE).search(value) is None
+
+
+def representable_text(value: object, limit: int = _NAME_LIMIT) -> bool:
+    """Texto que cabe numa linha do laudo, sem caractere que o Word recusa."""
+    return _text(value, limit)
 
 
 def _timestamp(value: object) -> bool:
@@ -113,7 +129,7 @@ class ParticipantSource:
             raise ValueError("participant source content is invalid") from exc
         if type(self.source_sha256) is not str or _SHA256.fullmatch(self.source_sha256) is None:
             raise ValueError("participant source checksum is invalid")
-        if not _text(self.filename, 500) or not _text(self.excerpt, _EXCERPT_LIMIT):
+        if not _text(self.filename, 500) or not _text(self.excerpt, _EXCERPT_LIMIT, excerpt=True):
             raise ValueError("participant source text is invalid")
         if any(type(value) is not int for value in (self.page, self.source_start, self.source_end)) or self.page < 1 or self.source_start < 0 or self.source_end <= self.source_start:
             raise ValueError("participant source locator is invalid")
@@ -159,7 +175,8 @@ class CaseParticipant:
     def __post_init__(self):
         if type(self.participant_id) is not str or _PARTICIPANT_ID.fullmatch(self.participant_id) is None:
             raise ValueError("participant identity is invalid")
-        if not _text(self.name, _NAME_LIMIT) or not _text(self.source_role_label, _LABEL_LIMIT):
+        name_limit = LEGACY_NAME_LIMIT if self.origin is ParticipantOrigin.LEGACY_PROCESS_CASE else _NAME_LIMIT
+        if not _text(self.name, name_limit) or not _text(self.source_role_label, _LABEL_LIMIT):
             raise ValueError("participant text is invalid")
         for value, kind in ((self.pole, ParticipantPole), (self.procedural_role, NormalizedProceduralRole), (self.person_type, EntityKind), (self.origin, ParticipantOrigin), (self.review_state, ParticipantReviewState)):
             if type(value) is not kind:
@@ -230,9 +247,15 @@ def manual_participant_id(value: UUID) -> str:
     return "PARTICIPANT-MAN-" + value.hex.upper()
 
 
-def legacy_participants(workspace_id: str, parte_requerente: str, parte_requerida: str, decided_at: str) -> ProcessParticipantsRegister:
-    """Projecao explicita dos campos escalares legados, sem dividir strings."""
+def legacy_projection(workspace_id: str, parte_requerente: str, parte_requerida: str, decided_at: str) -> tuple[ProcessParticipantsRegister, tuple[ParticipantPole, ...]]:
+    """Projecao explicita dos campos escalares legados, sem dividir nem cortar strings.
+
+    Um valor que nao cabe num participante (texto acima de `LEGACY_NAME_LIMIT`
+    ou com caractere que o Word nao representa) nao e projetado; o polo volta
+    em `blocked` para a tela pedir ao perito que registre as partes uma a uma.
+    """
     participants = []
+    blocked = []
     for value, pole, role, label, suffix in (
         (parte_requerente, ParticipantPole.ACTIVE, NormalizedProceduralRole.CLAIMANT, "Parte requerente", "ACTIVE"),
         (parte_requerida, ParticipantPole.PASSIVE, NormalizedProceduralRole.DEFENDANT, "Parte requerida", "PASSIVE"),
@@ -240,11 +263,18 @@ def legacy_participants(workspace_id: str, parte_requerente: str, parte_requerid
         name = value.strip() if type(value) is str else ""
         if not name:
             continue
+        if not _text(name, LEGACY_NAME_LIMIT):
+            blocked.append(pole)
+            continue
         participants.append(CaseParticipant(
-            f"PARTICIPANT-LEGACY-{suffix}", name[:_NAME_LIMIT].strip(), pole, role, label, EntityKind.UNKNOWN,
+            f"PARTICIPANT-LEGACY-{suffix}", name, pole, role, label, EntityKind.UNKNOWN,
             (), (), ParticipantOrigin.LEGACY_PROCESS_CASE, ParticipantReviewState.CONFIRMED, decided_at,
         ))
-    return ProcessParticipantsRegister(SCHEMA_VERSION, str(workspace_id), tuple(participants))
+    return ProcessParticipantsRegister(SCHEMA_VERSION, str(workspace_id), tuple(participants)), tuple(blocked)
+
+
+def legacy_participants(workspace_id: str, parte_requerente: str, parte_requerida: str, decided_at: str) -> ProcessParticipantsRegister:
+    return legacy_projection(workspace_id, parte_requerente, parte_requerida, decided_at)[0]
 
 
 def _source_from_mapping(value: object) -> ParticipantSource:
@@ -321,10 +351,23 @@ ROLE_DISPLAY = {
 }
 
 
+# A gramatica da capa PJe le em ASCII maiusculo; o laudo escreve com acento.
+SOURCE_ROLE_DISPLAY = {
+    "REU": "réu", "RE": "ré", "DEFENSOR PUBLICO": "defensor público", "DEFENSORA PUBLICA": "defensora pública",
+    "DEFENSORIA PUBLICA": "Defensoria Pública", "ASSISTENTE TECNICO": "assistente técnico",
+    "ASSISTENTE TECNICA": "assistente técnica", "VITIMA": "vítima", "FISCAL DA ORDEM JURIDICA": "fiscal da ordem jurídica",
+}
+
+
+def source_role_display(label: str) -> str:
+    """Papel literal da fonte como o laudo o escreve, com acentuacao."""
+    return SOURCE_ROLE_DISPLAY.get(label, label.lower())
+
+
 def participant_role_text(value: CaseParticipant) -> str:
     """Papel como o laudo o escreve: o rotulo do perito, ou o papel normalizado da fonte."""
     if value.origin is ParticipantOrigin.SOURCE:
-        return ROLE_DISPLAY.get(value.procedural_role, value.source_role_label.lower())
+        return ROLE_DISPLAY.get(value.procedural_role, source_role_display(value.source_role_label))
     return value.source_role_label
 
 

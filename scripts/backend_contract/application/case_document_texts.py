@@ -75,7 +75,7 @@ class CaseDocumentTexts:
     _memo: OrderedDict = field(default_factory=OrderedDict)
     _lock: Lock = field(default_factory=Lock)
 
-    def _pages(self, workspace_id, document) -> tuple:
+    def _pages(self, workspace_id, document, capacity: int) -> tuple:
         key = (str(workspace_id), str(document.content_id), document.checksum_sha256)
         with self._lock:
             if key in self._memo:
@@ -83,7 +83,12 @@ class CaseDocumentTexts:
                 return self._memo[key]
         cache = _ReadOnlyPageCache(RevisionOcrPageCache(self.revisions, workspace_id, self.clock, self.ids))
         with self.open_document.execute(workspace_id, document.content_id) as opened:
-            if str(opened.metadata.content_id) != str(document.content_id) or opened.metadata.checksum_sha256 != document.checksum_sha256:
+            metadata = opened.metadata
+            if metadata.workspace_id != workspace_id:
+                raise RepositoryIntegrityError("case document belongs to another workspace")
+            if (str(metadata.content_id), metadata.checksum_sha256, metadata.original_filename) != (
+                str(document.content_id), document.checksum_sha256, document.original_filename,
+            ):
                 raise RepositoryIntegrityError("case document identity diverges from its listing")
             extracted = self.extractor.extract(opened.stream, document_sha256=document.checksum_sha256, page_cache=cache)
         if extracted.document_sha256 != document.checksum_sha256:
@@ -92,19 +97,23 @@ class CaseDocumentTexts:
         with self._lock:
             self._memo[key] = pages
             self._memo.move_to_end(key)
-            while len(self._memo) > self.max_entries:
+            while len(self._memo) > capacity:
                 self._memo.popitem(last=False)
         return pages
 
     def execute(self, workspace_id) -> tuple[CaseDocumentText, ...]:
         result = []
-        for document in self.list_documents.execute(workspace_id):
+        documents = tuple(self.list_documents.execute(workspace_id))
+        # A varredura sequencial de um caso com muitos documentos nao pode
+        # esvaziar a propria memoria a cada leitura.
+        capacity = max(self.max_entries, len(documents))
+        for document in documents:
             inventory = document.pje_inventory
             logical = tuple(
                 LogicalDocumentSpan(row["document_id"], row["title"], row["normalized_type"], row["page_start"], row["page_end"], row["available"])
                 for row in (inventory["documents"] if inventory is not None else ())
             )
             pending = bool(document.import_incomplete)
-            pages = () if pending else self._pages(workspace_id, document)
+            pages = () if pending else self._pages(workspace_id, document, capacity)
             result.append(CaseDocumentText(str(document.content_id), document.checksum_sha256, document.original_filename, pages, logical, pending))
         return tuple(result)

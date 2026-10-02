@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import re
+import unicodedata
 
 from ..judicial_domain import EntityKind, NormalizedProceduralRole
 from ..process_participants import (
@@ -17,12 +19,16 @@ from ..process_participants import (
     ParticipantReviewState,
     ParticipantSource,
     ProcessParticipantsRegister,
-    legacy_participants,
+    LEGACY_NAME_LIMIT,
+    legacy_projection,
     manual_participant_id,
+    representable_text,
+    participant_role_text,
     participant_to_mapping,
     participants_register_from_mapping,
     participants_register_to_mapping,
     source_participant_id,
+    source_role_display,
 )
 from .models import ProcessCaseData, thaw_payload
 from .pje_party_table import parse_pje_participant_rows
@@ -30,7 +36,7 @@ from .ports import ArtifactRevisionNotFound, RepositoryConflict, RepositoryInteg
 
 __all__ = [
     "ParticipantProposals", "GetProcessParticipants", "DecideProcessParticipants", "ProcessParticipantsView",
-    "participant_to_mapping",
+    "ProcessRecordRequired", "participant_to_mapping", "participant_role_text",
 ]
 
 _MAX_DECISION_NAME = 300
@@ -42,9 +48,46 @@ class ParticipantProposalSet:
     # Documentos ainda em leitura (#266): a ausencia de proposta nao e ausencia
     # de participante.
     pending_documents: tuple[str, ...]
-    # A leitura estruturada parou numa linha que nao reconhece; o restante da
-    # tabela pode conter participantes que nao foram propostos.
+    # A leitura estruturada parou numa linha que nao reconhece (ou a tabela
+    # continua de outra pagina sem cabecalho); o restante pode conter
+    # participantes que nao foram propostos.
     interrupted_pages: tuple[tuple[str, int], ...]
+
+
+class ProcessRecordRequired(ValueError):
+    """Participantes so sao registrados depois que os dados do processo existem."""
+
+
+def _capitalized(value: str) -> str:
+    return value[:1].upper() + value[1:]
+
+
+def _row_participant(workspace_id, document, page, mode, logical_id, row) -> CaseParticipant:
+    pole = ParticipantPole(row.pole.value)
+    source = ParticipantSource(
+        document.content_id, document.checksum_sha256, document.filename, page.number,
+        row.source_start, row.source_end, row.source_line.strip(), mode, logical_id,
+    )
+    representatives = tuple(
+        ParticipantRepresentative(
+            item.name.strip(), _capitalized(source_role_display(item.role)), None,
+            (ParticipantSource(
+                document.content_id, document.checksum_sha256, document.filename, page.number,
+                item.source_start, item.source_end, item.source_line.strip(), mode, logical_id,
+            ),),
+        )
+        for item in row.representatives
+    )
+    participant_id = source_participant_id(
+        workspace_id=str(workspace_id), content_id=document.content_id, logical_document_id=logical_id,
+        page=page.number, source_start=row.source_start, source_end=row.source_end, pole=pole, role_label=row.role,
+    )
+    return CaseParticipant(
+        participant_id, row.name.strip(), pole,
+        SOURCE_ROLE_NORMALIZATION.get(row.role, NormalizedProceduralRole.UNKNOWN),
+        row.role, EntityKind.UNKNOWN, representatives, (source,),
+        ParticipantOrigin.SOURCE, ParticipantReviewState.PROPOSED, None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,52 +96,52 @@ class ParticipantProposals:
     texts: object
 
     def execute(self, workspace_id) -> ParticipantProposalSet:
+        return self.from_texts(workspace_id, self.texts.execute(workspace_id))
+
+    def from_texts(self, workspace_id, documents) -> ParticipantProposalSet:
         proposals: dict[str, CaseParticipant] = {}
         pending: list[str] = []
         interrupted: list[tuple[str, int]] = []
-        for document in self.texts.execute(workspace_id):
+        for document in documents:
             if document.reading_pending:
                 pending.append(document.filename)
                 continue
+            previous_open = False
             for page in document.pages:
                 mode = page.extraction_mode.value
                 if mode not in ("NATIVE_TEXT", "OCR") or not page.text:
+                    previous_open = False
                     continue
                 # Peca excluida pelo perito nao sustenta proposta nova.
                 if document.excluded(page.number):
+                    previous_open = False
                     continue
                 parsed = parse_pje_participant_rows(page.text)
-                if parsed.terminated and parsed.rows:
-                    interrupted.append((document.filename, page.number))
+                broken = (parsed.opened and parsed.terminated) or (previous_open and parsed.leading_party_like)
+                previous_open = parsed.open_at_end
                 logical = document.logical_document_for(page.number)
                 logical_id = logical.document_id if logical is not None else None
                 for row in parsed.rows:
-                    pole = ParticipantPole(row.pole.value)
-                    source = ParticipantSource(
-                        document.content_id, document.checksum_sha256, document.filename, page.number,
-                        row.source_start, row.source_end, row.source_line.strip(), mode, logical_id,
-                    )
-                    representatives = tuple(
-                        ParticipantRepresentative(
-                            item.name.strip(), item.role.capitalize(), None,
-                            (ParticipantSource(
-                                document.content_id, document.checksum_sha256, document.filename, page.number,
-                                item.source_start, item.source_end, item.source_line.strip(), mode, logical_id,
-                            ),),
-                        )
-                        for item in row.representatives
-                    )
-                    participant_id = source_participant_id(
-                        workspace_id=str(workspace_id), content_id=document.content_id, logical_document_id=logical_id,
-                        page=page.number, source_start=row.source_start, source_end=row.source_end, pole=pole, role_label=row.role,
-                    )
-                    proposals[participant_id] = CaseParticipant(
-                        participant_id, row.name.strip(), pole,
-                        SOURCE_ROLE_NORMALIZATION.get(row.role, NormalizedProceduralRole.UNKNOWN),
-                        row.role, EntityKind.UNKNOWN, representatives, (source,),
-                        ParticipantOrigin.SOURCE, ParticipantReviewState.PROPOSED, None,
-                    )
+                    # Linha que nao cabe num participante (nome longo demais,
+                    # caractere que o Word recusa) e ignorada e dita, nunca
+                    # derruba as demais propostas.
+                    try:
+                        proposal = _row_participant(workspace_id, document, page, mode, logical_id, row)
+                    except ValueError:
+                        broken = True
+                        continue
+                    proposals[proposal.participant_id] = proposal
+                if broken:
+                    interrupted.append((document.filename, page.number))
         return ParticipantProposalSet(tuple(proposals.values()), tuple(pending), tuple(interrupted))
+
+
+@dataclass(frozen=True, slots=True)
+class ParticipantDuplicate:
+    proposal_id: str
+    # Participante ja registrado (ou proposta anterior) com o mesmo nome no mesmo polo.
+    matches_id: str
+    matches_name: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,20 +156,57 @@ class ProcessParticipantsView:
     interrupted_pages: tuple[tuple[str, int], ...]
     # Participante confirmado cuja peca de origem o perito excluiu depois.
     stale_participant_ids: tuple[str, ...]
+    # Polos cujo texto legado nao pode ser projetado sem corte (#274).
+    legacy_blocked_poles: tuple[ParticipantPole, ...] = ()
+    duplicates: tuple[ParticipantDuplicate, ...] = ()
+    # A releitura das fontes falhou agora; o registro gravado continua valendo.
+    proposals_unavailable: bool = False
+    # Sem dados do processo gravados nao ha captura para o laudo.
+    process_record_saved: bool = True
+
+
+def _source_is_current(participant: CaseParticipant, by_content) -> bool:
+    for source in participant.provenance:
+        document = by_content.get(source.content_id)
+        if document is None or document.checksum_sha256 != source.source_sha256 or document.excluded(source.page):
+            return False
+    return True
 
 
 def _stale_ids(register: ProcessParticipantsRegister, texts) -> tuple[str, ...]:
     by_content = {item.content_id: item for item in texts}
-    stale = []
-    for participant in register.participants:
-        if participant.origin is not ParticipantOrigin.SOURCE or participant.review_state is not ParticipantReviewState.CONFIRMED:
-            continue
-        for source in participant.provenance:
-            document = by_content.get(source.content_id)
-            if document is None or document.checksum_sha256 != source.source_sha256 or document.excluded(source.page):
-                stale.append(participant.participant_id)
-                break
-    return tuple(stale)
+    return tuple(
+        participant.participant_id for participant in register.participants
+        if participant.origin is ParticipantOrigin.SOURCE
+        and participant.review_state is ParticipantReviewState.CONFIRMED
+        and not _source_is_current(participant, by_content)
+    )
+
+
+def _name_key(value: str) -> str:
+    folded = unicodedata.normalize("NFKD", value.casefold())
+    letters = "".join(character for character in folded if not unicodedata.combining(character))
+    return " ".join(re.sub(r"[^0-9a-z]+", " ", letters).split())
+
+
+def _duplicates(register: ProcessParticipantsRegister, proposals: tuple[CaseParticipant, ...]) -> tuple[ParticipantDuplicate, ...]:
+    """Mesmo nome no mesmo polo: sinaliza, nunca decide."""
+    known = {}
+    for item in register.participants:
+        if item.review_state is ParticipantReviewState.CONFIRMED:
+            known.setdefault((item.pole, _name_key(item.name)), item)
+    found = []
+    for proposal in proposals:
+        key = (proposal.pole, _name_key(proposal.name))
+        match = known.get(key)
+        if match is not None:
+            found.append(ParticipantDuplicate(proposal.participant_id, match.participant_id, match.name))
+        else:
+            known[key] = proposal
+    return tuple(found)
+
+
+_READ_FAILURES = (ValueError, OSError, RuntimeError, RepositoryIntegrityError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,21 +226,44 @@ class GetProcessParticipants:
             raise RepositoryIntegrityError("participants register belongs to another workspace")
         return record, register
 
+    def _projection(self, workspace_id):
+        snapshot = self.get_process_case.execute(workspace_id)
+        data = snapshot.data if type(snapshot.data) is ProcessCaseData else ProcessCaseData.empty()
+        decided_at = snapshot.updated_at or "1970-01-01T00:00:00+00:00"
+        projected, blocked = legacy_projection(str(workspace_id), data.parte_requerente, data.parte_requerida, decided_at)
+        return snapshot, projected, blocked
+
     def effective(self, workspace_id):
         """Registro gravado, ou a projecao legada dos campos escalares."""
         record, register = self.stored(workspace_id)
         if register is not None:
             return record, register, False
-        snapshot = self.get_process_case.execute(workspace_id)
-        data = snapshot.data if type(snapshot.data) is ProcessCaseData else ProcessCaseData.empty()
-        decided_at = snapshot.updated_at or "1970-01-01T00:00:00+00:00"
-        projected = legacy_participants(str(workspace_id), data.parte_requerente, data.parte_requerida, decided_at)
+        _snapshot, projected, _blocked = self._projection(workspace_id)
         return None, projected, bool(projected.participants)
 
-    def execute(self, workspace_id) -> ProcessParticipantsView:
-        record, register, legacy = self.effective(workspace_id)
+    def process_record_saved(self, workspace_id) -> bool:
+        return self.get_process_case.execute(workspace_id).revision is not None
+
+    def read_sources(self, workspace_id):
+        """Texto das fontes e propostas, numa unica releitura."""
         texts = self.texts.execute(workspace_id) if self.texts is not None else ()
-        proposal_set = self.proposals.execute(workspace_id) if self.proposals is not None else ParticipantProposalSet((), (), ())
+        if self.proposals is None:
+            return texts, ParticipantProposalSet((), (), ())
+        return texts, self.proposals.from_texts(workspace_id, texts)
+
+    def execute(self, workspace_id) -> ProcessParticipantsView:
+        record, register = self.stored(workspace_id)
+        snapshot, projected, blocked = self._projection(workspace_id)
+        legacy = register is None and bool(projected.participants)
+        if register is None:
+            register = projected
+        else:
+            blocked = ()
+        unavailable = False
+        try:
+            texts, proposal_set = self.read_sources(workspace_id)
+        except _READ_FAILURES:
+            texts, proposal_set, unavailable = (), ParticipantProposalSet((), (), ()), True
         decided = {item.participant_id for item in register.participants}
         open_proposals = tuple(item for item in proposal_set.proposals if item.participant_id not in decided)
         return ProcessParticipantsView(
@@ -168,12 +271,14 @@ class GetProcessParticipants:
             record.created_at if record is not None else None,
             register, legacy, open_proposals,
             proposal_set.pending_documents, proposal_set.interrupted_pages,
-            _stale_ids(register, texts),
+            () if unavailable else _stale_ids(register, texts),
+            blocked, _duplicates(register, open_proposals), unavailable,
+            snapshot.revision is not None,
         )
 
 
 def _required_text(value: object, limit: int = _MAX_DECISION_NAME) -> str:
-    if type(value) is not str or not value.strip() or len(value.strip()) > limit or "\x00" in value:
+    if type(value) is not str or not representable_text(value.strip(), limit):
         raise ValueError("participant text is invalid")
     return value.strip()
 
@@ -192,12 +297,12 @@ def _representatives_from_dto(value: object) -> tuple[ParticipantRepresentative,
     return tuple(result)
 
 
-def _classification_from_dto(value: object) -> dict:
+def _classification_from_dto(value: object, name_limit: int = _MAX_DECISION_NAME) -> dict:
     if type(value) is not dict or set(value) != {"name", "pole", "procedural_role", "source_role_label", "person_type", "representatives"}:
         raise ValueError("participant request is invalid")
     try:
         return {
-            "name": _required_text(value["name"]),
+            "name": _required_text(value["name"], name_limit),
             "pole": ParticipantPole(value["pole"]),
             "procedural_role": NormalizedProceduralRole(value["procedural_role"]),
             "source_role_label": _required_text(value["source_role_label"], 120),
@@ -233,10 +338,18 @@ class DecideProcessParticipants:
             raise ValueError("participants request is invalid")
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("participants authority guard is unavailable")
+        sources_needed = action in ("CONFIRM", "REJECT", "RESTORE")
+        if sources_needed:
+            # Leitura (e eventual extracao) fora do guard; dentro dele a releitura
+            # encontra o texto memorizado e so revalida identidade e exclusao.
+            self.get_participants.read_sources(workspace_id)
         with self.authority_guard():
+            if not self.get_participants.process_record_saved(workspace_id):
+                raise ProcessRecordRequired("save the process record before deciding participants")
             record, register, _legacy = self.get_participants.effective(workspace_id)
             if (record.revision if record is not None else None) != expected_revision:
                 raise RepositoryConflict("expected participants revision is not latest")
+            texts, current = self.get_participants.read_sources(workspace_id) if sources_needed else ((), None)
             now = self.clock.now()
             if now.tzinfo is None or now.utcoffset() is None:
                 raise ValueError("participants clock requires timezone")
@@ -248,7 +361,6 @@ class DecideProcessParticipants:
                     raise ValueError("participants request is invalid")
                 if payload["proposal_id"] in index:
                     raise RepositoryConflict("participant proposal was already decided")
-                current = self.get_participants.proposals.execute(workspace_id) if self.get_participants.proposals is not None else None
                 proposal = next((item for item in (current.proposals if current is not None else ()) if item.participant_id == payload["proposal_id"]), None)
                 if proposal is None:
                     raise ValueError("participant proposal is stale or belongs to another workspace")
@@ -269,7 +381,8 @@ class DecideProcessParticipants:
                 current = participants[index[payload["participant_id"]]]
                 if current.review_state is not ParticipantReviewState.CONFIRMED:
                     raise ValueError("only a confirmed participant can be edited")
-                values = _classification_from_dto(payload["participant"])
+                legacy = current.origin is ParticipantOrigin.LEGACY_PROCESS_CASE
+                values = _classification_from_dto(payload["participant"], LEGACY_NAME_LIMIT if legacy else _MAX_DECISION_NAME)
                 if current.origin is ParticipantOrigin.LEGACY_PROCESS_CASE and values["pole"] is not current.pole:
                     raise ValueError("a legacy participant keeps its pole; add a new participant instead")
                 representatives = _merge_source_representatives(current.representatives, values["representatives"])
@@ -286,6 +399,9 @@ class DecideProcessParticipants:
                 expected_state = ParticipantReviewState.CONFIRMED if action == "REMOVE" else ParticipantReviewState.REJECTED
                 if current.review_state is not expected_state:
                     raise RepositoryConflict("participant decision changed")
+                # Restaurar e confirmar de novo: a fonte tem de continuar a mesma e nao excluida.
+                if action == "RESTORE" and current.origin is ParticipantOrigin.SOURCE and not _source_is_current(current, {item.content_id: item for item in texts}):
+                    raise ValueError("participant source changed or was excluded")
                 target = ParticipantReviewState.REJECTED if action == "REMOVE" else ParticipantReviewState.CONFIRMED
                 participants[index[current.participant_id]] = replace(current, review_state=target, decided_at=decided_at)
             elif action == "REORDER":

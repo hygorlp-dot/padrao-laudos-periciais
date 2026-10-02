@@ -344,9 +344,10 @@ _PARTICIPANT_SECTIONS = {
     "OUTROS INTERESSADOS": PjeParticipantPole.OTHER,
     "TERCEIROS INTERESSADOS": PjeParticipantPole.OTHER,
 }
+_PARTICIPANT_PARTY_ROLES = _PARTICIPANT_ACTIVE_ROLES | _PARTICIPANT_PASSIVE_ROLES | _PARTICIPANT_OTHER_ROLES
 _PARENTHESIZED_TOKEN = re.compile(r"\(([A-Z][A-Z ]{0,38}[A-Z])\)")
 _SECTION_LINE = re.compile(r"^\s*(POLO ATIVO|POLO PASSIVO|OUTROS PARTICIPANTES|OUTROS INTERESSADOS|TERCEIROS INTERESSADOS)\s*:?\s*$")
-_INLINE_POLE = re.compile(r"^\s*(POLO ATIVO|POLO PASSIVO|OUTROS PARTICIPANTES)\s*[:\-]\s*")
+_INLINE_POLE = re.compile(r"^\s*(POLO ATIVO|POLO PASSIVO|OUTROS PARTICIPANTES|OUTROS INTERESSADOS|TERCEIROS INTERESSADOS)\s*[:\-]\s*")
 
 
 def participant_pole_for_role(role: str) -> PjeParticipantPole:
@@ -383,6 +384,14 @@ class PjeParticipantRow:
 class PjeParticipantParseResult:
     rows: tuple[PjeParticipantRow, ...]
     terminated: bool
+    # A tabela foi aberta por cabecalho ou secao nesta pagina.
+    opened: bool = False
+    # A pagina termina dentro da tabela, sem linha que a encerre: a proxima
+    # pagina pode continuar a lista sem repetir o cabecalho.
+    open_at_end: bool = False
+    # Linha com papel de parte antes de qualquer cabecalho: continuacao de uma
+    # tabela da pagina anterior que esta leitura nao associa a nenhum polo.
+    leading_party_like: bool = False
 
 
 def _trimmed_span(normalized: str, start: int, end: int) -> tuple[int, int]:
@@ -403,7 +412,13 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
     rows: list[PjeParticipantRow] = []
     inside = False
     terminated = False
+    opened = False
+    leading_party_like = False
     section: PjeParticipantPole | None = None
+    # Indice da parte que pode receber procurador em linha de continuacao; zera
+    # a cada cabecalho ou secao, para nunca ligar o advogado de um polo a parte
+    # de outro.
+    continuation_target: int | None = None
     line_start = 0
     for raw_line in page_text.splitlines(keepends=True):
         line = raw_line.rstrip("\r\n")
@@ -411,13 +426,17 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
         line_start += len(raw_line)
         normalized, source_indices = _ascii_upper_with_source_indices(line)
         if _HEADER.fullmatch(normalized):
-            inside, terminated, section = True, False, None
+            inside, terminated, section, opened, continuation_target = True, False, None, True, None
             continue
         section_match = _SECTION_LINE.fullmatch(normalized)
         if section_match:
-            inside, terminated, section = True, False, _PARTICIPANT_SECTIONS[section_match.group(1)]
+            inside, terminated, section, opened, continuation_target = True, False, _PARTICIPANT_SECTIONS[section_match.group(1)], True, None
             continue
-        if not inside or terminated:
+        if not inside:
+            if not opened and any(match.group(1) in _PARTICIPANT_PARTY_ROLES for match in _PARENTHESIZED_TOKEN.finditer(normalized)):
+                leading_party_like = True
+            continue
+        if terminated:
             continue
         if not normalized.strip():
             continue
@@ -428,7 +447,7 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
             explicit = _PARTICIPANT_SECTIONS[inline.group(1)]
             content_start = inline.end()
         tokens = [match for match in _PARENTHESIZED_TOKEN.finditer(normalized, content_start)]
-        party_tokens = [match for match in tokens if match.group(1) in _PARTICIPANT_ACTIVE_ROLES | _PARTICIPANT_PASSIVE_ROLES | _PARTICIPANT_OTHER_ROLES]
+        party_tokens = [match for match in tokens if match.group(1) in _PARTICIPANT_PARTY_ROLES]
         representative_tokens = [match for match in tokens if match.group(1) in _PARTICIPANT_REPRESENTATIVE_ROLES]
         unknown_tokens = len(tokens) - len(party_tokens) - len(representative_tokens)
         line_end = _skip_whitespace_backward(normalized, 0, len(normalized))
@@ -443,10 +462,10 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
             # Continuacao: mais um procurador da parte da linha anterior.
             token = representative_tokens[0]
             name_start, name_end = _trimmed_span(normalized, content_start, token.start())
-            if rows and token.end() == line_end and name_end > name_start:
+            if continuation_target is not None and token.end() == line_end and name_end > name_start:
                 start, end = source(name_start, name_end)
-                previous = rows[-1]
-                rows[-1] = PjeParticipantRow(
+                previous = rows[continuation_target]
+                rows[continuation_target] = PjeParticipantRow(
                     previous.name, previous.role, previous.pole,
                     (*previous.representatives, PjeRepresentativeRow(page_text[start:end], token.group(1), line, start, end)),
                     previous.source_line, previous.source_start, previous.source_end,
@@ -482,4 +501,5 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
             continue
         start, end = source(name_start, name_end)
         rows.append(PjeParticipantRow(page_text[start:end], role, pole, representatives, line, start, end))
-    return PjeParticipantParseResult(tuple(rows), terminated)
+        continuation_target = len(rows) - 1
+    return PjeParticipantParseResult(tuple(rows), terminated, opened, inside and not terminated, leading_party_like)

@@ -51,8 +51,12 @@ perito (`PROCESS_PARTICIPANTS_V1`), não um campo singular.
 
 - A relação completa, com papel e representantes de cada participante, é escrita
   no item de identificação do laudo. Nenhum participante confirmado é omitido.
+- Perícia sem lista de participantes gravada: os campos usam o texto antigo de
+  "Parte requerente"/"Parte requerida", exato, ou "—". A exportação nunca falha
+  por isso.
 - O bookmark legado `POLOATIVO` (singular) continua preservado nos modelos antigos,
-  mas não é autoridade e não é preenchido com "o primeiro nome" do polo.
+  mas não é autoridade e o produto não o preenche: um campo singular não
+  representa vários participantes sem omitir alguém. Use `[[PARTICIPANTS_ACTIVE]]`.
 - Participante descartado ou removido pelo perito não aparece no documento; a
   decisão fica no histórico do registro.
 

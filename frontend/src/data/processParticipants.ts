@@ -35,6 +35,8 @@ export type Participant = {
   review_state: ParticipantReviewState;
   decided_at: string | null;
   edited: boolean;
+  // Papel como o laudo o escreve, com acentuação.
+  role_text?: string;
 };
 
 export type ParticipantsView = {
@@ -46,6 +48,10 @@ export type ParticipantsView = {
   pending_documents: string[];
   interrupted_pages: { filename: string; page: number }[];
   stale_participant_ids: string[];
+  legacy_blocked_poles: ParticipantPole[];
+  duplicates: { proposal_id: string; matches_id: string; matches_name: string }[];
+  proposals_unavailable: boolean;
+  process_record_saved: boolean;
 };
 
 export type ParticipantDraft = {
@@ -65,7 +71,7 @@ export type ParticipantAction =
   | { action: "REORDER"; payload: { participant_ids: string[] } };
 
 export class ParticipantsApiError extends Error {
-  constructor(readonly kind: "conflict" | "invalid" | "unavailable") {
+  constructor(readonly kind: "conflict" | "process_required" | "invalid" | "unavailable") {
     super(kind);
     this.name = "ParticipantsApiError";
   }
@@ -97,16 +103,28 @@ export const PERSON_TYPE_OPTIONS: { value: PersonType; label: string }[] = [
   { value: "AUTHORITY", label: "Autoridade" },
 ];
 
-export function roleLabel(participant: Pick<Participant, "origin" | "procedural_role" | "source_role_label">) {
+export function roleLabel(participant: Pick<Participant, "origin" | "procedural_role" | "source_role_label" | "role_text">) {
   if (participant.origin !== "SOURCE") return participant.source_role_label;
+  if (participant.role_text) return participant.role_text;
   return ROLE_OPTIONS.find((item) => item.value === participant.procedural_role && item.value !== "UNKNOWN" && item.value !== "OTHER")?.label
     ?? participant.source_role_label.toLowerCase();
 }
 
 const base = (workspace: string) => `/app-api/v1/workspaces/${encodeURIComponent(workspace)}/process-participants`;
 
+async function errorCode(response: Response) {
+  try {
+    const value = await response.json();
+    return typeof value?.error?.code === "string" ? value.error.code : "";
+  } catch {
+    return "";
+  }
+}
+
 async function read(response: Response): Promise<ParticipantsView> {
-  if (response.status === 409) throw new ParticipantsApiError("conflict");
+  if (response.status === 409) {
+    throw new ParticipantsApiError((await errorCode(response)) === "PROCESS_RECORD_REQUIRED" ? "process_required" : "conflict");
+  }
   if (response.status === 400 || response.status === 422) throw new ParticipantsApiError("invalid");
   if (!response.ok) throw new ParticipantsApiError("unavailable");
   const value = await response.json();
@@ -122,7 +140,13 @@ async function read(response: Response): Promise<ParticipantsView> {
   ) {
     throw new ParticipantsApiError("unavailable");
   }
-  return value as ParticipantsView;
+  return {
+    ...value,
+    legacy_blocked_poles: Array.isArray(value.legacy_blocked_poles) ? value.legacy_blocked_poles : [],
+    duplicates: Array.isArray(value.duplicates) ? value.duplicates : [],
+    proposals_unavailable: value.proposals_unavailable === true,
+    process_record_saved: value.process_record_saved !== false,
+  } as ParticipantsView;
 }
 
 export async function getParticipants(workspace: string, signal?: AbortSignal) {

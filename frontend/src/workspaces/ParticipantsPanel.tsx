@@ -36,9 +36,12 @@ function draftOf(participant: Participant): ParticipantDraft {
 function failure(error: unknown) {
   if (error instanceof ParticipantsApiError) {
     if (error.kind === "conflict") return "Os participantes mudaram em outra tela. Os dados foram recarregados; repita a ação.";
-    if (error.kind === "invalid") return "Confira os campos. Uma proposta que mudou na fonte precisa ser revista de novo.";
+    if (error.kind === "process_required") return "Confirme os dados do processo acima antes de registrar participantes.";
+    if (error.kind === "invalid") return "Confira os campos. Uma proposta que mudou na fonte ou cuja peça foi excluída precisa ser revista de novo.";
   }
-  return "Não foi possível salvar. Nada foi alterado; tente novamente.";
+  // Sem resposta clara, não dá para afirmar que nada foi gravado: a lista é
+  // recarregada para mostrar o estado real antes de uma nova tentativa.
+  return "Não foi possível confirmar o resultado. A lista foi recarregada com o que está gravado; confira antes de repetir.";
 }
 
 function originText(participant: Participant) {
@@ -191,8 +194,9 @@ function ParticipantForm({
   );
 }
 
-export function ParticipantsPanel({ workspaceId }: { workspaceId: string }) {
-  return <ParticipantsContent key={workspaceId} workspaceId={workspaceId} />;
+export function ParticipantsPanel({ workspaceId, processSaved = true }: { workspaceId: string; processSaved?: boolean }) {
+  // Gravar o processo pela primeira vez libera as decisões: a lista é relida.
+  return <ParticipantsContent key={`${workspaceId}:${processSaved}`} workspaceId={workspaceId} />;
 }
 
 function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
@@ -202,6 +206,15 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: "status" | "alert"; text: string } | null>(null);
   const [editing, setEditing] = useState<string | "new" | null>(null);
+  const focusAfterRender = useRef<string | null>(null);
+
+  // Depois de salvar, editar ou remover, a linha some ou muda: o foco vai para
+  // o título do polo (ou da seção) em vez de cair no início da página.
+  useEffect(() => {
+    if (!focusAfterRender.current) return;
+    document.getElementById(focusAfterRender.current)?.focus();
+    focusAfterRender.current = null;
+  }, [view]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -212,7 +225,7 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
     return () => controller.abort();
   }, [workspaceId, version]);
 
-  async function decide(decision: ParticipantAction, done: string) {
+  async function decide(decision: ParticipantAction, done: string, focusAfter = "participants-title") {
     if (!view) return;
     setBusy(true);
     setMessage(null);
@@ -221,9 +234,10 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
       setView(next);
       setEditing(null);
       setMessage({ kind: "status", text: done });
+      focusAfterRender.current = focusAfter;
     } catch (error) {
       setMessage({ kind: "alert", text: failure(error) });
-      if (error instanceof ParticipantsApiError && error.kind === "conflict") setVersion((value) => value + 1);
+      if (!(error instanceof ParticipantsApiError) || error.kind === "conflict" || error.kind === "unavailable") setVersion((value) => value + 1);
     } finally {
       setBusy(false);
     }
@@ -253,6 +267,9 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
   const removed = view.participants.filter((item) => item.review_state === "REJECTED");
   const stale = new Set(view.stale_participant_ids);
   const order = view.participants.map((item) => item.participant_id);
+  const locked = busy || !view.process_record_saved;
+  const duplicates = new Map(view.duplicates.map((item) => [item.proposal_id, item.matches_name]));
+  const poleHeading = (pole: ParticipantPole) => `participants-pole-${pole}`;
 
   function move(participant: Participant, offset: -1 | 1) {
     const samePole = active.filter((item) => item.pole === participant.pole);
@@ -263,21 +280,36 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
     const from = next.indexOf(participant.participant_id);
     const to = next.indexOf(target.participant_id);
     [next[from], next[to]] = [next[to], next[from]];
-    void decide({ action: "REORDER", payload: { participant_ids: next } }, "Ordem atualizada.");
+    void decide({ action: "REORDER", payload: { participant_ids: next } }, "Ordem atualizada.", poleHeading(participant.pole));
   }
 
   return (
     <section className="participants-panel" aria-labelledby="participants-title">
       <header className="participants-panel__header">
         <div>
-          <h2 id="participants-title">Participantes do processo</h2>
+          <h2 id="participants-title" tabIndex={-1}>Participantes do processo</h2>
           <p>Partes de cada polo, outros participantes e seus representantes. Só entra no laudo o que você confirmar.</p>
         </div>
         {editing === null ? (
-          <button type="button" className="text-action" disabled={busy} onClick={() => setEditing("new")}>Adicionar participante</button>
+          <button type="button" className="text-action" disabled={locked} onClick={() => setEditing("new")}>Adicionar participante</button>
         ) : null}
       </header>
 
+      {!view.process_record_saved ? (
+        <p className="participants-notice participants-notice--warning" role="status">
+          Confirme os dados do processo acima para confirmar, adicionar ou alterar participantes. As propostas continuam visíveis para conferência.
+        </p>
+      ) : null}
+      {view.legacy_blocked_poles.length ? (
+        <p className="participants-notice participants-notice--warning" role="status">
+          O texto antigo de {view.legacy_blocked_poles.map((pole) => POLE_LABELS[pole].toLowerCase()).join(" e ")} é longo demais ou tem caracteres que o Word não aceita, por isso não foi trazido para a lista. Nada foi cortado: registre as partes uma a uma.
+        </p>
+      ) : null}
+      {view.proposals_unavailable ? (
+        <p className="participants-notice participants-notice--warning" role="status">
+          Os documentos não puderam ser relidos agora, então não há propostas nesta visita. Os participantes já registrados continuam válidos.
+        </p>
+      ) : null}
       {view.legacy_projection ? (
         <p className="participants-notice" role="status">
           Estes nomes vieram dos campos “Parte requerente” e “Parte requerida” preenchidos antes. Revise-os; a primeira alteração passa a lista a valer como registro.
@@ -304,14 +336,17 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
                 <div className="participant-row__main">
                   <strong className="participant-name">{proposal.name}</strong>
                   <span className="participant-role">{POLE_LABELS[proposal.pole]} · {roleLabel(proposal)}</span>
+                  {duplicates.has(proposal.participant_id) ? (
+                    <p className="field-warning">Possível repetição de “{duplicates.get(proposal.participant_id)}”, já na lista. Se for a mesma parte, descarte esta proposta.</p>
+                  ) : null}
                   <Representatives participant={proposal} />
                   <SourceDetails participant={proposal} />
                 </div>
                 <div className="participant-row__actions">
-                  <button type="button" className="primary-action primary-action--compact" disabled={busy} onClick={() => void decide({ action: "CONFIRM", payload: { proposal_id: proposal.participant_id } }, `${proposal.name} confirmado.`)} aria-label={`Confirmar ${proposal.name}`}>
+                  <button type="button" className="primary-action primary-action--compact" disabled={locked} onClick={() => void decide({ action: "CONFIRM", payload: { proposal_id: proposal.participant_id } }, `${proposal.name} confirmado.`, poleHeading(proposal.pole))} aria-label={`Confirmar ${proposal.name}`}>
                     Confirmar
                   </button>
-                  <button type="button" className="text-action" disabled={busy} onClick={() => void decide({ action: "REJECT", payload: { proposal_id: proposal.participant_id } }, `${proposal.name} descartado.`)} aria-label={`Descartar ${proposal.name}`}>
+                  <button type="button" className="text-action" disabled={locked} onClick={() => void decide({ action: "REJECT", payload: { proposal_id: proposal.participant_id } }, `${proposal.name} descartado.`)} aria-label={`Descartar ${proposal.name}`}>
                     Descartar
                   </button>
                 </div>
@@ -322,14 +357,14 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
       ) : null}
 
       {editing === "new" ? (
-        <ParticipantForm initial={emptyDraft()} submitLabel="Adicionar participante" busy={busy} onCancel={() => setEditing(null)} onSubmit={(draft) => void decide({ action: "ADD_MANUAL", payload: { participant: draft } }, `${draft.name} adicionado.`)} />
+        <ParticipantForm initial={emptyDraft()} submitLabel="Adicionar participante" busy={busy} onCancel={() => setEditing(null)} onSubmit={(draft) => void decide({ action: "ADD_MANUAL", payload: { participant: draft } }, `${draft.name} adicionado.`, poleHeading(draft.pole))} />
       ) : null}
 
       {POLES.map((pole) => {
         const members = active.filter((item) => item.pole === pole);
         return (
           <section className="participants-pole" key={pole} aria-labelledby={`participants-pole-${pole}`}>
-            <h3 id={`participants-pole-${pole}`}>
+            <h3 id={poleHeading(pole)} tabIndex={-1}>
               {POLE_LABELS[pole]} <span className="participants-count">{members.length}</span>
             </h3>
             {members.length === 0 ? (
@@ -345,7 +380,7 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
                         busy={busy}
                         legacyPole={participant.origin === "LEGACY_PROCESS_CASE"}
                         onCancel={() => setEditing(null)}
-                        onSubmit={(draft) => void decide({ action: "EDIT", payload: { participant_id: participant.participant_id, participant: draft } }, "Participante atualizado.")}
+                        onSubmit={(draft) => void decide({ action: "EDIT", payload: { participant_id: participant.participant_id, participant: draft } }, "Participante atualizado.", poleHeading(draft.pole))}
                       />
                     ) : (
                       <>
@@ -359,16 +394,16 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
                           <SourceDetails participant={participant} />
                         </div>
                         <div className="participant-row__actions">
-                          <button type="button" className="text-action" disabled={busy} onClick={() => setEditing(participant.participant_id)} aria-label={`Editar ${participant.name}`}>
+                          <button type="button" className="text-action" disabled={locked} onClick={() => setEditing(participant.participant_id)} aria-label={`Editar ${participant.name}`}>
                             Editar
                           </button>
-                          <button type="button" className="text-action" disabled={busy} onClick={() => void decide({ action: "REMOVE", payload: { participant_id: participant.participant_id } }, `${participant.name} removido. Ele continua no histórico.`)} aria-label={`Remover ${participant.name}`}>
+                          <button type="button" className="text-action" disabled={locked} onClick={() => void decide({ action: "REMOVE", payload: { participant_id: participant.participant_id } }, `${participant.name} removido. Ele continua no histórico.`, poleHeading(pole))} aria-label={`Remover ${participant.name}`}>
                             Remover
                           </button>
                           {members.length > 1 ? (
                             <span className="participant-order">
-                              <button type="button" className="icon-action" disabled={busy || index === 0} aria-label={`Mover ${participant.name} para cima`} onClick={() => move(participant, -1)}>↑</button>
-                              <button type="button" className="icon-action" disabled={busy || index === members.length - 1} aria-label={`Mover ${participant.name} para baixo`} onClick={() => move(participant, 1)}>↓</button>
+                              <button type="button" className="icon-action" disabled={locked || index === 0} aria-label={`Mover ${participant.name} para cima`} onClick={() => move(participant, -1)}>↑</button>
+                              <button type="button" className="icon-action" disabled={locked || index === members.length - 1} aria-label={`Mover ${participant.name} para baixo`} onClick={() => move(participant, 1)}>↓</button>
                             </span>
                           ) : null}
                         </div>
@@ -393,7 +428,7 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
                   <span className="participant-role">{POLE_LABELS[participant.pole]} · {roleLabel(participant)}</span>
                 </div>
                 <div className="participant-row__actions">
-                  <button type="button" className="text-action" disabled={busy} onClick={() => void decide({ action: "RESTORE", payload: { participant_id: participant.participant_id } }, `${participant.name} restaurado.`)} aria-label={`Restaurar ${participant.name}`}>
+                  <button type="button" className="text-action" disabled={locked} onClick={() => void decide({ action: "RESTORE", payload: { participant_id: participant.participant_id } }, `${participant.name} restaurado.`, poleHeading(participant.pole))} aria-label={`Restaurar ${participant.name}`}>
                     Restaurar
                   </button>
                 </div>

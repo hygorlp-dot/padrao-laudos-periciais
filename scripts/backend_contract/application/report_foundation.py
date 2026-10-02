@@ -230,7 +230,16 @@ class GetReportProcess:
     get_latest_revision: object
 
     def execute(self, workspace_id):
-        record = self.get_latest_revision.execute(workspace_id, "PROCESS_CASE", "PROCESS_CASE")
+        try:
+            record = self.get_latest_revision.execute(workspace_id, "PROCESS_CASE", "PROCESS_CASE")
+        except ArtifactRevisionNotFound:
+            # Participante decidido sem dados do processo nao pode sumir do laudo
+            # em silencio; a decisao ja exige o processo gravado (#274).
+            try:
+                self.get_latest_revision.execute(workspace_id, PROCESS_PARTICIPANTS_KIND, PROCESS_PARTICIPANTS_ID)
+            except ArtifactRevisionNotFound:
+                raise
+            raise ValueError("report participants exist without the process record") from None
         if record.workspace_id != workspace_id:
             raise ValueError("report process workspace mismatch")
         data = ProcessCaseData.from_mapping(thaw_payload(record.payload)).as_dict()
@@ -264,7 +273,10 @@ def _capture_process(get_process_record, workspace_id):
 
 def _process_reasons(snapshot, get_process_record, workspace_id):
     if snapshot.process_record is None:
-        return ()
+        # Laudo capturado sem processo: so participantes confirmados depois o
+        # tornam desatualizado (o item 1.1 passaria a ter conteudo).
+        current = _capture_process(get_process_record, workspace_id)
+        return ("process participants changed",) if current is not None and current.confirmed_participants else ()
     return () if _capture_process(get_process_record, workspace_id) == snapshot.process_record else ("process record changed",)
 
 

@@ -300,16 +300,25 @@ def _material_processing_dto(record: PrivateContentMetadata, state: str, expecte
 
 
 def _participants_dto(view) -> dict:
-    from ..application.process_participants import participant_to_mapping
+    from ..application.process_participants import participant_role_text, participant_to_mapping
+
+    def item_dto(item):
+        # Papel como o laudo o escreve (com acento), para a tela nao divergir do Word.
+        return {**participant_to_mapping(item), "role_text": participant_role_text(item)}
+
     return {
         "revision": view.revision,
         "updated_at": view.updated_at,
         "legacy_projection": view.legacy_projection,
-        "participants": [participant_to_mapping(item) for item in view.register.participants],
-        "proposals": [participant_to_mapping(item) for item in view.proposals],
+        "participants": [item_dto(item) for item in view.register.participants],
+        "proposals": [item_dto(item) for item in view.proposals],
         "pending_documents": list(view.pending_documents),
         "interrupted_pages": [{"filename": filename, "page": page} for filename, page in view.interrupted_pages],
         "stale_participant_ids": list(view.stale_participant_ids),
+        "legacy_blocked_poles": [pole.value for pole in view.legacy_blocked_poles],
+        "duplicates": [{"proposal_id": item.proposal_id, "matches_id": item.matches_id, "matches_name": item.matches_name} for item in view.duplicates],
+        "proposals_unavailable": view.proposals_unavailable,
+        "process_record_saved": view.process_record_saved,
     }
 
 
@@ -827,12 +836,15 @@ class LocalApi:
                         return _error(405, "METHOD_NOT_ALLOWED")
                     if self._services.get_property_proposals is None:
                         return _error(503, "PROPERTY_PROPOSALS_UNAVAILABLE")
-                    proposals = self._services.get_property_proposals.execute(workspace_id)
+                    read = getattr(self._services.get_property_proposals, "read", None)
+                    if callable(read):
+                        proposals, pending = read(workspace_id)
+                    else:
+                        proposals, pending = self._services.get_property_proposals.execute(workspace_id), ()
                     values_by_field = {field: {p.value for p in proposals if p.field == field} for field, *_ in PROPERTY_FIELDS}
-                    pending = getattr(self._services.get_property_proposals, "pending_documents", None)
                     return _json_response(200, {"workspace_id": str(workspace_id), "proposals": [
                         {**asdict(p), "state": "CONFLICTING" if len(values_by_field[p.field]) > 1 else "PROPOSED"} for p in proposals
-                    ], "pending_documents": list(pending(workspace_id)) if callable(pending) else []})
+                    ], "pending_documents": list(pending)})
                 if normalized_method == "GET":
                     try:
                         record, property_record = self._services.get_property_record.execute(workspace_id)
@@ -872,9 +884,13 @@ class LocalApi:
                     dto = self._request_dto(request_headers, body)
                     if set(dto) != {"action", "expected_revision", "payload"} or type(dto["action"]) is not str:
                         raise ValueError("participants request is invalid")
-                    self._services.decide_process_participants.execute(
-                        workspace_id, action=dto["action"], expected_revision=dto["expected_revision"], payload=dto["payload"],
-                    )
+                    from ..application.process_participants import ProcessRecordRequired
+                    try:
+                        self._services.decide_process_participants.execute(
+                            workspace_id, action=dto["action"], expected_revision=dto["expected_revision"], payload=dto["payload"],
+                        )
+                    except ProcessRecordRequired:
+                        return _error(409, "PROCESS_RECORD_REQUIRED", "salve os dados do processo antes de registrar participantes")
                 elif normalized_method != "GET":
                     return _error(405, "METHOD_NOT_ALLOWED")
                 return _json_response(200, _participants_dto(self._services.get_process_participants.execute(workspace_id)))

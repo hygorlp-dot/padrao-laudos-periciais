@@ -47,6 +47,10 @@ function view(overrides: Partial<ParticipantsView> = {}): ParticipantsView {
     pending_documents: [],
     interrupted_pages: [],
     stale_participant_ids: [],
+    legacy_blocked_poles: [],
+    duplicates: [],
+    proposals_unavailable: false,
+    process_record_saved: true,
     ...overrides,
   };
 }
@@ -189,5 +193,48 @@ describe("participants panel (#268)", () => {
     expect(screen.queryByText("Nenhum participante confirmado neste polo.")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Tentar novamente" }));
     expect(await screen.findAllByText("Nenhum participante confirmado neste polo.")).toHaveLength(3);
+  });
+
+  test("without a saved process record the panel explains and locks decisions", async () => {
+    const proposal = participant({ participant_id: "PARTICIPANT-SRC-" + "A".repeat(24), origin: "SOURCE", provenance: [SOURCE], name: "BETA", review_state: "PROPOSED", decided_at: null, pole: "PASSIVE", source_role_label: "REU", role_text: "parte ré" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, view({ process_record_saved: false, proposals: [proposal], legacy_blocked_poles: ["ACTIVE"], proposals_unavailable: true }))));
+    render(<ParticipantsPanel workspaceId={ID} />);
+    expect(await screen.findByText(/Confirme os dados do processo acima/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Confirmar BETA" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Adicionar participante" })).toBeDisabled();
+    expect(screen.getByText(/Nada foi cortado: registre as partes uma a uma/)).toBeInTheDocument();
+    expect(screen.getByText(/não puderam ser relidos agora/)).toBeInTheDocument();
+    expect(screen.getByText(/Polo passivo · parte ré/)).toBeInTheDocument();
+  });
+
+  test("flags a possible duplicate and never claims nothing changed on an unclear failure", async () => {
+    const legacy = participant({ participant_id: "PARTICIPANT-LEGACY-PASSIVE", origin: "LEGACY_PROCESS_CASE", name: "CAIXA", pole: "PASSIVE", source_role_label: "Parte requerida" });
+    const proposal = participant({ participant_id: "PARTICIPANT-SRC-" + "B".repeat(24), origin: "SOURCE", provenance: [SOURCE], name: "CAIXA", review_state: "PROPOSED", decided_at: null, pole: "PASSIVE", source_role_label: "REU" });
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(json(200, view({ participants: [legacy], proposals: [proposal], duplicates: [{ proposal_id: proposal.participant_id, matches_id: legacy.participant_id, matches_name: "CAIXA" }] })))
+      .mockResolvedValueOnce(json(500, {}))
+      .mockResolvedValueOnce(json(200, view({ revision: 1, participants: [legacy] })));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<ParticipantsPanel workspaceId={ID} />);
+    expect(await screen.findByText(/Possível repetição de “CAIXA”/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Confirmar CAIXA" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("A lista foi recarregada com o que está gravado");
+    expect(alert).not.toHaveTextContent("Nada foi alterado");
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  test("after removing, focus moves to the pole heading instead of the page start", async () => {
+    const alfa = participant({ name: "ALFA" });
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(json(200, view({ revision: 1, participants: [alfa] })))
+      .mockResolvedValueOnce(json(200, view({ revision: 2, participants: [{ ...alfa, review_state: "REJECTED" }] })));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<ParticipantsPanel workspaceId={ID} />);
+    await user.click(await screen.findByRole("button", { name: "Remover ALFA" }));
+    await screen.findByText(/ALFA removido/);
+    expect(document.activeElement).toBe(screen.getByRole("heading", { name: /Polo ativo/ }));
   });
 });

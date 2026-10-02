@@ -39,6 +39,7 @@ from ..application.artifact_ownership import (
     USER_DEFINED_ARTIFACT_KINDS,
 )
 from ..application.content_roles import validate_private_content_role_payload
+from ..application.pje_party_table import parse_pje_participant_rows
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..application.construction_defect_analysis import (
@@ -908,6 +909,7 @@ class VerifyWorkspaceBackup:
         }
         private_by_id = {str(item.metadata.content_id): item for item in private_contents}
         property_source_proposals = {}
+        participant_source_pages = {}
         question_source_proposals = {}
         for record in revisions:
             if record.artifact_kind == "CASE_ANALYSIS_SNAPSHOT_V1":
@@ -973,6 +975,32 @@ class VerifyWorkspaceBackup:
                     sources = (*participant.provenance, *(item for representative in participant.representatives for item in representative.provenance))
                     if any(private_authority.get(item.content_id) != item.source_sha256 for item in sources):
                         raise RepositoryIntegrityError("backup participant source authority is incomplete")
+                    # O nome, o trecho e a posicao tem de sair dos bytes, como a
+                    # evidencia do imovel: a linha da tabela e relida da pagina.
+                    for source in participant.provenance:
+                        if source.content_id not in participant_source_pages:
+                            from .pdf_text import LocalPdfTextExtractor
+                            from .rapid_ocr import RapidOcrLatinEngine
+                            private = private_by_id[source.content_id]
+                            try:
+                                extracted = LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()).extract(BytesIO(private.content), document_sha256=private.metadata.checksum_sha256)
+                            except Exception as exc:
+                                raise RepositoryIntegrityError("backup participant source evidence cannot be verified locally") from exc
+                            participant_source_pages[source.content_id] = {page.number: page for page in extracted.pages}
+                        page = participant_source_pages[source.content_id].get(source.page)
+                        if page is None or page.extraction_mode.value != source.extraction_mode or not page.text:
+                            raise RepositoryIntegrityError("backup participant source evidence diverges from document bytes")
+                        row = next((item for item in parse_pje_participant_rows(page.text).rows if (item.source_start, item.source_end) == (source.source_start, source.source_end)), None)
+                        if (
+                            row is None or row.source_line.strip() != source.excerpt
+                            or (not participant.edited and row.name.strip() != participant.name)
+                        ):
+                            raise RepositoryIntegrityError("backup participant source evidence diverges from document bytes")
+                        derived = {(item.source_start, item.source_end, item.name.strip()) for item in row.representatives}
+                        for representative in participant.representatives:
+                            for item in representative.provenance:
+                                if item.content_id == source.content_id and item.page == source.page and (item.source_start, item.source_end, representative.name) not in derived:
+                                    raise RepositoryIntegrityError("backup participant source evidence diverges from document bytes")
             elif record.artifact_kind == "PJE_INTAKE_V1":
                 # O inventario nomeia a fonte privada de que foi derivado. Sem
                 # este fecho, um backup podia ser certificado intacto e restaurar
