@@ -1514,8 +1514,8 @@ class _WordImageLayout:
     following_text: str | None = None
     preceding_occurrence: int | None = None
     following_occurrence: int | None = None
-    # Âncora com behindDoc="1": desenhada atrás do texto e de tudo o que o corpo
-    # da página desenha por cima dela.
+    # An anchor with behindDoc="1": painted behind the text and behind every
+    # picture the page body draws over it.
     behind: bool = False
 
 
@@ -1528,7 +1528,7 @@ class _PdfImageLayout:
     top: float
     page_width: float
     page_height: float
-    # Posição na ordem de desenho do conteúdo da página (quem vem depois cobre).
+    # Position in the page content draw order (a later object covers an earlier one).
     order: int = 0
 
 

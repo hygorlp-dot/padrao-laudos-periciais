@@ -64,6 +64,12 @@ class InstallationAssetRejected(ValueError):
         self.reason = reason
 
 
+def validate_installation_template(content: bytes, output_kind: str) -> None:
+    """O modelo Word enviado passa pela mesma validação do artefato final."""
+    from ..delivery_renderer import validate_final_artifact
+    validate_final_artifact(content, output_kind)
+
+
 class InstallationSettingsUnavailable(RepositoryError):
     """O arquivo da instalação não abriu; perícias existentes seguem com o snapshot delas."""
 

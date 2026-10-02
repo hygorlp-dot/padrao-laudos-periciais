@@ -19,9 +19,8 @@ from ..application.site_location import ConfirmSiteLocation, GetSiteLocation, Pr
 from ..application.property_record import GetPropertyRecord, GetPropertyProposals, SavePropertyRecord
 from ..application.case_document_texts import CaseDocumentTexts
 from ..application.legal_editorial_preflight import GetReportPreflight
-from ..application.installation_settings import CreateWorkspaceWithSettings, GenerateTestDocument, InstallationSettings, WorkspaceSettings
+from ..application.installation_settings import CreateWorkspaceWithSettings, GenerateTestDocument, InstallationSettings, WorkspaceSettings, validate_installation_template
 from ..infrastructure.installation_store import SQLiteInstallationStore, installation_database_path
-from ..delivery_renderer import validate_final_artifact
 from ..application.process_participants import DecideProcessParticipants, GetProcessParticipants, ParticipantProposals
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.workspace_recovery import (
@@ -453,7 +452,7 @@ def build_local_api(
     )
     append_artifact_revision = AppendArtifactRevision(store.revisions, local_clock, local_ids)
     get_latest_artifact = GetLatestArtifact(store.revisions)
-    installation_settings = InstallationSettings(installation_store, local_clock, local_ids, validate_final_artifact) if installation_store is not None else None
+    installation_settings = InstallationSettings(installation_store, local_clock, local_ids, validate_installation_template) if installation_store is not None else None
     workspace_settings = (
         WorkspaceSettings(
             installation_settings, store.revisions, get_latest_artifact, generic_store,
