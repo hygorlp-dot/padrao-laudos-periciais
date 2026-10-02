@@ -151,6 +151,33 @@ describe("Configurações da instalação (#270)", () => {
     click.mockRestore();
   });
 
+  test("a custom template in use cannot be swapped, and a DOCM template downloads a .docm test document", async () => {
+    const base = overview();
+    const asset = { asset_id: "ASSET-1", role: "DEFAULT_WORD_TEMPLATE", filename: "escritorio.docm", media_type: "application/vnd.ms-word.document.macroEnabled.12", byte_size: 10, sha256: "a".repeat(64), width: null, height: null };
+    const custom = {
+      ...base,
+      settings: { ...base.settings, DEFAULT_TEMPLATE_SELECTION_V1: { ...base.settings.DEFAULT_TEMPLATE_SELECTION_V1, configured: true, revision: 1, payload: { mode: "CUSTOM", template_sha256: "a".repeat(64) } } },
+      assets: { ...base.assets, DEFAULT_WORD_TEMPLATE: { revision: 1, asset } },
+      readiness: { ...base.readiness, template: "CUSTOM" },
+    } as InstallationOverview;
+    vi.stubGlobal("URL", { ...URL, createObjectURL: vi.fn(() => "blob:teste"), revokeObjectURL: vi.fn() });
+    const fetchSpy = vi.fn()
+      .mockResolvedValueOnce(json(200, custom))
+      .mockResolvedValueOnce(new Response("docm", { status: 200, headers: { "Content-Type": "application/vnd.ms-word.document.macroEnabled.12" } }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const downloads: string[] = [];
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) { downloads.push(this.download); });
+    const user = userEvent.setup();
+    render(<SettingsView />);
+    const swap = await screen.findByRole("button", { name: "Trocar modelo Word (escritorio.docm)" });
+    expect(swap).toBeDisabled();
+    expect(swap).toHaveAccessibleDescription(/escolha antes o modelo padrão do produto/);
+    await user.click(screen.getByRole("button", { name: "Gerar documento de teste" }));
+    await screen.findByText("Documento de teste baixado.");
+    expect(downloads).toEqual(["documento-de-teste.docm"]);
+    click.mockRestore();
+  });
+
   test("load failure is recoverable", async () => {
     const fetchSpy = vi.fn().mockResolvedValueOnce(json(503, {})).mockResolvedValueOnce(json(200, overview()));
     vi.stubGlobal("fetch", fetchSpy);

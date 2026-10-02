@@ -166,12 +166,17 @@ class SQLiteInstallationStore:
         self._lock = RLock()
         try:
             self._connection = sqlite3.connect(str(path), timeout=timeout, isolation_level=None, check_same_thread=False)
-            _migrate(self._connection)
-        except PersistenceSchemaError:
-            self._connection.close()
-            raise
         except sqlite3.Error as exc:
             raise RepositoryError("falha ao abrir as configurações da instalação") from exc
+        try:
+            _migrate(self._connection)
+        except sqlite3.Error as exc:
+            self._connection.close()
+            raise RepositoryError("falha ao abrir as configurações da instalação") from exc
+        except BaseException:
+            # Esquema, checksum ou sequência inválidos: a conexão não fica aberta.
+            self._connection.close()
+            raise
 
     @contextmanager
     def _transaction(self, mode: str = "BEGIN"):

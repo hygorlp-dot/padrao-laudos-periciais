@@ -434,6 +434,9 @@ class RenderDeliveryPackage:
         if report_pending_markers(report):
             raise ValueError("report carries open pending markers")
         word, pdf, pdf_renderer = self._paginated(template.content, report, manifest, self._figure_images(workspace_id, report))
+        from ..legal_editorial_preflight import word_pending_markers
+        if word_pending_markers(word):
+            raise ValueError("bound Word carries open pending markers")
         word_digest, word_size, word_media = validate_final_artifact(word, manifest.output_kind)
         stem = f"laudo-{snapshot.delivery_id.lower()}-r{snapshot.revision + 1}"
         word_name = f"{stem}.{manifest.output_kind.lower()}"

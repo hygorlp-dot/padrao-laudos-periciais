@@ -38,13 +38,11 @@ class GetReportPreflight:
             }
             for item in result.findings
         ]
-        # Marcador fora das afirmações (por exemplo, num campo de contexto) também bloqueia.
-        extra = len(_preflight.report_pending_markers(report)) - sum(1 for item in result.findings if item.code.value == "PENDING_MARKER")
         return {
             "report_revision": record.revision if record is not None else None,
             "profile_id": result.profile_id,
             "profile_label": PROFILE_LABEL,
-            "blocking": result.blocking or extra > 0,
+            "blocking": result.blocking,
             "findings": findings,
             "sources": [dict(item) for item in REFERENCE_SOURCES],
         }

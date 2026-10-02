@@ -61,4 +61,21 @@ describe("configurações desta perícia (#270)", () => {
     expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ include_profile: true, expected_snapshot_revision: 1, expected_profile_revision: 1 });
     expect(within(panel).getByText("Igual às configurações atuais.")).toBeInTheDocument();
   });
+
+  test("updating only the settings says the professional profile of the case did not change", async () => {
+    const view = { revision: 1, updated_at: "2026-10-01T12:00:00+00:00", snapshot: { reason: "WORKSPACE_CREATED", assets: [] }, differences: { snapshot_revision: 1, profile_revision: 1, settings_changes: ["ASSET:PRIMARY_LOGO"], profile_changes: ["full_name"] } };
+    const updated = { ...view, revision: 2, differences: { snapshot_revision: 2, profile_revision: 1, settings_changes: [], profile_changes: ["full_name"] } };
+    const fetchSpy = vi.fn().mockResolvedValueOnce(json(200, view)).mockResolvedValueOnce(json(200, updated));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<WorkspaceSettingsPanel workspaceId={ID} />);
+    const panel = await screen.findByRole("region", { name: "Configurações desta perícia" });
+    await user.click(within(panel).getByRole("button", { name: "Atualizar a partir das configurações" }));
+    await user.click(within(panel).getByRole("button", { name: "Confirmar atualização" }));
+    expect(await within(panel).findByText(/o perfil profissional desta perícia não mudou/)).toBeInTheDocument();
+    expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ include_profile: false, expected_snapshot_revision: 1, expected_profile_revision: null });
+    // Só o perfil difere e a caixa está desmarcada: confirmar não faria nada.
+    await user.click(within(panel).getByRole("button", { name: "Atualizar a partir das configurações" }));
+    expect(within(panel).getByRole("button", { name: "Confirmar atualização" })).toBeDisabled();
+  });
 });

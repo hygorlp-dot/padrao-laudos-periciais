@@ -1,5 +1,6 @@
 from dataclasses import replace
 from contextlib import nullcontext
+import hashlib
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -201,6 +202,18 @@ def test_expert_profile_is_single_source_and_cannot_be_duplicated_in_report_fiel
     raw["sections"][0]["professional_registration"] = "Duplicated registration"
     with pytest.raises(ValueError):
         report_snapshot_from_mapping(raw)
+
+
+def test_expert_profile_digest_is_the_stored_revision_checksum_and_stable_for_legacy_profiles():
+    # O laudo cita o perfil pelo checksum da revisao gravada; o backup confere
+    # um contra o outro. Campos opcionais vazios (#270) nao entram em nenhum
+    # dos dois, e um perfil anterior a eles conserva o mesmo digest.
+    legacy = payload()["expert_profile"]
+    profile = expert_profile_from_mapping(legacy)
+    stored = json.dumps(expert_profile_to_mapping(profile), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert report_upstream_digest(profile) == hashlib.sha256(stored.encode("utf-8")).hexdigest()
+    before_270 = json.dumps(legacy, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    assert report_upstream_digest(profile) == hashlib.sha256(before_270.encode("utf-8")).hexdigest()
 
 
 def test_default_editorial_profile_is_exact_and_overrides_are_explicit():

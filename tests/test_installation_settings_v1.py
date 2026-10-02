@@ -88,6 +88,36 @@ def test_store_is_append_only_survives_restart_and_fails_closed_on_unknown_schem
         SQLiteInstallationStore(foreign)
 
 
+def test_unreadable_installation_file_disables_settings_but_never_the_existing_cases(tmp_path):
+    # Revisão do 2º conjunto, P2-2: o arquivo da instalação adulterado falha
+    # fechado para as configurações, sem levar junto as perícias.
+    runtime = _runtime(tmp_path)
+    try:
+        _upload(runtime, "PRIMARY_LOGO", _png(), "logo.png", "image/png", None)
+        _, existing = _http(runtime, "POST", "/v1/workspaces", {"name": "Existente"})
+    finally:
+        runtime.close()
+    connection = sqlite3.connect(installation_database_path(tmp_path / "pericias.sqlite3"))
+    connection.execute("UPDATE installation_setting_revisions SET payload_json = '{\"a\":9}' WHERE revision = 1")
+    connection.commit()
+    connection.close()
+    runtime = _runtime(tmp_path)
+    try:
+        status, listed = _http(runtime, "GET", "/v1/workspaces")
+        assert status == 200 and [item["workspace_id"] for item in listed["items"]] == [existing["workspace_id"]]
+        assert _http(runtime, "GET", f"/v1/workspaces/{existing['workspace_id']}")[0] == 200
+        status, body = _http(runtime, "GET", "/v1/installation/settings")
+        assert status == 503 and body["error"]["code"] == "SETTINGS_UNAVAILABLE"
+        assert _http(runtime, "GET", "/v1/installation/test-document")[0] == 503
+        status, body = _http(runtime, "GET", f"/v1/workspaces/{existing['workspace_id']}/settings-snapshot")
+        assert status == 503 and body["error"]["code"] == "SETTINGS_UNAVAILABLE"
+        status, body = _http(runtime, "POST", "/v1/workspaces", {"name": "Nova"})
+        assert status == 503 and body["error"]["code"] == "SETTINGS_UNAVAILABLE"
+        assert len(_http(runtime, "GET", "/v1/workspaces")[1]["items"]) == 1, "no half-created case"
+    finally:
+        runtime.close()
+
+
 def test_installation_file_sits_next_to_the_database_and_never_inside_a_workspace(tmp_path):
     path = installation_database_path(tmp_path / "dados" / "pericias.sqlite3")
     assert path.parent == tmp_path / "dados" and path.name == ".pericias.sqlite3.installation.sqlite3"
@@ -341,6 +371,62 @@ def test_default_template_follows_the_case_snapshot_and_custom_word_is_the_visua
         assert len(stored) == before, "the custom template is reused, never regenerated"
         assert manifest.template_id == "ESCRITORIO-SINTETICO-V1" and record.checksum_sha256 == sha
         assert [item.field for item in manifest.bindings] == ["EXPERT_FULL_NAME", "EXPERT_REGISTRATION", "REPORT_ID"]
+    finally:
+        runtime.close()
+
+
+def _custom_template(template_id: bytes) -> bytes:
+    from zipfile import ZipFile
+    from tests.test_default_report_template_v1 import _report
+    from scripts.backend_contract.report_default_template import DEFAULT_TEMPLATE_ID, default_report_template
+    with ZipFile(BytesIO(default_report_template(_report().editorial_profile))) as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    entries["docProps/custom.xml"] = entries["docProps/custom.xml"].replace(DEFAULT_TEMPLATE_ID.encode(), template_id)
+    output = BytesIO()
+    with ZipFile(output, "w") as target:
+        for name, data in entries.items():
+            target.writestr(name, data)
+    return output.getvalue()
+
+
+def test_custom_selection_always_names_the_stored_template_so_case_creation_never_breaks(tmp_path):
+    # Revisão do 2º conjunto, P1-3: trocar ou restaurar o modelo com o modo
+    # personalizado ativo deixava a seleção apontando para outros bytes, e toda
+    # perícia nova falhava com cópias de ativo órfãs.
+    docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    runtime = _runtime(tmp_path)
+    try:
+        _, first = _upload(runtime, "DEFAULT_WORD_TEMPLATE", _custom_template(b"ESCRITORIO-A-V1"), "a.docx", docx, None)
+        sha_a = first["assets"]["DEFAULT_WORD_TEMPLATE"]["asset"]["sha256"]
+        assert _http(runtime, "PUT", "/v1/installation/settings/DEFAULT_TEMPLATE_SELECTION_V1", {"expected_revision": None, "payload": {"mode": "CUSTOM", "template_sha256": sha_a}})[0] == 200
+        status, refused = _upload(runtime, "DEFAULT_WORD_TEMPLATE", _custom_template(b"ESCRITORIO-B-V1"), "b.docx", docx, 1)
+        assert status == 409 and refused["error"]["code"] == "TEMPLATE_IN_USE"
+        status, refused = _http(runtime, "POST", "/v1/installation/assets/DEFAULT_WORD_TEMPLATE/removal", {"expected_revision": 1})
+        assert status == 409 and refused["error"]["code"] == "TEMPLATE_IN_USE"
+        status, created = _http(runtime, "POST", "/v1/workspaces", {"name": "Modelo A"})
+        assert status == 201, created
+        # Com o modelo do produto escolhido, trocar é livre; restaurar a seleção
+        # antiga (que cita A) é recusado, porque o modelo guardado agora é B.
+        assert _http(runtime, "PUT", "/v1/installation/settings/DEFAULT_TEMPLATE_SELECTION_V1", {"expected_revision": 1, "payload": {"mode": "PRODUCT_DEFAULT", "template_sha256": None}})[0] == 200
+        assert _upload(runtime, "DEFAULT_WORD_TEMPLATE", _custom_template(b"ESCRITORIO-B-V1"), "b.docx", docx, 1)[0] == 201
+        status, _ = _http(runtime, "POST", "/v1/installation/settings/DEFAULT_TEMPLATE_SELECTION_V1/restore", {"revision": 1, "expected_revision": 2})
+        assert status == 400
+        _, overview = _http(runtime, "GET", "/v1/installation/settings")
+        assert overview["readiness"]["template"] == "PRODUCT_DEFAULT"
+        status, created = _http(runtime, "POST", "/v1/workspaces", {"name": "Modelo do produto"})
+        assert status == 201, created
+        # Restaurar o modelo A com a seleção CUSTOM(B) ativa também é recusado.
+        sha_b = overview["assets"]["DEFAULT_WORD_TEMPLATE"]["asset"]["sha256"]
+        assert _http(runtime, "PUT", "/v1/installation/settings/DEFAULT_TEMPLATE_SELECTION_V1", {"expected_revision": 2, "payload": {"mode": "CUSTOM", "template_sha256": sha_b}})[0] == 200
+        status, refused = _http(runtime, "POST", "/v1/installation/settings/INSTALLATION_ASSET_V1/restore", {"revision": 1, "expected_revision": 2})
+        assert status == 404  # ativos não têm restauração genérica pela rota de configurações
+        from scripts.backend_contract.application.installation_settings import AssetRole, CustomTemplateInUse, InstallationSettings, SettingKind
+        from scripts.backend_contract.local_api.composition import _SystemClock, _UuidGenerator
+        service = InstallationSettings(runtime._installation_store, _SystemClock(), _UuidGenerator(), None)
+        with pytest.raises(CustomTemplateInUse):
+            service.restore(SettingKind.INSTALLATION_ASSET, 1, 2, setting_id=AssetRole.DEFAULT_WORD_TEMPLATE.value)
+        _, overview = _http(runtime, "GET", "/v1/installation/settings")
+        assert overview["settings"]["DEFAULT_TEMPLATE_SELECTION_V1"]["payload"]["template_sha256"] == overview["assets"]["DEFAULT_WORD_TEMPLATE"]["asset"]["sha256"]
     finally:
         runtime.close()
 

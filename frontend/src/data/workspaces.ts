@@ -169,6 +169,14 @@ export async function createWorkspace(name: string, signal?: AbortSignal): Promi
     }
     throw mappedError(500);
   }
+  if (response.status === 503) {
+    const code = await response.json().then((value: { error?: { code?: string } } | null) => value?.error?.code ?? "", () => "");
+    if (code === "SETTINGS_UNAVAILABLE") {
+      // Recusada antes de criar: nenhuma perícia pela metade.
+      throw new WorkspaceApiError("unavailable", "As configurações da instalação não puderam ser abertas, então nenhuma perícia foi criada. As perícias existentes continuam disponíveis.");
+    }
+    throw mappedError(503);
+  }
   if (!response.ok) {
     throw mappedError(response.status);
   }

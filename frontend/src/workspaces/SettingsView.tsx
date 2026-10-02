@@ -74,6 +74,7 @@ const SETTING_LABELS: Record<SettingKind, string> = {
 
 function failure(error: unknown) {
   if (error instanceof SettingsApiError) {
+    if (error.kind === "conflict" && error.code === "TEMPLATE_IN_USE") return "O modelo Word personalizado está em uso. Escolha o modelo padrão do produto antes de trocar ou remover o arquivo.";
     if (error.kind === "conflict") return "Esta configuração mudou em outra janela. Os dados foram recarregados; confira e salve de novo.";
     if (error.kind === "rejected") return REJECTIONS[error.code] ?? "O arquivo foi recusado.";
     if (error.kind === "invalid") return "Confira os campos destacados: algum valor está fora do aceito.";
@@ -483,10 +484,11 @@ function DocumentSection({ overview, busy, save, run }: { overview: Installation
             if (file) void run(() => uploadAsset("DEFAULT_WORD_TEMPLATE", file, template.revision), "Modelo Word enviado. Escolha-o acima para usar nas próximas perícias.");
           }}
         />
-        <button type="button" className="text-action" disabled={busy} onClick={() => templateInput.current?.click()}>
+        <button type="button" className="text-action" disabled={busy || custom} aria-describedby={custom ? "template-in-use" : undefined} onClick={() => templateInput.current?.click()}>
           {template.asset ? `Trocar modelo Word (${template.asset.filename})` : "Enviar modelo Word"}
         </button>
       </div>
+      {custom ? <p className="field-hint" id="template-in-use">Para trocar o arquivo, escolha antes o modelo padrão do produto; as perícias já criadas continuam com o modelo que capturaram.</p> : null}
       {custom ? <p className="field-hint">Com o modelo personalizado, capa, cabeçalho, rodapé, marca d'água e fundo vêm do seu arquivo; os ajustes acima ficam guardados para quando voltar ao modelo do produto.</p> : null}
     </>
   );
@@ -588,13 +590,14 @@ export function SettingsView() {
   async function testDocument() {
     setTestState("busy");
     try {
-      const blob = await downloadTestDocument();
+      const { blob, filename } = await downloadTestDocument();
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = "documento-de-teste.docx";
+      link.download = filename;
       link.click();
-      URL.revokeObjectURL(url);
+      // Revogar só depois que o navegador começou o download.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setTestState("done");
     } catch {
       setTestState("failed");

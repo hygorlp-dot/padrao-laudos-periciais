@@ -349,6 +349,11 @@ def build_local_api(
         raise
     try:
         installation_store = SQLiteInstallationStore(installation_database_path(database_path))
+    except RepositoryError:
+        # Arquivo da instalação ilegível: a Central fica indisponível (503) e a
+        # criação de perícia é recusada, mas as perícias existentes abrem com o
+        # snapshot que cada uma capturou. Os dados do caso não dependem dele.
+        installation_store = None
     except BaseException:
         store.close()
         raise
@@ -448,7 +453,7 @@ def build_local_api(
     )
     append_artifact_revision = AppendArtifactRevision(store.revisions, local_clock, local_ids)
     get_latest_artifact = GetLatestArtifact(store.revisions)
-    installation_settings = InstallationSettings(installation_store, local_clock, local_ids, validate_final_artifact)
+    installation_settings = InstallationSettings(installation_store, local_clock, local_ids, validate_final_artifact) if installation_store is not None else None
     workspace_settings = (
         WorkspaceSettings(
             installation_settings, store.revisions, get_latest_artifact, generic_store,
@@ -758,7 +763,7 @@ def build_local_api(
         create_workspace=CreateWorkspaceWithSettings(CreateWorkspace(store.workspaces, local_clock, local_ids), workspace_settings),
         installation_settings=installation_settings,
         workspace_settings=workspace_settings,
-        generate_test_document=GenerateTestDocument(installation_settings),
+        generate_test_document=GenerateTestDocument(installation_settings) if installation_settings is not None else None,
         get_report_preflight=GetReportPreflight(get_report_snapshot, workspace_settings),
         get_workspace=GetWorkspace(store.workspaces),
         list_workspaces=ListWorkspaces(store.workspaces),

@@ -21,6 +21,7 @@ from ..application.content import (
     SeekableContent,
 )
 from ..application.process_metadata import ProcessMetadataReview, review_dto
+from ..application.installation_settings import InstallationSettingsUnavailable
 from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
@@ -718,7 +719,13 @@ class LocalApi:
         service = self._services.installation_settings
         if service is None:
             return _error(503, "SETTINGS_UNAVAILABLE")
-        from ..application.installation_settings import InstallationAssetRejected, SettingKind as _Kind, AssetRole as _Role
+        from ..application.installation_settings import CustomTemplateInUse, InstallationAssetRejected, SettingKind as _Kind, AssetRole as _Role
+        try:
+            return self._installation_route(service, method, tail, headers, body, body_size, _Kind, _Role, InstallationAssetRejected)
+        except CustomTemplateInUse:
+            return _error(409, "TEMPLATE_IN_USE", "escolha o modelo do produto antes de trocar ou remover o modelo personalizado")
+
+    def _installation_route(self, service, method, tail, headers, body, body_size, _Kind, _Role, InstallationAssetRejected) -> HttpResponse:
         if tail == ("settings",):
             if method != "GET":
                 return _error(405, "METHOD_NOT_ALLOWED")
@@ -732,13 +739,14 @@ class LocalApi:
             if generator is None:
                 return _error(503, "SETTINGS_UNAVAILABLE")
             try:
-                content = generator.execute()
+                content, output_kind = generator.execute()
             except ValueError:
                 return _error(422, "TEST_DOCUMENT_REJECTED", "as configurações vigentes não geram um Word válido")
             return HttpResponse(
                 status=200,
                 headers=MappingProxyType({
-                    "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    # Um modelo DOCM gera documento DOCM: rotulá-lo como DOCX faria o Word recusar abrir.
+                    "Content-Type": "application/vnd.ms-word.document.macroEnabled.12" if output_kind == "DOCM" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     "Content-Length": str(len(content)), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
                 }),
                 body=content,
@@ -2286,6 +2294,8 @@ class LocalApi:
             return _error(400, "INVALID_DOCUMENT", "documento PDF inválido")
         except RepositoryConflict:
             return _error(409, "REPOSITORY_CONFLICT", "conflito de persistência local")
+        except InstallationSettingsUnavailable:
+            return _error(503, "SETTINGS_UNAVAILABLE", "as configurações da instalação não puderam ser abertas; nenhuma perícia foi criada ou alterada")
         except RepositoryIntegrityError:
             return _error(
                 500,

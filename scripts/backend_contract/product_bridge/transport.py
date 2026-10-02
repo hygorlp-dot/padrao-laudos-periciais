@@ -481,7 +481,7 @@ class ProductBridge:
                 allowed = (
                     allowed_delivery_types if delivery_read
                     else {"image/jpeg", "image/png"} if asset_read
-                    else {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"} if test_document
+                    else {"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-word.document.macroenabled.12"} if test_document
                     else {"application/pdf"}
                 )
                 if not raw_length.isascii() or not raw_length.isdecimal() or int(raw_length) > response_limit or content_type not in allowed:

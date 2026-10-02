@@ -58,7 +58,7 @@ export function ReportPreflightPanel({ workspaceId, reportRevision }: { workspac
       <h3 id="preflight-title">Linguagem e pendências</h3>
       <p className="field-hint">Perfil editorial de referência: {value.profile_label}. Os avisos sugerem; o texto só muda quando você o edita no Laudo.</p>
       {value.blocking ? (
-        <p className="preflight-blocking" role="alert">O laudo tem pendência aberta. O Word final não é emitido até ela ser resolvida no Laudo.</p>
+        <p className="preflight-blocking" role="alert">O laudo tem pendência aberta. O Word final não é emitido até ela ser resolvida onde a lista abaixo indica.</p>
       ) : (
         <p className="settings-confirmation" role="status">Nenhuma pendência aberta. {warnings ? `${warnings} ${warnings === 1 ? "aviso de linguagem" : "avisos de linguagem"} para conferir.` : "Nenhum aviso de linguagem."}</p>
       )}

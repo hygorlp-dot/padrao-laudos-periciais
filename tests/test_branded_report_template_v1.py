@@ -217,6 +217,92 @@ def test_fidelity_binds_a_page_background_anchored_in_the_header(color, x, behin
             dr._validate_pdf_fidelity(word, pdf)
 
 
+_NS = (
+    'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+    'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+    'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+)
+
+
+def _jpeg(color) -> bytes:
+    output = BytesIO()
+    Image.new("RGB", (8, 8), color).save(output, "JPEG")
+    return output.getvalue()
+
+
+def _word_with_figure_and_header_anchor(*, behind: bool, x: int, y: int, size: int) -> bytes:
+    inline = ('<wp:inline><wp:extent cx="508000" cy="508000"/><a:graphic><a:graphicData><a:blip r:embed="rId1"/>'
+              '</a:graphicData></a:graphic></wp:inline>')
+    document = (f'<w:document {_NS}><w:body><w:p><w:r><w:t>Synthetic</w:t></w:r></w:p>'
+                f'<w:p><w:r><w:drawing>{inline}</w:drawing></w:r></w:p></w:body></w:document>')
+    header = (f'<w:hdr {_NS}><w:p><w:r><w:drawing><wp:anchor behindDoc="{1 if behind else 0}">'
+              f'<wp:positionH relativeFrom="page"><wp:posOffset>{x * 12700}</wp:posOffset></wp:positionH>'
+              f'<wp:positionV relativeFrom="page"><wp:posOffset>{y * 12700}</wp:posOffset></wp:positionV>'
+              f'<wp:extent cx="{size * 12700}" cy="{size * 12700}"/>'
+              '<a:graphic><a:graphicData><a:blip r:embed="rId1"/></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:hdr>')
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as package:
+        package.writestr("word/document.xml", document)
+        package.writestr("word/_rels/document.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="media/figure.jpg"/></Relationships>')
+        package.writestr("word/media/figure.jpg", _jpeg("red"))
+        package.writestr("word/header1.xml", header)
+        package.writestr("word/_rels/header1.xml.rels", '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Target="media/logo.jpg"/></Relationships>')
+        package.writestr("word/media/logo.jpg", _jpeg((235, 238, 242)))
+    return output.getvalue()
+
+
+def _pdf_in_order(order: list[str], *, anchor: tuple[int, int, int]) -> bytes:
+    x, y, size = anchor
+    commands = {
+        "text": b"BT /F1 10 Tf 1 0 0 1 50 650 Tm (Synthetic) Tj ET",
+        "figure": b"q 40 0 0 40 100 600 cm /Im1 Do Q",
+        "anchor": f"q {size} 0 0 {size} {x} {842 - y - size} cm /Im2 Do Q".encode(),
+    }
+    stream = b" ".join(commands[item] for item in order)
+
+    def image(data: bytes) -> bytes:
+        return (b"<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length "
+                + str(len(data)).encode() + b" >>\nstream\n" + data + b"\nendstream")
+    objects = (
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        image(_jpeg("red")), image(_jpeg((235, 238, 242))),
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Page /Parent 6 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 1 0 R >> /XObject << /Im1 2 0 R /Im2 3 0 R >> >> /Contents 4 0 R >>",
+        b"<< /Type /Pages /Count 1 /Kids [5 0 R] >>",
+        b"<< /Type /Catalog /Pages 6 0 R >>",
+    )
+    output = bytearray(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n")
+    offsets = []
+    for index, value in enumerate(objects, 1):
+        offsets.append(len(output))
+        output.extend(f"{index} 0 obj\n".encode() + value + b"\nendobj\n")
+    xref = len(output)
+    output.extend(f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode())
+    output.extend(b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets))
+    output.extend(f"trailer << /Size {len(objects) + 1} /Root {len(objects)} 0 R >>\nstartxref\n{xref}\n%%EOF".encode())
+    return bytes(output)
+
+
+@pytest.mark.parametrize(("behind", "anchor", "order", "accepted"), [
+    (True, (100, 202, 40), ["anchor", "text", "figure"], True),    # atrás e desenhada antes da foto
+    (True, (100, 202, 40), ["text", "figure", "anchor"], False),   # "atrás", mas pintada por cima da foto
+    (True, (300, 20, 40), ["text", "figure", "anchor"], True),     # não cruza a foto: a ordem é livre
+    (False, (100, 202, 40), ["anchor", "text", "figure"], False),  # na frente, fora da faixa do cabeçalho
+    (False, (300, 20, 40), ["text", "figure", "anchor"], True),    # na frente, dentro da faixa
+])
+def test_fidelity_never_lets_a_header_anchor_hide_a_body_picture(behind, anchor, order, accepted):
+    # Revisão do 2º conjunto, P1-1: a âncora deixou de ficar presa à faixa e
+    # nada a impedia de cobrir uma foto do corpo no PDF derivado.
+    word = _word_with_figure_and_header_anchor(behind=behind, x=anchor[0], y=anchor[1], size=anchor[2])
+    pdf = _pdf_in_order(order, anchor=anchor)
+    if accepted:
+        dr._validate_pdf_fidelity(word, pdf)
+    else:
+        with pytest.raises(ValueError, match="faithfully represent"):
+            dr._validate_pdf_fidelity(word, pdf)
+
+
 def _native():
     from tests.test_office_word_native_matrix_v1 import _word_available
 

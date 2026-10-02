@@ -1,7 +1,7 @@
 """Application authority for upstream-bound canonical report revisions."""
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -82,7 +82,10 @@ def report_upstream_digest(value: object) -> str:
     elif type(value) is ConstructionDefectAnalysisSnapshot:
         mapping = construction_defect_analysis_to_mapping(value)
     elif type(value) is ExpertMasterProfile:
-        mapping = asdict(value)
+        # O mapping canonico omite os campos opcionais vazios (#270): o digest
+        # e o mesmo checksum da revisao gravada e o mesmo de um perfil anterior
+        # a esses campos, entao laudos ja aprovados nao ficam desatualizados.
+        mapping = expert_profile_to_mapping(value)
     else:
         raise TypeError("unsupported Report Snapshot upstream authority")
     encoded = json.dumps(mapping, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")

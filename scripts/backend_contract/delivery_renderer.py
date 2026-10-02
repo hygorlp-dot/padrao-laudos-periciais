@@ -1514,6 +1514,9 @@ class _WordImageLayout:
     following_text: str | None = None
     preceding_occurrence: int | None = None
     following_occurrence: int | None = None
+    # Âncora com behindDoc="1": desenhada atrás do texto e de tudo o que o corpo
+    # da página desenha por cima dela.
+    behind: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1525,6 +1528,8 @@ class _PdfImageLayout:
     top: float
     page_width: float
     page_height: float
+    # Posição na ordem de desenho do conteúdo da página (quem vem depois cobre).
+    order: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1642,6 +1647,7 @@ def _ordered_word_image_layouts(
                                 None,
                                 x_offset,
                                 y_offset,
+                                behind=(_attribute_named(container, "behindDoc") or "0").casefold() in {"1", "true", "on"},
                             )
                     except (KeyError, StopIteration, TypeError, ValueError):
                         layout = None
@@ -1934,13 +1940,15 @@ def _repeatable_word_images_match(
             )
         ):
             return False
-        # An inline header/footer picture flows in its band.  A page-anchored
-        # one (logo at a fixed spot, watermark or background drawn behind the
-        # text) is bound to its exact offset on every page instead, which is a
-        # stricter claim than the band.
-        if source.kind != "anchor" and region == "header" and candidate.bottom < candidate.page_height * 0.75:
+        # A header/footer picture stays in its band, except a page-anchored one
+        # drawn BEHIND the text (watermark, background): that one is bound to its
+        # exact offset on every page and, below, to being drawn before every
+        # picture it crosses.  The band alone never said anything about overlap;
+        # draw order does.
+        behind_anchor = source.kind == "anchor" and source.behind
+        if not behind_anchor and region == "header" and candidate.bottom < candidate.page_height * 0.75:
             return False
-        if source.kind != "anchor" and region == "footer" and candidate.top > candidate.page_height * 0.25:
+        if not behind_anchor and region == "footer" and candidate.top > candidate.page_height * 0.25:
             return False
         if source.kind == "anchor":
             observed_y_offset = candidate.page_height - candidate.top
@@ -1962,6 +1970,7 @@ def _repeatable_word_images_match(
         return False
 
     used: set[int] = set()
+    behind_anchors: list[int] = []
 
     def consume_repeated(
         signatures_by_page: list[list[tuple]],
@@ -1994,6 +2003,8 @@ def _repeatable_word_images_match(
                 if selected is None:
                     return False
                 used.add(selected)
+                if layout is not None and layout.kind == "anchor" and layout.behind:
+                    behind_anchors.append(selected)
                 search_start = selected + 1
         return True
 
@@ -2003,6 +2014,22 @@ def _repeatable_word_images_match(
         footer_signature_pages, footer_layout_pages, region="footer"
     ):
         return False
+    # A picture "behind the text" that the PDF paints AFTER a picture it
+    # overlaps hides that picture: a body photo is evidence, and a derived PDF
+    # that covers it is not the Word document.  Text is held by the raster
+    # occlusion check; pictures are held here, by draw order.
+    behind = set(behind_anchors)
+    for anchor_index in behind_anchors:
+        anchor = candidate_layouts[anchor_index]
+        for other_index, other in enumerate(candidate_layouts):
+            if other_index in behind or other.page != anchor.page:
+                continue
+            overlaps = (
+                min(anchor.right, other.right) - max(anchor.left, other.left) > 0.5
+                and min(anchor.top, other.top) - max(anchor.bottom, other.bottom) > 0.5
+            )
+            if overlaps and anchor.order > other.order:
+                return False
     remaining_signatures = [
         signature
         for index, signature in enumerate(candidate_signatures)
@@ -4709,6 +4736,7 @@ def _pdfium_visible_layout(
                                 top,
                                 width,
                                 height,
+                                len(image_layouts),
                             )
                         )
                     elif (

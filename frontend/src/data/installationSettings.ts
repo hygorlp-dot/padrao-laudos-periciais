@@ -194,10 +194,14 @@ export function assetContentUrl(role: AssetRole) {
   return `${BASE}/assets/${role}/content`;
 }
 
-export async function downloadTestDocument(): Promise<Blob> {
+const DOCM = "application/vnd.ms-word.document.macroenabled.12";
+
+// O formato segue o modelo em uso: um modelo DOCM gera documento DOCM.
+export async function downloadTestDocument(): Promise<{ blob: Blob; filename: string }> {
   const response = await fetch(`${BASE}/test-document`, { credentials: "same-origin", cache: "no-store" });
   if (!response.ok) return failed(response);
-  return response.blob();
+  const macro = (response.headers.get("Content-Type") ?? "").split(";", 1)[0].trim().toLowerCase() === DOCM;
+  return { blob: await response.blob(), filename: macro ? "documento-de-teste.docm" : "documento-de-teste.docx" };
 }
 
 // --- Configurações capturadas por uma perícia ------------------------------

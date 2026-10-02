@@ -151,6 +151,11 @@ conteúdo privado do workspace).
   que fixou a revisão anterior fica `stale`.
 - O backup da perícia não leva as configurações globais. Elas não são exportadas
   junto do workspace.
+- Arquivo da instalação ilegível (schema, checksum ou sequência) falha fechado só para
+  as configurações: a Central e o documento de teste respondem 503
+  `SETTINGS_UNAVAILABLE`, e criar perícia é recusado **antes** de criar (nenhuma
+  perícia pela metade). As perícias existentes abrem e entregam com o snapshot que
+  cada uma capturou, porque nada do caso depende do arquivo da instalação.
 
 ### D4. Evolução compatível dos contratos
 
@@ -206,6 +211,11 @@ personalizados preservam a identidade visual e a formatação existentes no arqu
   dia: sem snapshot, V1 byte-idêntico; com snapshot, V2 (`PRODUCT-DEFAULT-REPORT-V2`)
   com a identidade capturada; com modelo próprio selecionado, o arquivo capturado
   volta como está.
+- A seleção `CUSTOM` cita o SHA-256 do modelo guardado, e nenhuma gravação desfaz
+  isso: com ela ativa, trocar, remover ou restaurar o modelo é recusado (409
+  `TEMPLATE_IN_USE`, "escolha o modelo padrão do produto antes"), e restaurar uma
+  seleção que cita outro arquivo também. A criação da perícia confere a seleção antes
+  de copiar qualquer byte.
 - O modelo próprio declara o seu `TEMPLATE_ID` e vincula os campos dos modelos
   enviados (`EXPERT_FULL_NAME`, `EXPERT_REGISTRATION`, `REPORT_ID`). O identificador
   de um modelo do produto é recusado, porque implica outro conjunto de campos.
@@ -234,12 +244,18 @@ alerta.
   exceção.
 - A linha separadora entra nessa imagem, e não como borda de parágrafo, porque o
   validador só aceita traços pintados vinculados a tabelas.
-- Mudança no validador (área protegida, `word-trust-rebind`): a imagem **ancorada** de
-  cabeçalho/rodapé deixa de exigir a faixa superior/inferior da página. Ela continua
-  presa à posição exata em cada página (±2 pt), o que é mais estrito que a faixa.
-  Imagem em linha continua presa à faixa. Testes provam: fundo claro atrás do texto
-  é aceito; imagem opaca por cima do texto, fundo escuro atrás do texto e imagem
-  deslocada são recusados.
+- Mudança no validador (área protegida, `word-trust-rebind`): só a imagem ancorada
+  **atrás do texto** (`behindDoc="1"`) de cabeçalho/rodapé deixa de exigir a faixa
+  superior/inferior da página. Em troca, ela fica presa à posição exata em cada página
+  (±2 pt) e à **ordem de desenho**: tem de ser pintada antes de toda imagem que cruza.
+  O texto que ela cruza já é protegido pela checagem de oclusão por raster. A faixa
+  sozinha não dizia nada sobre sobreposição; a ordem de desenho diz. Âncora na frente
+  do texto e imagem em linha continuam presas à faixa. Testes provam:
+  - aceitos: fundo claro atrás do texto; âncora atrás desenhada antes da foto; âncora
+    que não cruza a foto;
+  - recusados: imagem opaca por cima do texto; fundo escuro atrás do texto; imagem
+    deslocada; âncora "atrás" pintada por cima de uma foto do corpo; âncora na frente
+    fora da faixa.
 - Marca d'água de texto é desenhada como imagem com fonte local; sem fonte TrueType
   disponível, a geração falha fechada com mensagem.
 - Toda imagem tem descrição alternativa; a imagem de página é marcada como decorativa.
@@ -265,7 +281,15 @@ complementar ao `EditorialProfile` e ao `padrao-redacao.md`, não um segundo sis
 texto. O preflight só **avisa** (sigla sem forma extensa na primeira ocorrência,
 latinismo, estrangeirismo, expressão rebuscada, período e parágrafo longos) e nunca
 reescreve texto técnico. Marcadores `[INFORMAÇÃO NECESSÁRIA` e `[VALIDAÇÃO DO PERITO`
-bloqueiam a emissão final. Invariantes (`AI_PROPOSAL != PROFESSIONAL_DECISION`,
+bloqueiam a emissão final em qualquer texto que o Word apresentaria:
+- afirmações e respostas;
+- os demais textos do corpo (participantes, imóvel, referências, legendas, quesitos);
+- os campos de capa e cabeçalho do modelo (juízo, polos, identidade do perito);
+- o perfil profissional.
+
+Cada pendência diz onde está. Na emissão, uma última barreira varre o Word já
+vinculado (corpo, cabeçalhos e rodapés, com o texto juntado por parágrafo). Ela cobre
+o texto fixo de um modelo personalizado. Invariantes (`AI_PROPOSAL != PROFESSIONAL_DECISION`,
 `ALLEGATION != FACT`, `DOCUMENTED_FACT != PERICIAL_FINDING`, proveniência, Word
 autoritativo, PDF derivado, egress privado negado) **não** são preferências e não
 aparecem como opção.

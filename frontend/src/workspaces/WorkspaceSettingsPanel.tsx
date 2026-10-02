@@ -80,7 +80,8 @@ export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string })
       });
       setView(next);
       setConfirming(false);
-      setMessage({ kind: "status", text: includeProfile ? "Configurações e perfil atualizados. Um laudo já aprovado precisa ser revisado de novo." : "Configurações atualizadas; a versão anterior continua no histórico." });
+      const profileKept = !includeProfile && next.differences.profile_changes.length > 0;
+      setMessage({ kind: "status", text: includeProfile ? "Configurações e perfil atualizados. Um laudo já aprovado precisa ser revisado de novo." : profileKept ? "Configurações atualizadas; o perfil profissional desta perícia não mudou. A versão anterior continua no histórico." : "Configurações atualizadas; a versão anterior continua no histórico." });
     } catch (error) {
       setMessage({ kind: "alert", text: error instanceof SettingsApiError && error.kind === "conflict" ? "As configurações desta perícia mudaram em outra tela. Os dados foram recarregados; confira de novo." : "Não foi possível atualizar. Esta perícia continua com as configurações anteriores." });
       if (error instanceof SettingsApiError && error.kind === "conflict") setVersion((value) => value + 1);
@@ -114,7 +115,7 @@ export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string })
                 </label>
               ) : null}
               <div className="action-row">
-                <button type="button" className="primary-action" disabled={busy} onClick={() => void apply()}>{busy ? "Atualizando…" : "Confirmar atualização"}</button>
+                <button type="button" className="primary-action" disabled={busy || (settingsChanges.length === 0 && !includeProfile)} onClick={() => void apply()}>{busy ? "Atualizando…" : "Confirmar atualização"}</button>
                 <button type="button" className="text-action" disabled={busy} onClick={() => setConfirming(false)}>Cancelar</button>
               </div>
             </div>

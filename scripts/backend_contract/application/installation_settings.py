@@ -9,6 +9,7 @@ atualizar uma perícia é um comando explícito, com diferença mostrada antes.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import hashlib
 from io import BytesIO
 from typing import Any
 
@@ -50,7 +51,7 @@ from ..report_foundation import (
 )
 from .content_roles import PRIVATE_CONTENT_ROLE_KIND, PrivateContentRole, private_content_role_payload
 from .models import PrivateContentOrigin, thaw_payload
-from .ports import ArtifactRevisionNotFound, RepositoryConflict, RepositoryIntegrityError
+from .ports import ArtifactRevisionNotFound, RepositoryConflict, RepositoryError, RepositoryIntegrityError
 
 SETTING_KINDS = tuple(kind for kind in SettingKind if kind is not SettingKind.INSTALLATION_ASSET)
 
@@ -61,6 +62,14 @@ class InstallationAssetRejected(ValueError):
     def __init__(self, reason: str):
         super().__init__(reason)
         self.reason = reason
+
+
+class InstallationSettingsUnavailable(RepositoryError):
+    """O arquivo da instalação não abriu; perícias existentes seguem com o snapshot delas."""
+
+
+class CustomTemplateInUse(ValueError):
+    """O modelo personalizado está selecionado; trocá-lo quebraria a seleção."""
 
 
 def _record_dto(record) -> dict[str, Any]:
@@ -157,16 +166,31 @@ class InstallationSettings:
         if kind is SettingKind.INSTALLATION_ASSET:
             raise ValueError("assets are stored through the asset command")
         canonical = validated_setting_payload(kind, DEFAULT_SETTING_ID, payload)
-        if kind is SettingKind.DEFAULT_TEMPLATE_SELECTION:
-            selection = template_selection_from_mapping(canonical)
-            if selection.mode is TemplateMode.CUSTOM:
-                _, template = self.asset_record(AssetRole.DEFAULT_WORD_TEMPLATE)
-                if template is None or template.sha256 != selection.template_sha256:
-                    raise ValueError("the selected template is not the stored custom template")
+        self._require_selection_consistent(kind, DEFAULT_SETTING_ID, canonical)
         return self.store.append_if_latest(
             setting_kind=kind.value, setting_id=DEFAULT_SETTING_ID, revision_id=str(self.ids.new_uuid()),
             created_at=self._now(), payload=canonical, expected_revision=expected_revision,
         )
+
+    def _require_selection_consistent(self, kind: SettingKind, setting_id: str, payload: dict) -> None:
+        """A seleção CUSTOM cita o sha do modelo guardado; nenhuma gravação desfaz isso.
+
+        Sem esta regra, trocar ou restaurar o modelo (ou restaurar uma seleção
+        antiga) deixava a seleção apontando para bytes que não são mais o modelo
+        vigente, e toda perícia nova falhava ao capturar as configurações.
+        """
+        if kind is SettingKind.DEFAULT_TEMPLATE_SELECTION:
+            selection = template_selection_from_mapping(payload)
+            if selection.mode is TemplateMode.CUSTOM:
+                _, template = self.asset_record(AssetRole.DEFAULT_WORD_TEMPLATE)
+                if template is None or template.sha256 != selection.template_sha256:
+                    raise ValueError("the selected template is not the stored custom template")
+        elif kind is SettingKind.INSTALLATION_ASSET and setting_id == AssetRole.DEFAULT_WORD_TEMPLATE.value:
+            selection = self.latest(SettingKind.DEFAULT_TEMPLATE_SELECTION)
+            if selection is not None and selection.payload.get("mode") == TemplateMode.CUSTOM.value:
+                _, current = self.asset_record(AssetRole.DEFAULT_WORD_TEMPLATE)
+                if payload.get("removed") is True or current is None or payload.get("sha256") != current.sha256:
+                    raise CustomTemplateInUse("choose the product template before replacing or removing the custom template")
 
     def history(self, kind: SettingKind, setting_id: str = DEFAULT_SETTING_ID):
         return self.store.history(kind.value, setting_id)
@@ -179,6 +203,7 @@ class InstallationSettings:
         payload = validated_setting_payload(kind, setting_id, dict(target.payload))
         if kind is SettingKind.INSTALLATION_ASSET and payload.get("removed") is not True and self.store.get_asset(payload["sha256"]) is None:
             raise RepositoryIntegrityError("the restored asset bytes are unavailable")
+        self._require_selection_consistent(kind, setting_id, payload)
         return self.store.append_if_latest(
             setting_kind=kind.value, setting_id=setting_id, revision_id=str(self.ids.new_uuid()),
             created_at=self._now(), payload=payload, expected_revision=expected_revision,
@@ -199,6 +224,8 @@ class InstallationSettings:
             except ValueError as exc:
                 raise InstallationAssetRejected("TEMPLATE_INVALID") from exc
             width = height = None
+        if role is AssetRole.DEFAULT_WORD_TEMPLATE:
+            self._require_selection_consistent(SettingKind.INSTALLATION_ASSET, role.value, {"sha256": hashlib.sha256(content).hexdigest()})
         stored = self.store.put_asset(content, media_type)
         record = InstallationAssetRecord(
             "ASSET-" + self.ids.new_uuid().hex.upper(), role, filename, media_type, stored.byte_size, stored.sha256, width, height,
@@ -209,10 +236,7 @@ class InstallationSettings:
         )
 
     def remove_asset(self, role: AssetRole, expected_revision: int):
-        if role is AssetRole.DEFAULT_WORD_TEMPLATE:
-            selection = self.latest(SettingKind.DEFAULT_TEMPLATE_SELECTION)
-            if selection is not None and selection.payload.get("mode") == TemplateMode.CUSTOM.value:
-                raise ValueError("choose the product template before removing the custom template")
+        self._require_selection_consistent(SettingKind.INSTALLATION_ASSET, role.value, {"removed": True})
         return self.store.append_if_latest(
             setting_kind=SettingKind.INSTALLATION_ASSET.value, setting_id=role.value, revision_id=str(self.ids.new_uuid()),
             created_at=self._now(), payload={"role": role.value, "removed": True}, expected_revision=expected_revision,
@@ -266,6 +290,12 @@ class WorkspaceSettings:
         """
         copies = []
         selection = template_selection_from_mapping(effective["values"][SettingKind.DEFAULT_TEMPLATE_SELECTION])
+        if selection.mode is TemplateMode.CUSTOM:
+            # Conferido antes de copiar qualquer byte: uma seleção incoerente não
+            # deixa cópias órfãs dentro da perícia.
+            _, template = self.settings.asset_record(AssetRole.DEFAULT_WORD_TEMPLATE)
+            if template is None or template.sha256 != selection.template_sha256:
+                raise RepositoryIntegrityError("the selected custom template is not the stored template")
         for role in AssetRole:
             _, asset = self.settings.asset_record(role)
             if asset is None:
@@ -287,8 +317,13 @@ class WorkspaceSettings:
             copies.append(SnapshotAsset(role, asset.asset_id, asset.filename, asset.media_type, asset.byte_size, asset.sha256, asset.width, asset.height, str(stored.content_id)))
         return tuple(copies)
 
+    def _installation(self) -> InstallationSettings:
+        if self.settings is None:
+            raise InstallationSettingsUnavailable("installation settings are unavailable")
+        return self.settings
+
     def _snapshot(self, workspace_id, reason: str) -> WorkspaceSettingsSnapshot:
-        effective = self.settings.effective()
+        effective = self._installation().effective()
         values = effective["values"]
         return WorkspaceSettingsSnapshot(
             1, str(workspace_id), reason, dict(effective["sources"]),
@@ -302,6 +337,7 @@ class WorkspaceSettings:
 
     def seed(self, workspace_id):
         """Na criação da perícia: snapshot dos padrões e perfil do perito, se houver."""
+        self._installation()
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("workspace settings authority guard is unavailable")
         with self.authority_guard():
@@ -332,6 +368,7 @@ class WorkspaceSettings:
 
     def differences(self, workspace_id) -> dict[str, Any]:
         """O que mudaria se a perícia adotasse os padrões vigentes; nada é gravado."""
+        self._installation()
         record, snapshot = self.current(workspace_id)
         effective = self.settings.effective()
         changes = []
@@ -375,6 +412,7 @@ class WorkspaceSettings:
         """
         if type(include_profile) is not bool:
             raise ValueError("profile update choice is invalid")
+        self._installation()
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("workspace settings authority guard is unavailable")
         with self.authority_guard():
@@ -420,6 +458,10 @@ class CreateWorkspaceWithSettings:
     settings: WorkspaceSettings | None
 
     def execute(self, name: str):
+        if self.settings is not None:
+            # Sem a instalação, nenhuma perícia nasce sem as configurações: a
+            # recusa vem antes de criar, nunca uma perícia pela metade.
+            self.settings._installation()
         workspace = self.create.execute(name)
         if self.settings is None:
             return workspace
@@ -452,7 +494,8 @@ class GenerateTestDocument:
         _, content = self.settings.asset_content(role)
         return TemplateImage(content, record.media_type, record.width, record.height)
 
-    def execute(self) -> bytes:
+    def execute(self) -> tuple[bytes, str]:
+        """Devolve os bytes e o formato (DOCX ou DOCM, o do modelo em uso)."""
         from ..delivery_renderer import render_word_candidate, validate_final_artifact
         from ..report_default_template import TemplateBranding, branded_report_template, branded_template_manifest
         from ..report_template import TemplateBinding, TemplateBindingManifest
@@ -487,4 +530,4 @@ class GenerateTestDocument:
             manifest = branded_template_manifest()
         word = render_word_candidate(template_bytes=template, report=report, manifest=manifest).output_bytes
         validate_final_artifact(word, manifest.output_kind)
-        return word
+        return word, manifest.output_kind

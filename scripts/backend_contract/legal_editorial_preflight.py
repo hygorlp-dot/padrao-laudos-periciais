@@ -14,10 +14,13 @@ perfil, porque emitir um laudo com pendência aberta seria falso sucesso.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
+from io import BytesIO
 import re
 import unicodedata
+from zipfile import BadZipFile, ZipFile
 
 from .installation_settings import DEFAULT_LEGAL_EDITORIAL, LegalEditorialProfile
 
@@ -42,7 +45,9 @@ class PreflightFinding:
     code: PreflightCode
     severity: PreflightSeverity
     section_id: str
-    # Afirmação (claim_id) ou resposta a quesito ("ANSWER-n") onde está o trecho.
+    # Afirmação (claim_id), resposta a quesito ("ANSWER-n"), campo de capa ou
+    # cabeçalho ("FIELD:COURT"), campo do perfil ("PROFILE:...") ou outro texto
+    # do corpo ("BODY") onde está o trecho.
     location_id: str
     excerpt: str
     message: str
@@ -91,6 +96,50 @@ _NOT_ACRONYMS = frozenset({"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX
 # Maiúscula ASCII ou acentuada (U+00C0 a U+00DE), dígito, aspas ou parêntese.
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z\u00c0-\u00de0-9\"“(])")
 _WORD = re.compile(r"\w+(?:[-']\w+)*")
+# Sigla candidata: 2 a 6 maiúsculas soltas. Depois de "/" ou "-" é a UF de
+# "Recife/PE" ou "CREA-PE", que não se escreve por extenso.
+_ACRONYM = re.compile(r"(?<![\w/\-])[A-Z]{2,6}(?![\w])")
+_UPPER_WORD = re.compile(r"[A-Z\u00c0-\u00de]+")
+# Abreviações usuais em laudo: o ponto delas não encerra a frase.
+_ABBREVIATIONS = frozenset({
+    "art", "arts", "inc", "incs", "al", "fl", "fls", "p", "pp", "pág", "págs", "n", "nº", "no", "cf", "ex",
+    "sr", "sra", "srs", "dr", "dra", "drs", "prof", "profa", "eng", "arq", "des", "min", "av", "proc", "vol", "cap",
+})
+
+
+def _sentences(paragraph: str) -> list[str]:
+    pieces = _SENTENCE_END.split(paragraph)
+    sentences: list[str] = []
+    for piece in pieces:
+        if sentences:
+            last = re.search(r"(\w+)\.$", sentences[-1].rstrip())
+            if last is not None and last.group(1).casefold() in _ABBREVIATIONS:
+                sentences[-1] = f"{sentences[-1]} {piece}"
+                continue
+        sentences.append(piece)
+    return sentences
+
+
+def _upper_run(text: str, start: int, end: int) -> list[str]:
+    """As palavras em maiúsculas vizinhas da sigla, na mesma sequência."""
+    words = [match.group() for match in re.finditer(r"\S+", text)]
+    spans = [match.span() for match in re.finditer(r"\S+", text)]
+    index = next((position for position, (left, right) in enumerate(spans) if left <= start < right), None)
+    if index is None:
+        return []
+
+    def upper(word: str) -> list[str] | None:
+        parts = _UPPER_WORD.findall(word)
+        letters = "".join(char for char in word if char.isalpha())
+        return parts if letters and letters.isupper() else None
+
+    run = list(upper(words[index]) or [])
+    for step in (-1, 1):
+        position = index + step
+        while 0 <= position < len(words) and (parts := upper(words[position])) is not None:
+            run.extend(parts)
+            position += step
+    return run
 
 
 def _folded(value: str) -> str:
@@ -149,14 +198,13 @@ def legal_editorial_preflight(report, profile: LegalEditorialProfile | None = No
                 add(PreflightCode.JARGON, PreflightSeverity.WARNING, section, location, _excerpt(text, start, end),
                     f"Expressão rebuscada “{term}”.", f"Prefira “{suggestion}”.")
         if profile.check_acronyms:
-            words = list(_WORD.finditer(text))
-            for index, match in enumerate(words):
+            for match in _ACRONYM.finditer(text):
                 acronym = match.group()
-                if not (2 <= len(acronym) <= 6 and acronym.isalpha() and acronym.isupper()) or acronym in _NOT_ACRONYMS or acronym in seen:
+                if acronym in _NOT_ACRONYMS or acronym in seen:
                     continue
-                # Nome em caixa-alta ("CAIXA ECONOMICA FEDERAL") não é sigla.
-                neighbours = [words[item].group() for item in (index - 1, index + 1) if 0 <= item < len(words)]
-                if any(len(item) > 1 and item.isalpha() and item.isupper() for item in neighbours):
+                # Nome ou título em caixa-alta ("CAIXA ECONOMICA FEDERAL",
+                # "LAUDO PERICIAL") não é sigla; siglas vizinhas ("ABNT NBR") são.
+                if any(len(word) >= 7 for word in _upper_run(text, match.start(), match.end())):
                     continue
                 seen.add(acronym)
                 spelled_after = text[match.end():match.end() + 2] == " ("
@@ -174,12 +222,16 @@ def legal_editorial_preflight(report, profile: LegalEditorialProfile | None = No
                     f"Parágrafo com {words} palavras (referência: até {profile.long_paragraph_words}).",
                     "Divida o parágrafo por assunto.")
             if profile.check_long_sentences:
-                for sentence in _SENTENCE_END.split(paragraph):
+                for sentence in _sentences(paragraph):
                     count = len(_WORD.findall(sentence))
                     if count > profile.long_sentence_words:
                         add(PreflightCode.LONG_SENTENCE, PreflightSeverity.WARNING, section, location, _excerpt(sentence, 0, 0, reach=120),
                             f"Frase com {count} palavras (referência: até {profile.long_sentence_words}).",
                             "Divida a frase; uma ideia por frase facilita a leitura.")
+    for section, location, label, excerpt in _pending_outside_units(report):
+        add(PreflightCode.PENDING_MARKER, PreflightSeverity.BLOCKING, section, location, excerpt,
+            f"Pendência aberta {label}. O Word final não é emitido enquanto ela existir.",
+            "Complete a informação na etapa de origem (processo, participantes, perfil profissional ou laudo).")
     return PreflightReport(profile.profile_id, tuple(findings))
 
 
@@ -187,11 +239,101 @@ def has_pending_marker(text: str) -> bool:
     return PENDING_MARKER.search(text) is not None
 
 
-def report_pending_markers(report) -> tuple[str, ...]:
-    """Marcadores de pendência em qualquer texto que o Word final apresentaria."""
+def _marker_excerpts(text: str) -> list[str]:
+    excerpts = []
+    for match in PENDING_MARKER.finditer(text):
+        closing = text.find("]", match.end())
+        excerpts.append(text[match.start():closing + 1 if closing != -1 else match.end()])
+    return excerpts
+
+
+_FIELD_LABELS = {
+    "PROCESS_NUMBER": "no número do processo (capa)",
+    "COURT": "no juízo (capa)",
+    "PARTICIPANTS_ACTIVE": "no polo ativo (capa)",
+    "PARTICIPANTS_PASSIVE": "no polo passivo (capa)",
+    "PARTICIPANTS_OTHER": "em outros participantes (capa)",
+    "EXPERT_FULL_NAME": "no nome do perito",
+    "EXPERT_TITLE": "no título profissional",
+    "EXPERT_REGISTRATION": "no registro profissional",
+    "EXPERT_COURT_REGISTRATION": "no cadastro no tribunal",
+    "REPORT_ID": "na identificação do laudo",
+}
+
+
+def _strings(value, path: str = ""):
+    if isinstance(value, str):
+        yield path, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _strings(item, f"{path}.{key}" if path else key)
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            yield from _strings(item, f"{path}[{index}]")
+
+
+def _pending_outside_units(report):
+    """Marcadores fora das afirmações e respostas: capa, cabeçalho e demais textos.
+
+    O Word final leva também os campos do modelo (juízo, polos, identidade do
+    perito) e textos do corpo que não são afirmações (participantes, imóvel,
+    referências, legendas, quesitos). Pendência em qualquer um deles bloqueia.
+    """
     from .delivery_renderer import professional_report_blocks
-    found = []
+    from .report_foundation import expert_profile_to_mapping
+    from .report_template import template_field_texts
+    fields = template_field_texts(report)
+    profile_texts = dict(_strings(expert_profile_to_mapping(report.expert_profile)))
+    for field, text in fields.items():
+        for excerpt in _marker_excerpts(text):
+            yield "COVER", f"FIELD:{field}", _FIELD_LABELS.get(field, f"no campo {field}"), excerpt
+    # Linhas de identidade do cabeçalho (nome na assinatura, cadastros, contato)
+    # vêm do perfil; o que já saiu por um campo acima não se repete.
+    shown = Counter(excerpt for text in fields.values() for excerpt in _marker_excerpts(text))
+    for name, text in profile_texts.items():
+        for excerpt in _marker_excerpts(text):
+            if shown[excerpt]:
+                shown[excerpt] -= 1
+                continue
+            yield "IDENTITY", f"PROFILE:{name}", "no perfil profissional (cabeçalho ou assinatura)", excerpt
+    in_units = Counter(excerpt for _section, _location, text in _units(report) for excerpt in _marker_excerpts(text))
     for block in professional_report_blocks(report):
         for text in block.paragraph_texts:
-            found.extend(match.group() for match in PENDING_MARKER.finditer(text))
+            for excerpt in _marker_excerpts(text):
+                if in_units[excerpt]:
+                    in_units[excerpt] -= 1
+                    continue
+                yield "BODY", "BODY", "num texto do laudo fora das afirmações", excerpt
+
+
+def report_pending_markers(report) -> tuple[str, ...]:
+    """Marcadores de pendência em qualquer texto que o Word final apresentaria."""
+    found = [excerpt for _section, _location, text in _units(report) for excerpt in _marker_excerpts(text)]
+    found.extend(excerpt for *_rest, excerpt in _pending_outside_units(report))
+    return tuple(found)
+
+
+_WORD_TEXT_PARTS = re.compile(r"word/(document|header\d*|footer\d*|footnotes|endnotes)\.xml")
+_PARAGRAPH = re.compile(rb"<w:p[ >].*?</w:p>", re.DOTALL)
+_RUN_TEXT = re.compile(rb"<w:t(?: [^>]*)?>([^<]*)</w:t>")
+
+
+def word_pending_markers(package: bytes) -> tuple[str, ...]:
+    """Última barreira: marcadores no Word já vinculado (corpo, cabeçalhos e rodapés).
+
+    Cobre o que nenhuma lista de campos prevê, como texto fixo de um modelo
+    personalizado. Um marcador pode estar partido em vários trechos do mesmo
+    parágrafo, então o texto é juntado por parágrafo.
+    """
+    from html import unescape
+    try:
+        with ZipFile(BytesIO(package)) as archive:
+            parts = [archive.read(name) for name in archive.namelist() if _WORD_TEXT_PARTS.fullmatch(name)]
+    except (BadZipFile, KeyError) as exc:
+        raise ValueError("word package cannot be read for pending markers") from exc
+    found = []
+    for xml in parts:
+        for paragraph in _PARAGRAPH.findall(xml):
+            text = unescape(b"".join(_RUN_TEXT.findall(paragraph)).decode("utf-8"))
+            found.extend(_marker_excerpts(text))
     return tuple(found)

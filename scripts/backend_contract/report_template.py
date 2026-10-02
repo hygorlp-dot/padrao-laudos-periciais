@@ -103,6 +103,23 @@ _FIELD_VALUES = {
     "PARTICIPANTS_PASSIVE": _participants_summary("PASSIVE"),
     "PARTICIPANTS_OTHER": _participants_summary("OTHER"),
 }
+
+
+def template_field_texts(report) -> dict[str, str]:
+    """O texto que cada campo de modelo levaria para a capa ou o cabeçalho.
+
+    Campo que a perícia não consegue preencher fica de fora: a vinculação já o
+    recusa quando um modelo o usa.
+    """
+    texts = {}
+    for field, value in _FIELD_VALUES.items():
+        try:
+            texts[field] = value(report)
+        except ValueError:
+            continue
+    return texts
+
+
 # Pagination a professional document cannot do without; the other protected
 # fields stay protected whenever a template carries them.
 _REQUIRED_FIELD_NAMES = {"TOC", "PAGE", "NUMPAGES"}
