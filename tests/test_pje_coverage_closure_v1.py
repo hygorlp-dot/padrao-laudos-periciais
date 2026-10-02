@@ -74,6 +74,12 @@ def _import(runtime, workspace_id, pdf, filename):
     return material
 
 
+def _processing_states(runtime, workspace_id):
+    status, envelope = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/material-processing")
+    assert status == 200, envelope
+    return [item["state"] for item in envelope["items"]]
+
+
 def _coverage(runtime, workspace_id):
     status, analysis = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/case-analysis")
     if status == 404:
@@ -271,7 +277,9 @@ def test_SA251_02_an_import_that_fails_after_storing_bytes_never_yields_complete
     pdf = _distinct_pje_pdf(tmp_path / "a.pdf", "fonte-falha")
     for name, adapter, expected_import, complete in (
         ("controle", PjeIntakeAdapter(), 201, True),
-        ("falha", _Explodes(), 500, False),
+        # #266: a fonte ja foi ACEITA (bytes duraveis); a falha da derivacao nao e
+        # mais um 500 terminal sobre ela, e sim 202 com estado FAILED explicito.
+        ("falha", _Explodes(), 202, False),
     ):
         private = tmp_path / f"private-{name}"
         provision_private_root(private)
@@ -285,6 +293,7 @@ def test_SA251_02_an_import_that_fails_after_storing_bytes_never_yields_complete
                 headers={"Content-Type": "application/pdf", "X-Document-Filename": "a.pdf"},
             )
             assert status == expected_import, (name, status)
+            assert _processing_states(runtime, workspace_id) == (["READY"] if complete else ["FAILED"])
             coverage = _coverage(runtime, workspace_id)
             assert (coverage["status"] == "COMPLETE") is complete, (name, coverage)
             if not complete:
@@ -364,7 +373,9 @@ def test_F1_a_failure_after_the_pje_inventory_step_still_leaves_the_import_incom
             runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(),
             headers={"Content-Type": "application/pdf", "X-Document-Filename": "a.pdf"},
         )
-        assert status >= 400, status
+        # #266: bytes aceitos + derivacao recusada = 202 com estado FAILED.
+        assert status == 202, status
+        assert _processing_states(runtime, workspace_id) == ["FAILED"]
         coverage = _coverage(runtime, workspace_id)
         assert coverage["status"] != "COMPLETE" and coverage["documents_failed"] >= 1, coverage
     finally:
@@ -392,15 +403,18 @@ def test_reimport_after_an_incomplete_pje_import_recovers_the_decomposition(tmp_
         workspace_id = _workspace(runtime)
         headers = {"Content-Type": "application/pdf", "X-Document-Filename": "a.pdf"}
         status, _ = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(), headers=headers)
-        assert status == 500
+        assert status == 202 and _processing_states(runtime, workspace_id) == ["FAILED"]
     finally:
         runtime.close()
 
     runtime = build_local_api(database, private_root=private, token=TOKEN, pje_intake=PjeIntakeAdapter())
     runtime.start()
     try:
+        # Depois do reinicio a fonte esta INTERRUPTED (bytes sem metadados).
+        assert _processing_states(runtime, workspace_id) == ["INTERRUPTED"]
         status, _ = _request(runtime, "POST", f"/v1/workspaces/{workspace_id}/materials", body=pdf.read_bytes(), headers=headers)
         assert status == 200, "reimportar os mesmos bytes e idempotente"
+        assert _processing_states(runtime, workspace_id) == ["READY"]
         status, envelope = _request(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")
         assert status == 200 and envelope["intakes"][0]["inventory"]["status"] == "OK", envelope
     finally:

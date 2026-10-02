@@ -13,6 +13,7 @@
         "tests/test_canonical_authority_boundaries_v1.py",
         "tests/test_default_report_template_v1.py",
         "tests/test_process_metadata_extraction_v1.py",
+        "tests/test_realistic_pje_ingestion_v1.py",
         "tests/test_recovery_platform_contract_v1.py",
         "tests/test_recovery_transaction_v1.py",
         "tests/test_report_authoring_v1.py",

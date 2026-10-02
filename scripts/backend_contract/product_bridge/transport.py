@@ -126,6 +126,11 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/case-analysis/{remainder[2]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "case-analysis" and ((remainder[2] == "intake" and method == "GET") or (remainder[2] in {"questions", "document-inventory"} and method == "POST")):
             return f"/v1/workspaces/{remainder[0]}/case-analysis/{remainder[2]}"
+        # #266: estado da derivacao de cada documento e nova tentativa explicita.
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "material-processing" and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/material-processing"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "material-processing" and _CANONICAL_UUID.fullmatch(remainder[2]) and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/material-processing/{remainder[2]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "pje-intake" and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["pje-intake", "availability"] and method == "POST":
