@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ExpertProfilePanel } from "./ExpertProfileSetup";
 import { PropertyPanel } from "./PropertyPanel";
+import { ParticipantsPanel } from "./ParticipantsPanel";
 
 import {
   getProcessCase,
@@ -10,7 +11,6 @@ import {
   saveProcessCase,
 } from "../data/processCase";
 import {
-  confirmProcessMetadataSourceSpan,
   getProcessMetadataReview,
   ProcessMetadataApiError,
   type ProcessMetadataEvidence,
@@ -37,9 +37,10 @@ const FIELDS: readonly {
   { key: "subsecao_judiciaria", label: "Subseção judiciária" },
   { key: "comarca_municipio", label: "Comarca ou município" },
   { key: "uf", label: "UF" },
-  { key: "parte_requerente", label: "Parte requerente" },
-  { key: "parte_requerida", label: "Parte requerida" },
 ];
+// #268: as partes deixaram de ser dois campos de texto. Os valores antigos
+// continuam no registro do processo, sem edição aqui; a autoridade é a lista
+// de participantes, e nada lido dos autos vira parte sem confirmação.
 
 function distinctReviewCandidates(evidence: readonly ProcessMetadataEvidence[]) {
   const candidates = new Map<string, ProcessMetadataEvidence>();
@@ -53,26 +54,6 @@ function distinctReviewCandidates(evidence: readonly ProcessMetadataEvidence[]) 
     }
   }
   return Array.from(candidates.values());
-}
-
-type SourceSelectionState = {
-  field: "parte_requerente" | "parte_requerida";
-  label: string;
-  evidence: ProcessMetadataEvidence;
-  start: number;
-  end: number;
-  kind: "selecting" | "saving" | "error";
-  message?: string;
-};
-
-function utf16OffsetToCodePoint(text: string, offset: number) {
-  return Array.from(text.slice(0, offset)).length;
-}
-
-function selectedSourceText(selection: SourceSelectionState) {
-  return Array.from(selection.evidence.source_text)
-    .slice(selection.start, selection.end)
-    .join("");
 }
 
 type ViewState =
@@ -98,8 +79,8 @@ function errorMessage(error: unknown) {
     : "Não foi possível concluir a operação local";
 }
 
-function initialDraft(snapshot: ProcessCaseSnapshot, review: ProcessMetadataReview) {
-  return Object.fromEntries(FIELDS.map(({ key }) => {
+function initialDraft(snapshot: ProcessCaseSnapshot, review: ProcessMetadataReview): ProcessCaseData {
+  return { ...snapshot.data, ...Object.fromEntries(FIELDS.map(({ key }) => {
     const manual = snapshot.data[key];
     const extracted = review.fields[key];
     return [
@@ -108,7 +89,7 @@ function initialDraft(snapshot: ProcessCaseSnapshot, review: ProcessMetadataRevi
         ? manual
         : manual || (extracted.state === "CONFIDENT" ? extracted.value : ""),
     ];
-  })) as ProcessCaseData;
+  })) };
 }
 
 const REVIEW_LABELS: Record<ProcessMetadataReview["state"], string> = {
@@ -125,13 +106,8 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
   const [state, setState] = useState<ViewState>({ kind: "loading" });
   const [saveState, setSaveState] = useState<SaveState>({ kind: "idle" });
   const [loadAttempt, setLoadAttempt] = useState(0);
-  const [sourceSelection, setSourceSelection] = useState<SourceSelectionState | null>(null);
-  const [sourceConfirmation, setSourceConfirmation] = useState<string | null>(null);
   const activeSave = useRef<AbortController | null>(null);
-  const activeSourceSave = useRef<AbortController | null>(null);
   const saveButton = useRef<HTMLButtonElement | null>(null);
-  const sourceText = useRef<HTMLTextAreaElement | null>(null);
-  const sourceReturnFocus = useRef<string | null>(null);
   // #266: extracao ausente pode ser leitura EM ANDAMENTO, nao falha. O estado vem
   // do produto; sem ele, a tela mantem o comportamento anterior.
   const [processing, setProcessing] = useState<Record<string, MaterialProcessingState>>({});
@@ -177,25 +153,8 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
             : current,
         );
       }
-      const pendingSourceSave = activeSourceSave.current;
-      if (pendingSourceSave !== null) {
-        pendingSourceSave.abort();
-        activeSourceSave.current = null;
-      }
-      setSourceSelection(null);
-      setSourceConfirmation(null);
     };
   }, [workspaceId, loadAttempt]);
-
-  useEffect(() => {
-    if (sourceSelection?.kind === "selecting") {
-      sourceText.current?.focus();
-    }
-  }, [
-    sourceSelection?.field,
-    sourceSelection?.evidence.evidence_id,
-    sourceSelection?.kind,
-  ]);
 
   useEffect(() => {
     if (
@@ -213,72 +172,6 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
         : current,
     );
     setSaveState({ kind: "idle" });
-    setSourceConfirmation(null);
-  }
-
-  function cancelSourceSelection() {
-    const field = sourceSelection?.field;
-    sourceReturnFocus.current = field ?? null;
-    setSourceSelection(null);
-  }
-
-  async function confirmSourceSelection() {
-    if (
-      state.kind !== "ready"
-      || state.workspaceId !== workspaceId
-      || sourceSelection === null
-      || sourceSelection.kind === "saving"
-    ) return;
-    const selected = selectedSourceText(sourceSelection);
-    if (!selected.trim()) return;
-    const controller = new AbortController();
-    activeSourceSave.current = controller;
-    setSourceSelection({ ...sourceSelection, kind: "saving", message: undefined });
-    try {
-      const snapshot = await confirmProcessMetadataSourceSpan(
-        workspaceId,
-        {
-          field_name: sourceSelection.field,
-          evidence_id: sourceSelection.evidence.evidence_id,
-          source_start: sourceSelection.start,
-          source_end: sourceSelection.end,
-          expected_source_revision: state.review.extraction_fingerprint,
-          expected_revision: state.snapshot.revision,
-        },
-        controller.signal,
-      );
-      if (!controller.signal.aborted) {
-        const field = sourceSelection.field;
-        setState((current) =>
-          current.kind === "ready" && current.workspaceId === workspaceId
-            ? {
-              ...current,
-              snapshot,
-              draft: {
-                ...current.draft,
-                [field]: snapshot.data[field],
-              },
-            }
-            : current,
-        );
-        setSourceSelection(null);
-        setSourceConfirmation(field);
-        setSaveState({ kind: "idle" });
-        requestAnimationFrame(() => {
-          document.getElementById(`process-case-${field}`)?.focus();
-        });
-      }
-    } catch (error) {
-      if (!controller.signal.aborted) {
-        setSourceSelection({
-          ...sourceSelection,
-          kind: "error",
-          message: errorMessage(error),
-        });
-      }
-    } finally {
-      if (activeSourceSave.current === controller) activeSourceSave.current = null;
-    }
   }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
@@ -437,9 +330,6 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
             || extracted?.state === "CONFLICTING"
             ? distinctReviewCandidates(extracted.evidence)
             : [];
-          const sourceEvidence = extracted?.evidence.filter(
-            (evidence) => evidence.requires_source_selection,
-          ) ?? [];
           const manualValue = visibleState.snapshot.data[field.key];
           const manualConflict = Boolean(
             manualValue
@@ -500,119 +390,6 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
                 ))}
               </div>
             ) : null}
-            {sourceEvidence.map((evidence) => {
-              const active = sourceSelection?.evidence.evidence_id === evidence.evidence_id;
-              const selected = active && sourceSelection ? selectedSourceText(sourceSelection) : "";
-              return (
-                <div className="source-evidence" key={evidence.evidence_id}>
-                  <div className="source-evidence__summary">
-                    <strong>Fonte ambígua</strong>
-                    <span>
-                      {evidence.source_filename}, página {evidence.source_page}. A fonte não permite
-                      separar automaticamente a parte.
-                    </span>
-                  </div>
-                  {!active ? (
-                    <button
-                      ref={(node) => {
-                        if (node && sourceReturnFocus.current === field.key) {
-                          sourceReturnFocus.current = null;
-                          node.focus();
-                        }
-                      }}
-                      id={`source-span-trigger-${field.key}`}
-                      className="text-action"
-                      type="button"
-                      disabled={saving}
-                      onClick={() => {
-                        if (field.key !== "parte_requerente" && field.key !== "parte_requerida") return;
-                        setSourceConfirmation(null);
-                        setSourceSelection({
-                          field: field.key,
-                          label: field.label,
-                          evidence,
-                          start: 0,
-                          end: 0,
-                          kind: "selecting",
-                        });
-                      }}
-                    >
-                      Selecionar trecho da fonte para {field.label}
-                    </button>
-                  ) : sourceSelection ? (
-                    <div className="source-span-review">
-                      <label htmlFor={`source-span-${evidence.evidence_id}`}>
-                        Selecione na fonte o trecho correspondente à parte.
-                      </label>
-                      <textarea
-                        ref={sourceText}
-                        id={`source-span-${evidence.evidence_id}`}
-                        aria-label={`Fonte para ${field.label}`}
-                        aria-readonly="true"
-                        value={evidence.source_text}
-                        disabled={sourceSelection.kind === "saving"}
-                        onBeforeInput={(event) => event.preventDefault()}
-                        onChange={() => undefined}
-                        onCut={(event) => event.preventDefault()}
-                        onDrop={(event) => event.preventDefault()}
-                        onPaste={(event) => event.preventDefault()}
-                        onSelect={(event) => {
-                          const control = event.currentTarget;
-                          const start = utf16OffsetToCodePoint(
-                            evidence.source_text,
-                            control.selectionStart,
-                          );
-                          const end = utf16OffsetToCodePoint(
-                            evidence.source_text,
-                            control.selectionEnd,
-                          );
-                          setSourceSelection((current) => current === null ? current : {
-                            ...current,
-                            start,
-                            end,
-                            kind: "selecting",
-                            message: undefined,
-                          });
-                        }}
-                      />
-                      <p className="source-span-review__selection" role="status" aria-live="polite">
-                        {selected
-                          ? `Trecho selecionado: ${selected}`
-                          : "Nenhum trecho selecionado."}
-                      </p>
-                      {sourceSelection.message ? (
-                        <p className="field-error" role="alert">{sourceSelection.message}</p>
-                      ) : null}
-                      <div className="source-span-review__actions">
-                        <button
-                          className="primary-action"
-                          type="button"
-                          disabled={sourceSelection.kind === "saving" || !selected.trim()}
-                          onClick={() => void confirmSourceSelection()}
-                        >
-                          {sourceSelection.kind === "saving"
-                            ? "Confirmando trecho…"
-                            : `Confirmar trecho para ${field.label}`}
-                        </button>
-                        <button
-                          className="text-action"
-                          type="button"
-                          disabled={sourceSelection.kind === "saving"}
-                          onClick={cancelSourceSelection}
-                        >
-                          Cancelar seleção para {field.label}
-                        </button>
-                      </div>
-                    </div>
-                  ) : null}
-                  {sourceConfirmation === field.key ? (
-                    <p className="source-evidence__confirmed" role="status">
-                      Trecho da fonte confirmado
-                    </p>
-                  ) : null}
-                </div>
-              );
-            })}
           </div>
           );
         })}
@@ -634,6 +411,6 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
           <span className="revision-note">Revisão atual {visibleState.snapshot.revision}</span>
         ) : null}
       </div>
-    </form><ExpertProfilePanel workspaceId={workspaceId} /><PropertyPanel workspaceId={workspaceId} /></>
+    </form><ParticipantsPanel workspaceId={workspaceId} processSaved={visibleState.snapshot.revision !== null} /><ExpertProfilePanel workspaceId={workspaceId} /><PropertyPanel workspaceId={workspaceId} /></>
   );
 }

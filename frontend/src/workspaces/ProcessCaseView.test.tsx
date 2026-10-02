@@ -1,9 +1,13 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { emptyProcessCaseData } from "../data/processCase";
 import { ProcessCaseView } from "./ProcessCaseView";
+
+// O painel de participantes tem testes próprios; aqui ele não disputa as
+// respostas encadeadas do formulário do processo.
+vi.mock("./ParticipantsPanel", () => ({ ParticipantsPanel: () => null }));
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_ID = "22222222-2222-4222-8222-222222222222";
@@ -145,38 +149,28 @@ describe("process case form", () => {
     expect(screen.getByText("Não foi possível extrair a camada de texto")).toBeInTheDocument();
   });
 
-  test("loads ten real fields and confirms only through the explicit primary action", async () => {
+  test("loads the eight identification fields and confirms only through the explicit primary action", async () => {
     const fetchSpy = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse(200, snapshot()))
       .mockResolvedValueOnce(jsonResponse(200, review()))
-      .mockResolvedValueOnce(jsonResponse(200, snapshot(DATA, 1)));
+      .mockResolvedValueOnce(jsonResponse(200, snapshot({ ...DATA, parte_requerente: "", parte_requerida: "" }, 1)));
     vi.stubGlobal("fetch", fetchSpy);
     const user = userEvent.setup();
     render(<ProcessCaseView workspaceId={ID} />);
 
     expect(screen.getByRole("status")).toHaveTextContent("Carregando dados do processo");
     const number = await screen.findByRole("textbox", { name: "Número do processo" });
-    expect(screen.getAllByRole("textbox")).toHaveLength(10);
+    expect(screen.getAllByRole("textbox")).toHaveLength(8);
+    expect(screen.queryByRole("textbox", { name: "Parte requerente" })).not.toBeInTheDocument();
     await user.type(number, DATA.numero_processo);
     await user.type(screen.getByRole("textbox", { name: "Ramo da Justiça" }), DATA.ramo_justica);
     await user.type(screen.getByRole("textbox", { name: "Tribunal" }), DATA.tribunal);
     await user.type(screen.getByRole("textbox", { name: "Vara" }), DATA.vara);
-    await user.type(
-      screen.getByRole("textbox", { name: "Município-sede" }),
-      DATA.municipio_sede,
-    );
-    await user.type(
-      screen.getByRole("textbox", { name: "Subseção judiciária" }),
-      DATA.subsecao_judiciaria,
-    );
-    await user.type(
-      screen.getByRole("textbox", { name: "Comarca ou município" }),
-      DATA.comarca_municipio,
-    );
+    await user.type(screen.getByRole("textbox", { name: "Município-sede" }), DATA.municipio_sede);
+    await user.type(screen.getByRole("textbox", { name: "Subseção judiciária" }), DATA.subsecao_judiciaria);
+    await user.type(screen.getByRole("textbox", { name: "Comarca ou município" }), DATA.comarca_municipio);
     await user.type(screen.getByRole("textbox", { name: "UF" }), DATA.uf);
-    await user.type(screen.getByRole("textbox", { name: "Parte requerente" }), DATA.parte_requerente);
-    await user.type(screen.getByRole("textbox", { name: "Parte requerida" }), DATA.parte_requerida);
 
     expect(fetchSpy).toHaveBeenCalledTimes(2);
     const save = screen.getByRole("button", { name: "Confirmar dados do processo" });
@@ -187,9 +181,42 @@ describe("process case form", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
     expect(JSON.parse(fetchSpy.mock.calls[2][1].body)).toEqual({
       expected_revision: null,
-      data: DATA,
+      data: { ...DATA, parte_requerente: "", parte_requerida: "" },
     });
     expect(save).toHaveFocus();
+  });
+
+  test("keeps legacy party text untouched and never turns an extracted party into a confirmed value (#268)", async () => {
+    const legacy = { ...DATA, parte_requerente: "ALFA E BETA", parte_requerida: "" };
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, snapshot(legacy, 1)))
+      .mockResolvedValueOnce(jsonResponse(200, review("PARTIAL", { ...DATA, parte_requerida: "GAMA EXTRAÍDA" })))
+      .mockResolvedValueOnce(jsonResponse(200, snapshot(legacy, 2)));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<ProcessCaseView workspaceId={ID} />);
+
+    await screen.findByRole("textbox", { name: "Número do processo" });
+    await user.click(screen.getByRole("button", { name: "Confirmar dados do processo" }));
+    expect(await screen.findByText("Dados do processo confirmados")).toBeInTheDocument();
+    expect(JSON.parse(fetchSpy.mock.calls[2][1].body).data).toMatchObject({ parte_requerente: "ALFA E BETA", parte_requerida: "" });
+  });
+
+  test("a fresh case does not prefill parties from extraction", async () => {
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(200, snapshot()))
+      .mockResolvedValueOnce(jsonResponse(200, review("EXTRACTED", DATA)))
+      .mockResolvedValueOnce(jsonResponse(200, snapshot(DATA, 1)));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<ProcessCaseView workspaceId={ID} />);
+
+    await screen.findByRole("textbox", { name: "Número do processo" });
+    await user.click(screen.getByRole("button", { name: "Confirmar dados do processo" }));
+    await screen.findByText("Dados do processo confirmados");
+    expect(JSON.parse(fetchSpy.mock.calls[2][1].body).data).toMatchObject({ parte_requerente: "", parte_requerida: "" });
   });
 
   test("loads persisted values and records an explicit correction", async () => {
@@ -408,106 +435,6 @@ describe("process case form", () => {
     await user.click(screen.getByRole("button", { name: "Confirmar dados do processo" }));
     expect(await screen.findByText("Dados do processo confirmados")).toBeInTheDocument();
     expect(fetchSpy).toHaveBeenCalledTimes(3);
-  });
-
-  test("confirms an exact unsegmented source span without manual reentry", async () => {
-    const source = "AUTOR: PARTE ALFA REPRESENTANTE BETA";
-    const extracted = review("PARTIAL");
-    extracted.fields.parte_requerente = {
-      state: "AMBIGUOUS",
-      value: "",
-      evidence: [{
-        ...review("PARTIAL", { parte_requerente: "placeholder" })
-          .fields.parte_requerente.evidence[0],
-        extracted_value: "",
-        normalized_text_span: source,
-        source_text: source,
-        source_start: 0,
-        requires_source_selection: true,
-      }],
-    };
-    const confirmed = { ...DATA, parte_requerente: "PARTE ALFA" };
-    const fetchSpy = vi.fn()
-      .mockResolvedValueOnce(jsonResponse(200, snapshot()))
-      .mockResolvedValueOnce(jsonResponse(200, extracted))
-      .mockResolvedValueOnce(jsonResponse(200, snapshot(confirmed, 1)));
-    vi.stubGlobal("fetch", fetchSpy);
-    const user = userEvent.setup();
-
-    render(<ProcessCaseView workspaceId={ID} />);
-
-    const field = await screen.findByRole("textbox", { name: "Parte requerente" });
-    expect(field).toHaveValue("");
-    expect(screen.queryByRole("button", { name: /Usar PARTE ALFA/ })).not.toBeInTheDocument();
-    const open = screen.getByRole("button", {
-      name: "Selecionar trecho da fonte para Parte requerente",
-    });
-    await user.click(open);
-    const sourceControl = screen.getByRole("textbox", { name: "Fonte para Parte requerente" });
-    expect(sourceControl).toHaveFocus();
-    expect(sourceControl).toHaveValue(source);
-    expect(sourceControl).toHaveAttribute("aria-readonly", "true");
-    expect(sourceControl).not.toHaveAttribute("readonly");
-    const tribunal = screen.getByRole("textbox", { name: "Tribunal" });
-    await user.clear(tribunal);
-    await user.type(tribunal, "TRIBUNAL EM EDIÇÃO");
-    await user.type(sourceControl, "NÃO É AUTORIDADE");
-    expect(sourceControl).toHaveValue(source);
-
-    const start = source.indexOf("PARTE ALFA");
-    (sourceControl as HTMLTextAreaElement).setSelectionRange(start, start + "PARTE ALFA".length);
-    fireEvent.select(sourceControl);
-    expect(screen.getByText("Trecho selecionado: PARTE ALFA")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Confirmar trecho para Parte requerente" }));
-
-    expect(field).toHaveValue("PARTE ALFA");
-    expect(tribunal).toHaveValue("TRIBUNAL EM EDIÇÃO");
-    const request = JSON.parse(fetchSpy.mock.calls[2][1].body);
-    expect(request).toMatchObject({
-      field_name: "parte_requerente",
-      evidence_id: "e".repeat(64),
-      source_start: start,
-      source_end: start + "PARTE ALFA".length,
-      expected_source_revision: "f".repeat(64),
-      expected_revision: null,
-    });
-    expect(request).not.toHaveProperty("value");
-    expect(screen.getByText("Trecho da fonte confirmado")).toBeInTheDocument();
-  });
-
-  test("cancels source selection without mutation and restores focus", async () => {
-    const extracted = review("PARTIAL");
-    extracted.fields.parte_requerente = {
-      state: "AMBIGUOUS",
-      value: "",
-      evidence: [{
-        ...review("PARTIAL", { parte_requerente: "placeholder" })
-          .fields.parte_requerente.evidence[0],
-        extracted_value: "",
-        source_text: "AUTOR: PARTE ALFA",
-        normalized_text_span: "AUTOR: PARTE ALFA",
-        requires_source_selection: true,
-      }],
-    };
-    const fetchSpy = vi.fn()
-      .mockResolvedValueOnce(jsonResponse(200, snapshot()))
-      .mockResolvedValueOnce(jsonResponse(200, extracted));
-    vi.stubGlobal("fetch", fetchSpy);
-    const user = userEvent.setup();
-
-    render(<ProcessCaseView workspaceId={ID} />);
-
-    const open = await screen.findByRole("button", {
-      name: "Selecionar trecho da fonte para Parte requerente",
-    });
-    await user.click(open);
-    await user.click(screen.getByRole("button", { name: "Cancelar seleção para Parte requerente" }));
-
-    expect(screen.getByRole("button", {
-      name: "Selecionar trecho da fonte para Parte requerente",
-    })).toHaveFocus();
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(screen.getByRole("textbox", { name: "Parte requerente" })).toHaveValue("");
   });
 
   test("identifies OCR-derived provenance without exposing implementation paths", async () => {

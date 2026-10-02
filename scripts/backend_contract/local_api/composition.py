@@ -17,6 +17,8 @@ from ..application.document_ingestion import CaseDocumentIngestion, DocumentDeri
 from ..application.photo_library import CuratePhotoLibrary, GetPhotoLibrary, ReadPhotoThumbnail
 from ..application.site_location import ConfirmSiteLocation, GetSiteLocation, ProposeSiteLocation
 from ..application.property_record import GetPropertyRecord, GetPropertyProposals, SavePropertyRecord
+from ..application.case_document_texts import CaseDocumentTexts
+from ..application.process_participants import DecideProcessParticipants, GetProcessParticipants, ParticipantProposals
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.workspace_recovery import (
     AbandonWorkspaceRecovery,
@@ -540,12 +542,21 @@ def build_local_api(
         get_latest_artifact,
         ListCaseDocumentsWithPjeInventory(list_case_documents, store.revisions) if list_case_documents is not None else None,
     )
-    get_property_proposals = (
-        GetPropertyProposals(
-            list_case_documents, read_case_document, LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()),
-            ListCaseDocumentsWithPjeInventory(list_case_documents, store.revisions),
+    case_document_texts = (
+        CaseDocumentTexts(
+            ListCaseDocumentsWithPjeInventory(list_case_documents, store.revisions), read_case_document,
+            LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()), store.revisions, local_clock, local_ids,
         )
         if list_case_documents is not None and read_case_document is not None else None
+    )
+    get_property_proposals = GetPropertyProposals(case_document_texts) if case_document_texts is not None else None
+    get_process_participants = GetProcessParticipants(
+        get_latest_artifact, get_process_case, case_document_texts,
+        ParticipantProposals(case_document_texts) if case_document_texts is not None else None,
+    )
+    decide_process_participants = DecideProcessParticipants(
+        get_process_participants, store.revisions,
+        private_store.authority_guard if private_store is not None else nullcontext, local_clock, local_ids,
     )
     save_property_record = SavePropertyRecord(
         get_property_record, store.revisions, get_expert_profile, get_property_proposals,
@@ -844,6 +855,8 @@ def build_local_api(
         get_property_record=get_property_record,
         save_property_record=save_property_record,
         get_property_proposals=get_property_proposals,
+        get_process_participants=get_process_participants,
+        decide_process_participants=decide_process_participants,
         curate_photo_library=CuratePhotoLibrary(
             store.revisions, get_latest_artifact, get_private_content,
             private_store.authority_guard if private_store is not None else nullcontext, local_clock, local_ids,

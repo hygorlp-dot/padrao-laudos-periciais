@@ -899,6 +899,17 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
     number = 0
     for section in sorted(report.sections, key=lambda item: item.order):
         body: list[ReportPresentationBlock] = []
+        if section.kind == "IDENTIFICATION" and report.process_record is not None and report.process_record.confirmed_participants:
+            # Relacao completa dos participantes confirmados (#268): a capa pode
+            # resumir, este item nunca omite ninguem.
+            from .process_participants import POLE_LABELS, ParticipantPole, participant_line
+            confirmed = report.process_record.confirmed_participants
+            for pole in (ParticipantPole.ACTIVE, ParticipantPole.PASSIVE, ParticipantPole.OTHER):
+                members = [item for item in confirmed if item.pole is pole]
+                if not members:
+                    continue
+                body.append(ReportPresentationBlock("PARAGRAPH", "", f"{POLE_LABELS[pole]}:"))
+                body.extend(ReportPresentationBlock("PARAGRAPH", _canonical_text(participant_line(item))) for item in members)
         if section.kind == "PURPOSE_OBJECT" and report.property_record is not None:
             from .property_record import PROPERTY_FIELDS
             labels = {field: label for field, label, *_ in PROPERTY_FIELDS}

@@ -19,6 +19,7 @@ from weakref import WeakKeyDictionary
 from ..photo_library import photo_library_from_mapping
 from ..site_location import site_location_from_mapping
 from ..property_record import property_record_from_mapping, property_proposals
+from ..process_participants import participants_register_from_mapping
 from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
@@ -38,6 +39,7 @@ from ..application.artifact_ownership import (
     USER_DEFINED_ARTIFACT_KINDS,
 )
 from ..application.content_roles import validate_private_content_role_payload
+from ..application.pje_party_table import parse_pje_participant_rows
 from ..application.ocr_cache import _page_from_payload
 from ..application.process_metadata import document_metadata_from_payload
 from ..application.construction_defect_analysis import (
@@ -330,6 +332,7 @@ _ARTIFACT_VALIDATORS = {
     "REPORT_SNAPSHOT_V1": report_snapshot_from_mapping,
     "SITE_LOCATION_V1": site_location_from_mapping,
     "PROPERTY_RECORD_V1": property_record_from_mapping,
+    "PROCESS_PARTICIPANTS_V1": participants_register_from_mapping,
     "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
     "AI_RUN": lambda value: _validate_ai_envelope(value, "AI_RUN"),
     "AI_PROPOSAL": lambda value: _validate_ai_envelope(value, "AI_PROPOSAL"),
@@ -451,6 +454,7 @@ _CANONICAL_PRODUCT_ARTIFACT_IDS = {
     "REPORT_SNAPSHOT_V1": "REPORT-SNAPSHOT",
     "SITE_LOCATION_V1": "SITE-LOCATION",
     "PROPERTY_RECORD_V1": "PROPERTY-RECORD",
+    "PROCESS_PARTICIPANTS_V1": "PROCESS-PARTICIPANTS",
     "TECHNICAL_SNAPSHOT_V1": "TECHNICAL-SNAPSHOT",
 }
 _DOMAIN_REVISION_FIELDS = {
@@ -640,6 +644,10 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                 process_fields = ProcessCaseData.from_mapping(thaw_payload(process_source.payload)).as_dict()
                 if any(captured_process[name] != value for name, value in process_fields.items()):
                     raise RepositoryIntegrityError("backup report process authority diverges")
+                if "participants" in captured_process:
+                    participants_source = require_record("PROCESS_PARTICIPANTS_V1", captured_process["participants_revision"], captured_process["participants_checksum"])
+                    if thaw_payload(participants_source.payload)["participants"] != captured_process["participants"]:
+                        raise RepositoryIntegrityError("backup report participants authority diverges")
             captured_property = payload.get("property_record")
             if captured_property is not None:
                 property_source = require_record("PROPERTY_RECORD_V1", captured_property["source_revision"], captured_property["source_checksum"])
@@ -901,6 +909,7 @@ class VerifyWorkspaceBackup:
         }
         private_by_id = {str(item.metadata.content_id): item for item in private_contents}
         property_source_proposals = {}
+        participant_source_pages = {}
         question_source_proposals = {}
         for record in revisions:
             if record.artifact_kind == "CASE_ANALYSIS_SNAPSHOT_V1":
@@ -949,12 +958,54 @@ class VerifyWorkspaceBackup:
                         source = private_by_id[evidence.document_id]
                         try:
                             extracted = LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()).extract(BytesIO(source.content), document_sha256=source.metadata.checksum_sha256)
-                            proposals = property_proposals(workspace_id, evidence.document_id, source.metadata.checksum_sha256, source.metadata.original_filename, extracted.pages)
+                            proposals = property_proposals(workspace_id, evidence.document_id, source.metadata.checksum_sha256, source.metadata.original_filename, extracted.pages, include_legacy_labels=True)
                         except Exception as exc:
                             raise RepositoryIntegrityError("backup property source evidence cannot be verified locally") from exc
                         property_source_proposals[evidence.document_id] = proposals
                     if not any((proposal.field, proposal.value, proposal.evidence) == (item.field, item.value, evidence) for proposal in property_source_proposals[evidence.document_id]):
                         raise RepositoryIntegrityError("backup property source evidence diverges from document bytes")
+            elif record.artifact_kind == "PROCESS_PARTICIPANTS_V1":
+                # A proveniencia de cada participante nomeia bytes exatos; o
+                # pacote tem de carregar esses bytes, ou a decisao do perito fica
+                # sem lastro auditavel depois da restauracao.
+                register = participants_register_from_mapping(thaw_payload(record.payload))
+                if register.workspace_id != str(workspace_id):
+                    raise RepositoryIntegrityError("backup participant source authority belongs to another workspace")
+                for participant in register.participants:
+                    sources = (*participant.provenance, *(item for representative in participant.representatives for item in representative.provenance))
+                    if any(private_authority.get(item.content_id) != item.source_sha256 for item in sources):
+                        raise RepositoryIntegrityError("backup participant source authority is incomplete")
+                    # Procurador lido da fonte esta na mesma linha (ou continuacao)
+                    # da parte: sua proveniencia nunca aponta outra pagina.
+                    party_pages = {(item.content_id, item.page) for item in participant.provenance}
+                    if any((item.content_id, item.page) not in party_pages for representative in participant.representatives for item in representative.provenance):
+                        raise RepositoryIntegrityError("backup participant source evidence diverges from document bytes")
+                    # O nome, o trecho e a posicao tem de sair dos bytes, como a
+                    # evidencia do imovel: a linha da tabela e relida da pagina.
+                    for source in participant.provenance:
+                        if source.content_id not in participant_source_pages:
+                            from .pdf_text import LocalPdfTextExtractor
+                            from .rapid_ocr import RapidOcrLatinEngine
+                            private = private_by_id[source.content_id]
+                            try:
+                                extracted = LocalPdfTextExtractor(ocr_engine=RapidOcrLatinEngine()).extract(BytesIO(private.content), document_sha256=private.metadata.checksum_sha256)
+                            except Exception as exc:
+                                raise RepositoryIntegrityError("backup participant source evidence cannot be verified locally") from exc
+                            participant_source_pages[source.content_id] = {page.number: page for page in extracted.pages}
+                        page = participant_source_pages[source.content_id].get(source.page)
+                        if page is None or page.extraction_mode.value != source.extraction_mode or not page.text:
+                            raise RepositoryIntegrityError("backup participant source evidence diverges from document bytes")
+                        row = next((item for item in parse_pje_participant_rows(page.text).rows if (item.source_start, item.source_end) == (source.source_start, source.source_end)), None)
+                        if (
+                            row is None or row.source_line.strip() != source.excerpt
+                            or (not participant.edited and row.name.strip() != participant.name)
+                        ):
+                            raise RepositoryIntegrityError("backup participant source evidence diverges from document bytes")
+                        derived = {(item.source_start, item.source_end, item.name.strip()) for item in row.representatives}
+                        for representative in participant.representatives:
+                            for item in representative.provenance:
+                                if item.content_id == source.content_id and item.page == source.page and (item.source_start, item.source_end, representative.name) not in derived:
+                                    raise RepositoryIntegrityError("backup participant source evidence diverges from document bytes")
             elif record.artifact_kind == "PJE_INTAKE_V1":
                 # O inventario nomeia a fonte privada de que foi derivado. Sem
                 # este fecho, um backup podia ser certificado intacto e restaurar

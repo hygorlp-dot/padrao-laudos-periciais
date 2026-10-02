@@ -7,7 +7,8 @@ export type PropertyEnvelope = {
   /** Campos confirmados cuja página de origem o perito excluiu depois da confirmação. */
   stale_fields: string[];
 };
-export type PropertyProposal = { proposal_id: string; workspace_id: string; field: string; value: string; evidence: PropertyEvidence; state: "PROPOSED" | "CONFLICTING" };
+export type PropertyProposal = { proposal_id: string; workspace_id: string; field: string; value: string; evidence: PropertyEvidence; state: "PROPOSED" | "CONFLICTING"; strength?: "STRONG" | "POSSIBLE" };
+export type PropertyProposalSet = { proposals: PropertyProposal[]; pendingDocuments: string[] };
 export type PropertyChange = { field: string; value: string | null; proposal_id: string | null };
 export class PropertyApiError extends Error {
   constructor(readonly kind: "conflict" | "profile-missing" | "invalid" | "unavailable") { super(kind); }
@@ -27,10 +28,10 @@ function envelope(value: PropertyEnvelope, workspace: string) {
 export async function getPropertyRecord(workspace: string, signal?: AbortSignal) {
   return envelope(await read(await fetch(base(workspace), { credentials: "same-origin", cache: "no-store", signal })), workspace);
 }
-export async function getPropertyProposals(workspace: string, signal?: AbortSignal): Promise<PropertyProposal[]> {
+export async function getPropertyProposals(workspace: string, signal?: AbortSignal): Promise<PropertyProposalSet> {
   const value = await read(await fetch(`${base(workspace)}/proposals`, { credentials: "same-origin", cache: "no-store", signal }));
   if (value?.workspace_id !== workspace || !Array.isArray(value.proposals) || value.proposals.some((p: PropertyProposal) => p.workspace_id !== workspace)) throw new PropertyApiError("unavailable");
-  return value.proposals;
+  return { proposals: value.proposals, pendingDocuments: Array.isArray(value.pending_documents) ? value.pending_documents : [] };
 }
 export async function savePropertyRecord(workspace: string, revision: number | null, changes: PropertyChange[]) {
   return envelope(await read(await fetch(base(workspace), { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: revision, changes }) })), workspace);

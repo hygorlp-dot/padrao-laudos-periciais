@@ -59,6 +59,8 @@ def test_frontend_production_source_has_no_secret_or_unbounded_network_capabilit
             "frontend/src/data/pjeIntake.ts",
             "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",
+        # #268: participantes processuais, mesmo contrato same-origin /app-api.
+        "frontend/src/data/processParticipants.ts",
         "frontend/src/data/propertyRecord.ts",
             "frontend/src/data/reportSnapshot.ts",
             "frontend/src/data/siteLocation.ts",

@@ -169,6 +169,10 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/property-record"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["property-record", "proposals"] and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/property-record/proposals"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "process-participants" and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/process-participants"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["process-participants", "decisions"] and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/process-participants/decisions"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "site-location" and method in {"GET", "PUT"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["site-location", "confirmation"] and method == "POST":

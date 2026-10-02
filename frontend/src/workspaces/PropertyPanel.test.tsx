@@ -8,7 +8,7 @@ const record = { revision: 1, updated_at: null, record: { schema_version: "1.0.0
 beforeEach(() => { vi.clearAllMocks(); vi.mocked(getPropertyRecord).mockResolvedValue(record); });
 it("keeps confirmed values when extracting and requires an explicit choice before save", async () => {
   const evidence = { document_id: "d", document_sha256: "a".repeat(64), filename: "documento.pdf", page: 2, excerpt: "Proprietário: Outra pessoa", method: "LABEL_NATIVE_TEXT_V1", confidence: null, source_value: "Outra pessoa" };
-  vi.mocked(getPropertyProposals).mockResolvedValue([{ proposal_id: "source-token", workspace_id: "11111111-1111-4111-8111-111111111111", field: "owner", value: "Outra pessoa", evidence, state: "CONFLICTING" }]);
+  vi.mocked(getPropertyProposals).mockResolvedValue({ proposals: [{ proposal_id: "source-token", workspace_id: "11111111-1111-4111-8111-111111111111", field: "owner", value: "Outra pessoa", evidence, state: "CONFLICTING" }], pendingDocuments: [] });
   vi.mocked(savePropertyRecord).mockResolvedValue(record);
   render(<PropertyPanel workspaceId="11111111-1111-4111-8111-111111111111" />);
   fireEvent.click(screen.getByText("Imóvel"));
@@ -60,4 +60,24 @@ it("treats an envelope without the exclusion list as unavailable, not as 'nothin
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(legacy), { status: 200, headers: { "Content-Type": "application/json" } })));
   await expect(real("11111111-1111-4111-8111-111111111111")).rejects.toMatchObject({ kind: "unavailable" });
   vi.unstubAllGlobals();
+});
+it("never claims the information is absent when nothing was proposed (#269)", async () => {
+  vi.mocked(getPropertyProposals).mockResolvedValue({ proposals: [], pendingDocuments: ["anexo.pdf"] });
+  render(<PropertyPanel workspaceId="11111111-1111-4111-8111-111111111111" />);
+  fireEvent.click(screen.getByText("Imóvel"));
+  await screen.findByLabelText("Proprietário do imóvel");
+  fireEvent.click(screen.getByRole("button", { name: "Buscar informações nos documentos" }));
+  expect(await screen.findByText(/Nenhuma proposta foi encontrada automaticamente. As informações ainda podem existir nos documentos/)).toBeInTheDocument();
+  expect(screen.getByText(/Leitura em andamento: anexo.pdf/)).toBeInTheDocument();
+  expect(screen.queryByText(/Não foram encontrados campos explícitos/)).not.toBeInTheDocument();
+});
+it("labels a weak contextual match as a possible information, never as a fact", async () => {
+  const evidence = { document_id: "d", document_sha256: "a".repeat(64), filename: "contrato.pdf", page: 4, excerpt: "Endereço: Rua da Cláusula, nº 77", method: "DOCUMENT_PATTERN_NATIVE_TEXT_V2", confidence: null, source_value: "Rua da Cláusula" };
+  vi.mocked(getPropertyProposals).mockResolvedValue({ proposals: [{ proposal_id: "weak", workspace_id: "11111111-1111-4111-8111-111111111111", field: "owner", value: "Rua da Cláusula", evidence, state: "PROPOSED", strength: "POSSIBLE" }], pendingDocuments: [] });
+  render(<PropertyPanel workspaceId="11111111-1111-4111-8111-111111111111" />);
+  fireEvent.click(screen.getByText("Imóvel"));
+  await screen.findByLabelText("Proprietário do imóvel");
+  fireEvent.click(screen.getByRole("button", { name: "Buscar informações nos documentos" }));
+  expect(await screen.findByText("Possível informação encontrada — confira a fonte")).toBeInTheDocument();
+  expect(savePropertyRecord).not.toHaveBeenCalled();
 });
