@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-08-23T16:51:41.1778538-03:00",
+  "generatedAt": "2026-10-02T17:30:00+00:00",
   "title": "Design System: Calibrated Process Ledger",
   "extensions": {
     "colorMeta": {
@@ -8,92 +8,248 @@
         "role": "neutral",
         "displayName": "Mineral Ground",
         "canonical": "#f2f4f1",
-        "tonalRamp": ["oklch(15% 0.008 145)", "oklch(27% 0.008 145)", "oklch(39% 0.008 145)", "oklch(51% 0.008 145)", "oklch(63% 0.008 145)", "oklch(75% 0.008 145)", "oklch(87% 0.008 145)", "oklch(95% 0.008 145)"]
+        "tonalRamp": [
+          "oklch(15% 0.008 145)",
+          "oklch(27% 0.008 145)",
+          "oklch(39% 0.008 145)",
+          "oklch(51% 0.008 145)",
+          "oklch(63% 0.008 145)",
+          "oklch(75% 0.008 145)",
+          "oklch(87% 0.008 145)",
+          "oklch(95% 0.008 145)"
+        ]
       },
       "paper": {
         "role": "neutral",
         "displayName": "Clean Paper",
         "canonical": "#fcfdfb",
-        "tonalRamp": ["oklch(15% 0.006 130)", "oklch(27% 0.006 130)", "oklch(39% 0.006 130)", "oklch(51% 0.006 130)", "oklch(63% 0.006 130)", "oklch(75% 0.006 130)", "oklch(87% 0.006 130)", "oklch(95% 0.006 130)"]
+        "tonalRamp": [
+          "oklch(15% 0.006 130)",
+          "oklch(27% 0.006 130)",
+          "oklch(39% 0.006 130)",
+          "oklch(51% 0.006 130)",
+          "oklch(63% 0.006 130)",
+          "oklch(75% 0.006 130)",
+          "oklch(87% 0.006 130)",
+          "oklch(95% 0.006 130)"
+        ]
       },
       "graphite": {
         "role": "primary",
         "displayName": "Graphite Rail",
         "canonical": "#18201d",
-        "tonalRamp": ["oklch(15% 0.014 165)", "oklch(27% 0.014 165)", "oklch(39% 0.014 165)", "oklch(51% 0.014 165)", "oklch(63% 0.014 165)", "oklch(75% 0.014 165)", "oklch(87% 0.014 165)", "oklch(95% 0.014 165)"]
+        "tonalRamp": [
+          "oklch(15% 0.014 165)",
+          "oklch(27% 0.014 165)",
+          "oklch(39% 0.014 165)",
+          "oklch(51% 0.014 165)",
+          "oklch(63% 0.014 165)",
+          "oklch(75% 0.014 165)",
+          "oklch(87% 0.014 165)",
+          "oklch(95% 0.014 165)"
+        ]
       },
       "graphite-soft": {
         "role": "primary",
         "displayName": "Soft Graphite",
         "canonical": "#25302b",
-        "tonalRamp": ["oklch(15% 0.016 160)", "oklch(27% 0.016 160)", "oklch(39% 0.016 160)", "oklch(51% 0.016 160)", "oklch(63% 0.016 160)", "oklch(75% 0.016 160)", "oklch(87% 0.016 160)", "oklch(95% 0.016 160)"]
+        "tonalRamp": [
+          "oklch(15% 0.016 160)",
+          "oklch(27% 0.016 160)",
+          "oklch(39% 0.016 160)",
+          "oklch(51% 0.016 160)",
+          "oklch(63% 0.016 160)",
+          "oklch(75% 0.016 160)",
+          "oklch(87% 0.016 160)",
+          "oklch(95% 0.016 160)"
+        ]
       },
       "slate": {
         "role": "neutral",
         "displayName": "Technical Slate",
         "canonical": "#5c655f",
-        "tonalRamp": ["oklch(15% 0.012 150)", "oklch(27% 0.012 150)", "oklch(39% 0.012 150)", "oklch(51% 0.012 150)", "oklch(63% 0.012 150)", "oklch(75% 0.012 150)", "oklch(87% 0.012 150)", "oklch(95% 0.012 150)"]
+        "tonalRamp": [
+          "oklch(15% 0.012 150)",
+          "oklch(27% 0.012 150)",
+          "oklch(39% 0.012 150)",
+          "oklch(51% 0.012 150)",
+          "oklch(63% 0.012 150)",
+          "oklch(75% 0.012 150)",
+          "oklch(87% 0.012 150)",
+          "oklch(95% 0.012 150)"
+        ]
       },
       "rule": {
         "role": "neutral",
         "displayName": "Pale Rule",
         "canonical": "#d6dcd7",
-        "tonalRamp": ["oklch(15% 0.008 145)", "oklch(27% 0.008 145)", "oklch(39% 0.008 145)", "oklch(51% 0.008 145)", "oklch(63% 0.008 145)", "oklch(75% 0.008 145)", "oklch(87% 0.008 145)", "oklch(95% 0.008 145)"]
+        "tonalRamp": [
+          "oklch(15% 0.008 145)",
+          "oklch(27% 0.008 145)",
+          "oklch(39% 0.008 145)",
+          "oklch(51% 0.008 145)",
+          "oklch(63% 0.008 145)",
+          "oklch(75% 0.008 145)",
+          "oklch(87% 0.008 145)",
+          "oklch(95% 0.008 145)"
+        ]
       },
       "rule-dark": {
         "role": "neutral",
         "displayName": "Dark Rule",
         "canonical": "#3b4741",
-        "tonalRamp": ["oklch(15% 0.014 155)", "oklch(27% 0.014 155)", "oklch(39% 0.014 155)", "oklch(51% 0.014 155)", "oklch(63% 0.014 155)", "oklch(75% 0.014 155)", "oklch(87% 0.014 155)", "oklch(95% 0.014 155)"]
+        "tonalRamp": [
+          "oklch(15% 0.014 155)",
+          "oklch(27% 0.014 155)",
+          "oklch(39% 0.014 155)",
+          "oklch(51% 0.014 155)",
+          "oklch(63% 0.014 155)",
+          "oklch(75% 0.014 155)",
+          "oklch(87% 0.014 155)",
+          "oklch(95% 0.014 155)"
+        ]
       },
       "ochre": {
         "role": "secondary",
         "displayName": "Ledger Ochre",
         "canonical": "#7b570d",
-        "tonalRamp": ["oklch(15% 0.095 82)", "oklch(27% 0.095 82)", "oklch(39% 0.095 82)", "oklch(51% 0.095 82)", "oklch(63% 0.095 82)", "oklch(75% 0.095 82)", "oklch(87% 0.095 82)", "oklch(95% 0.095 82)"]
+        "tonalRamp": [
+          "oklch(15% 0.095 82)",
+          "oklch(27% 0.095 82)",
+          "oklch(39% 0.095 82)",
+          "oklch(51% 0.095 82)",
+          "oklch(63% 0.095 82)",
+          "oklch(75% 0.095 82)",
+          "oklch(87% 0.095 82)",
+          "oklch(95% 0.095 82)"
+        ]
       },
       "ochre-bright": {
         "role": "secondary",
         "displayName": "Calibrated Brass",
         "canonical": "#c59a2a",
-        "tonalRamp": ["oklch(15% 0.12 85)", "oklch(27% 0.12 85)", "oklch(39% 0.12 85)", "oklch(51% 0.12 85)", "oklch(63% 0.12 85)", "oklch(75% 0.12 85)", "oklch(87% 0.12 85)", "oklch(95% 0.12 85)"]
+        "tonalRamp": [
+          "oklch(15% 0.12 85)",
+          "oklch(27% 0.12 85)",
+          "oklch(39% 0.12 85)",
+          "oklch(51% 0.12 85)",
+          "oklch(63% 0.12 85)",
+          "oklch(75% 0.12 85)",
+          "oklch(87% 0.12 85)",
+          "oklch(95% 0.12 85)"
+        ]
       },
       "error": {
         "role": "tertiary",
         "displayName": "Forensic Rust",
         "canonical": "#9a3f2f",
-        "tonalRamp": ["oklch(15% 0.12 32)", "oklch(27% 0.12 32)", "oklch(39% 0.12 32)", "oklch(51% 0.12 32)", "oklch(63% 0.12 32)", "oklch(75% 0.12 32)", "oklch(87% 0.12 32)", "oklch(95% 0.12 32)"]
+        "tonalRamp": [
+          "oklch(15% 0.12 32)",
+          "oklch(27% 0.12 32)",
+          "oklch(39% 0.12 32)",
+          "oklch(51% 0.12 32)",
+          "oklch(63% 0.12 32)",
+          "oklch(75% 0.12 32)",
+          "oklch(87% 0.12 32)",
+          "oklch(95% 0.12 32)"
+        ]
       },
       "focus": {
         "role": "tertiary",
         "displayName": "Focus Teal",
         "canonical": "#185f72",
-        "tonalRamp": ["oklch(15% 0.08 220)", "oklch(27% 0.08 220)", "oklch(39% 0.08 220)", "oklch(51% 0.08 220)", "oklch(63% 0.08 220)", "oklch(75% 0.08 220)", "oklch(87% 0.08 220)", "oklch(95% 0.08 220)"]
+        "tonalRamp": [
+          "oklch(15% 0.08 220)",
+          "oklch(27% 0.08 220)",
+          "oklch(39% 0.08 220)",
+          "oklch(51% 0.08 220)",
+          "oklch(63% 0.08 220)",
+          "oklch(75% 0.08 220)",
+          "oklch(87% 0.08 220)",
+          "oklch(95% 0.08 220)"
+        ]
       },
       "focus-on-dark": {
         "role": "tertiary",
         "displayName": "Focus Teal on Dark",
         "canonical": "#84cbd6",
-        "tonalRamp": ["oklch(15% 0.07 210)", "oklch(27% 0.07 210)", "oklch(39% 0.07 210)", "oklch(51% 0.07 210)", "oklch(63% 0.07 210)", "oklch(75% 0.07 210)", "oklch(87% 0.07 210)", "oklch(95% 0.07 210)"]
+        "tonalRamp": [
+          "oklch(15% 0.07 210)",
+          "oklch(27% 0.07 210)",
+          "oklch(39% 0.07 210)",
+          "oklch(51% 0.07 210)",
+          "oklch(63% 0.07 210)",
+          "oklch(75% 0.07 210)",
+          "oklch(87% 0.07 210)",
+          "oklch(95% 0.07 210)"
+        ]
+      },
+      "rule-strong": {
+        "role": "neutral",
+        "displayName": "Strong Rule",
+        "canonical": "#8a948d",
+        "tonalRamp": [
+          "oklch(15% 0.01 150)",
+          "oklch(27% 0.01 150)",
+          "oklch(39% 0.01 150)",
+          "oklch(51% 0.01 150)",
+          "oklch(63% 0.01 150)",
+          "oklch(75% 0.01 150)",
+          "oklch(87% 0.01 150)",
+          "oklch(95% 0.01 150)"
+        ]
       }
     },
     "typographyMeta": {
-      "display": { "displayName": "Display", "purpose": "Título único da etapa." },
-      "headline": { "displayName": "Headline", "purpose": "Título de estado operacional." },
-      "body": { "displayName": "Body", "purpose": "Descrições e mensagens para leitura prolongada." },
-      "label": { "displayName": "Label", "purpose": "Contexto compacto e metadados auxiliares." },
-      "data": { "displayName": "Data", "purpose": "Índices e coordenadas do workflow com numerais tabulares." }
+      "display": {
+        "displayName": "Display",
+        "purpose": "Título único da etapa."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Título de estado operacional."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Descrições e mensagens para leitura prolongada."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Contexto compacto e metadados auxiliares."
+      },
+      "data": {
+        "displayName": "Data",
+        "purpose": "Índices e coordenadas do workflow com numerais tabulares."
+      }
     },
     "shadows": [
-      { "name": "empty-sheet-ambient", "value": "0 0.75rem 1.8rem rgb(24 32 29 / 8%)", "purpose": "Somente para o símbolo de documento vazio." }
+      {
+        "name": "empty-sheet-ambient",
+        "value": "0 0.75rem 1.8rem rgb(24 32 29 / 8%)",
+        "purpose": "Somente para o símbolo de documento vazio."
+      }
     ],
     "motion": [
-      { "name": "functional-duration", "value": "140ms", "purpose": "Duração de hover e active em controles." },
-      { "name": "functional-ease", "value": "cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Curva responsiva para transições funcionais." }
+      {
+        "name": "functional-duration",
+        "value": "140ms",
+        "purpose": "Duração de hover e active em controles."
+      },
+      {
+        "name": "functional-ease",
+        "value": "cubic-bezier(0.22, 1, 0.36, 1)",
+        "purpose": "Curva responsiva para transições funcionais."
+      }
     ],
     "breakpoints": [
-      { "name": "compact-desktop", "value": "1000px" },
-      { "name": "minimum-canvas", "value": "760px" }
+      {
+        "name": "compact-desktop",
+        "value": "1000px"
+      },
+      {
+        "name": "minimum-canvas",
+        "value": "760px"
+      }
     ]
   },
   "components": [
@@ -149,6 +305,30 @@
       "description": "Marca circular linear que confirma uma etapa preparada sem criar conteúdo fictício.",
       "html": "<span class=\"ds-state-mark\" aria-hidden=\"true\"><svg viewBox=\"0 0 24 24\"><path d=\"m7 12.25 3.1 3.1L17.5 8\" /></svg></span>",
       "css": ".ds-state-mark { display:grid; width:2.7rem; height:2.7rem; place-items:center; color:var(--color-graphite); background:var(--color-paper); border:1px solid var(--color-rule); border-radius:50%; } .ds-state-mark svg { width:1.35rem; height:1.35rem; fill:none; stroke:currentColor; stroke-linecap:round; stroke-linejoin:round; stroke-width:1.8; }"
+    },
+    {
+      "name": "Input Field",
+      "kind": "input",
+      "refersTo": "input-field",
+      "description": "Campo de formulário sobre papel, com borda que atinge 3:1 e rótulo acima.",
+      "html": "<label class=\"ds-field\">Registro no conselho<input placeholder=\"Ex.: CREA-PE 000000\" /></label>",
+      "css": ".ds-field { display:grid; gap:0.25rem; font-family:var(--font-body); font-size:0.88rem; color:var(--color-graphite); } .ds-field input { min-height:2.5rem; padding:0.45rem 0.6rem; color:var(--color-graphite); background:var(--color-paper); border:1px solid var(--color-rule-strong); border-radius:0.38rem; font:inherit; } .ds-field input:focus-visible { outline:3px solid var(--color-focus); outline-offset:2px; }"
+    },
+    {
+      "name": "Callout",
+      "kind": "callout",
+      "refersTo": "callout",
+      "description": "Aviso ou trecho de fonte como caixa inteira de 1px; nunca faixa lateral.",
+      "html": "<p class=\"ds-callout\">A tabela de partes não pôde ser lida até o fim. Confira os autos.</p>",
+      "css": ".ds-callout { max-width:70ch; margin:0; padding:0.75rem 1rem; color:var(--color-graphite); background:var(--color-paper); border:1px solid color-mix(in srgb, var(--color-ochre) 40%, var(--color-paper)); border-radius:0.18rem; font-family:var(--font-body); font-size:0.9rem; }"
+    },
+    {
+      "name": "Settings Link",
+      "kind": "navigation",
+      "refersTo": "settings-link",
+      "description": "Acesso às configurações da instalação, no pé do trilho, fora do fluxo de uma perícia.",
+      "html": "<div style=\"background:#18201d;padding:1rem\"><a class=\"ds-settings-link\" href=\"#\" aria-current=\"page\">Configurações</a></div>",
+      "css": ".ds-settings-link { display:block; padding:0.5rem 0.65rem; color:var(--color-paper); background:rgb(255 255 255 / 7%); border-radius:0.38rem; font-family:var(--font-body); font-size:0.82rem; font-weight:600; text-decoration:none; } .ds-settings-link:focus-visible { outline:3px solid var(--color-focus-on-dark); outline-offset:3px; }"
     }
   ],
   "narrative": {
@@ -162,14 +342,56 @@
       "Estados explícitos e conteúdo factual, sem inventar casos, métricas ou evidências."
     ],
     "rules": [
-      { "name": "The Rare Ochre Rule", "body": "O ocre nunca preenche grandes superfícies; ele existe como marca calibrada de posição, avanço ou ênfase linear.", "section": "colors" },
-      { "name": "The Honest State Color Rule", "body": "Azul-petróleo significa foco e ferrugem significa erro; a variante clara de foco existe somente sobre o trilho grafite, e nenhuma dessas cores é usada como decoração.", "section": "colors" },
-      { "name": "The Two Voices Plus Coordinates Rule", "body": "Aptos Display nomeia, Aptos explica e Cascadia Mono localiza; não misture essas responsabilidades.", "section": "typography" },
-      { "name": "The One Display Moment Rule", "body": "Cada vista tem um único título display dominante; subtítulos e estados permanecem na escala headline.", "section": "typography" },
-      { "name": "The Rail-and-Plane Rule", "body": "O workflow completo permanece no trilho; o plano claro mostra somente a etapa ou estado em foco.", "section": "layout" },
-      { "name": "The Narrow Reading Rule", "body": "Mesmo quando o workspace cresce, descrições não ultrapassam aproximadamente 60 caracteres por linha.", "section": "layout" },
-      { "name": "The One Ambient Shadow Rule", "body": "Navegação, topbar, botões e contêineres ficam planos; apenas a folha vazia recebe sombra.", "section": "elevation" },
-      { "name": "The Contained Geometry Rule", "body": "Arredondamento suaviza a interação, mas nunca transforma o shell em uma coleção de cartões macios.", "section": "shapes" }
+      {
+        "name": "The Rare Ochre Rule",
+        "body": "O ocre nunca preenche grandes superfícies; ele existe como marca calibrada de posição, avanço ou ênfase linear.",
+        "section": "colors"
+      },
+      {
+        "name": "The Honest State Color Rule",
+        "body": "Azul-petróleo significa foco e ferrugem significa erro; a variante clara de foco existe somente sobre o trilho grafite, e nenhuma dessas cores é usada como decoração.",
+        "section": "colors"
+      },
+      {
+        "name": "The Two Voices Plus Coordinates Rule",
+        "body": "Aptos Display nomeia, Aptos explica e Cascadia Mono localiza; não misture essas responsabilidades.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Display Moment Rule",
+        "body": "Cada vista tem um único título display dominante; subtítulos e estados permanecem na escala headline.",
+        "section": "typography"
+      },
+      {
+        "name": "The Rail-and-Plane Rule",
+        "body": "O workflow completo permanece no trilho; o plano claro mostra somente a etapa ou estado em foco.",
+        "section": "layout"
+      },
+      {
+        "name": "The Narrow Reading Rule",
+        "body": "Mesmo quando o workspace cresce, descrições não ultrapassam aproximadamente 60 caracteres por linha.",
+        "section": "layout"
+      },
+      {
+        "name": "The One Ambient Shadow Rule",
+        "body": "Navegação, topbar, botões e contêineres ficam planos; apenas a folha vazia recebe sombra.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Contained Geometry Rule",
+        "body": "Arredondamento suaviza a interação, mas nunca transforma o shell em uma coleção de cartões macios.",
+        "section": "shapes"
+      },
+      {
+        "name": "The Whole-Box Callout Rule",
+        "body": "Avisos e trechos citados usam borda de 1px na caixa inteira; faixas laterais grossas e coloridas não fazem parte do sistema.",
+        "section": "components"
+      },
+      {
+        "name": "The One Form Vocabulary Rule",
+        "body": "Configurações e Laudo usam os mesmos campos, grupos e o mesmo painel editorial; caixas de seleção ficam agrupadas numa linha própria.",
+        "section": "components"
+      }
     ],
     "dos": [
       "Do mantenha o trilho grafite e o plano mineral como as duas massas principais do shell.",

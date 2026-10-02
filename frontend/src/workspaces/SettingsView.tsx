@@ -261,11 +261,13 @@ function ProfileSection({ overview, busy, save }: { overview: InstallationOvervi
       </fieldset>
       <fieldset disabled={busy}>
         <legend>O que o documento mostra</legend>
-        {flag("show_registration_header", "Registro no conselho no cabeçalho")}
-        {flag("show_court_registration_header", "Cadastros em tribunais no cabeçalho")}
-        {flag("show_phone_header", "Telefone no cabeçalho")}
-        {flag("show_email_header", "E-mail no cabeçalho")}
-        {flag("show_email_footer", "E-mail no rodapé")}
+        <div className="settings-form__toggles">
+          {flag("show_registration_header", "Registro no conselho no cabeçalho")}
+          {flag("show_court_registration_header", "Cadastros em tribunais no cabeçalho")}
+          {flag("show_phone_header", "Telefone no cabeçalho")}
+          {flag("show_email_header", "E-mail no cabeçalho")}
+          {flag("show_email_footer", "E-mail no rodapé")}
+        </div>
       </fieldset>
       {error ? <p className="field-error" role="alert">{error}</p> : null}
       <div className="action-row">
@@ -396,24 +398,28 @@ function DocumentSection({ overview, busy, save, run }: { overview: Installation
       <div className="settings-form">
         <fieldset disabled={busy || custom}>
           <legend>Capa</legend>
-          {check("cover", "enabled", "Usar capa")}
-          {check("cover", "show_logo", "Logotipo na capa")}
+          <div className="settings-form__toggles">
+            {check("cover", "enabled", "Usar capa")}
+            {check("cover", "show_logo", "Logotipo na capa")}
+            {check("cover", "show_expert", "Nome do perito na capa")}
+            {check("cover", "show_city_year", "Cidade e ano na capa")}
+          </div>
           <label>Título<input value={draft.cover.title} onChange={(event) => set("cover", { title: event.target.value })} /></label>
           <label>Subtítulo (opcional)<input value={text(draft.cover.subtitle)} onChange={(event) => set("cover", { subtitle: event.target.value })} /></label>
-          {check("cover", "show_expert", "Nome do perito na capa")}
-          {check("cover", "show_city_year", "Cidade e ano na capa")}
           <label>Cidade (opcional)<input value={text(draft.cover.city)} placeholder="Usa a cidade do contato" onChange={(event) => set("cover", { city: event.target.value })} /></label>
           <p className="field-hint settings-form__wide">A capa sempre identifica o processo, o juízo e os polos. Com muitas partes, ela resume e remete à relação completa no item 1.</p>
         </fieldset>
         <fieldset disabled={busy || custom}>
           <legend>Cabeçalho</legend>
-          {check("header", "enabled", "Usar cabeçalho")}
-          {check("header", "show_logo", "Logotipo")}
-          {check("header", "show_name", "Nome do perito")}
-          {check("header", "show_title", "Título profissional")}
+          <div className="settings-form__toggles">
+            {check("header", "enabled", "Usar cabeçalho")}
+            {check("header", "show_logo", "Logotipo")}
+            {check("header", "show_name", "Nome do perito")}
+            {check("header", "show_title", "Título profissional")}
+            {check("header", "separator_enabled", "Linha separadora")}
+          </div>
           <label>Largura do logotipo (cm)<input type="number" min={0.8} max={6} step={0.1} value={draft.header.logo_width_cm} onChange={(event) => set("header", { logo_width_cm: Number(event.target.value) })} /></label>
           <label>Alinhamento<select value={draft.header.alignment} onChange={(event) => set("header", { alignment: event.target.value as DocumentPresentation["header"]["alignment"] })}><option value="LEFT">À esquerda</option><option value="CENTER">Centralizado</option><option value="RIGHT">À direita</option></select></label>
-          {check("header", "separator_enabled", "Linha separadora")}
           <label>Espessura da linha (pt)<input type="number" min={0.25} max={3} step={0.25} value={draft.header.separator_thickness_pt} onChange={(event) => set("header", { separator_thickness_pt: Number(event.target.value) })} /></label>
           <p className="field-hint settings-form__wide">Registro, cadastros, telefone e e-mail no cabeçalho seguem as escolhas do perfil profissional.</p>
         </fieldset>
@@ -424,22 +430,26 @@ function DocumentSection({ overview, busy, save, run }: { overview: Installation
         </fieldset>
         <fieldset disabled={busy || custom}>
           <legend>Marca d'água</legend>
-          {check("watermark", "enabled", "Usar marca d'água")}
+          <div className="settings-form__toggles">
+            {check("watermark", "enabled", "Usar marca d'água")}
+            {check("watermark", "apply_cover", "Na capa")}
+            {check("watermark", "apply_body", "No corpo do laudo")}
+          </div>
           <label>Origem<select value={draft.watermark.kind} onChange={(event) => set("watermark", { kind: event.target.value as DocumentPresentation["watermark"]["kind"] })}><option value="SYMBOL">Símbolo</option><option value="IMAGE">Imagem da marca d'água</option><option value="TEXT">Texto</option></select></label>
           {draft.watermark.kind === "TEXT" ? <label>Texto<input value={text(draft.watermark.text)} maxLength={60} onChange={(event) => set("watermark", { text: event.target.value })} /></label> : null}
           <label>Intensidade: {opacityPercent}%<input type="range" min={2} max={30} step={1} value={opacityPercent} aria-valuetext={`${opacityPercent}%`} onChange={(event) => set("watermark", { opacity: Number(event.target.value) / 100 })} /></label>
           <label>Tamanho na página: {Math.round(draft.watermark.scale * 100)}%<input type="range" min={20} max={100} step={5} value={Math.round(draft.watermark.scale * 100)} onChange={(event) => set("watermark", { scale: Number(event.target.value) / 100 })} /></label>
           <label>Rotação (graus)<input type="number" min={-60} max={60} step={5} value={draft.watermark.rotation_degrees} onChange={(event) => set("watermark", { rotation_degrees: Math.round(Number(event.target.value)) })} /></label>
-          {check("watermark", "apply_cover", "Na capa")}
-          {check("watermark", "apply_body", "No corpo do laudo")}
           {draft.watermark.enabled && opacityPercent > 15 ? <p className="field-warning settings-form__wide" role="status">Acima de 15% a marca d'água pode atrapalhar a leitura e a impressão. Confira no documento de teste.</p> : null}
         </fieldset>
         <fieldset disabled={busy || custom}>
           <legend>Fundo da página</legend>
           <label>Fundo<select value={draft.background.kind} onChange={(event) => set("background", { kind: event.target.value as DocumentPresentation["background"]["kind"], color: event.target.value === "SOLID" ? draft.background.color ?? "#F4F6F8" : null })}><option value="WHITE">Branco</option><option value="SOLID">Cor clara</option><option value="IMAGE">Imagem (avançado)</option></select></label>
           {draft.background.kind === "SOLID" ? <label>Cor<input type="color" value={(draft.background.color ?? "#F4F6F8").toLowerCase()} onChange={(event) => set("background", { color: event.target.value.toUpperCase() })} /></label> : null}
-          {check("background", "apply_cover", "Na capa")}
-          {check("background", "apply_body", "No corpo do laudo")}
+          <div className="settings-form__toggles">
+            {check("background", "apply_cover", "Na capa")}
+            {check("background", "apply_body", "No corpo do laudo")}
+          </div>
           <p className="field-hint settings-form__wide">Só cores claras são aceitas, para o texto preto continuar legível e o laudo imprimir bem.</p>
         </fieldset>
         {error ? <p className="field-error" role="alert">{error}</p> : null}
@@ -500,12 +510,14 @@ function LegalSection({ overview, busy, save }: { overview: InstallationOverview
     <div className="settings-form">
       <fieldset disabled={busy}>
         <legend>Avisos da pré-verificação</legend>
-        {check("check_acronyms", "Sigla sem o nome por extenso na primeira vez")}
-        {check("check_latinisms", "Expressões latinas")}
-        {check("check_foreign_terms", "Termos estrangeiros")}
-        {check("check_jargon", "Expressões rebuscadas")}
-        {check("check_long_sentences", "Frases longas")}
-        {check("check_long_paragraphs", "Parágrafos longos")}
+        <div className="settings-form__toggles">
+          {check("check_acronyms", "Sigla sem o nome por extenso na primeira vez")}
+          {check("check_latinisms", "Expressões latinas")}
+          {check("check_foreign_terms", "Termos estrangeiros")}
+          {check("check_jargon", "Expressões rebuscadas")}
+          {check("check_long_sentences", "Frases longas")}
+          {check("check_long_paragraphs", "Parágrafos longos")}
+        </div>
         <label>Frase longa a partir de (palavras)<input type="number" min={25} max={90} value={draft.long_sentence_words} onChange={(event) => setDraft({ ...draft, long_sentence_words: Math.round(Number(event.target.value)) })} /></label>
         <label>Parágrafo longo a partir de (palavras)<input type="number" min={80} max={400} value={draft.long_paragraph_words} onChange={(event) => setDraft({ ...draft, long_paragraph_words: Math.round(Number(event.target.value)) })} /></label>
         <p className="field-hint settings-form__wide">São avisos com sugestão; o texto nunca é reescrito sozinho. Pendências como [INFORMAÇÃO NECESSÁRIA] sempre impedem a emissão do Word final, com qualquer escolha aqui.</p>
@@ -521,6 +533,14 @@ function LegalSection({ overview, busy, save }: { overview: InstallationOverview
       </dl>
     </div>
   );
+}
+
+function identityState(overview: InstallationOverview) {
+  const images = (Object.keys(ASSET_LABELS) as Array<keyof typeof ASSET_LABELS>).filter((role) => overview.assets[role].asset).length;
+  const colors = overview.settings.BRANDING_PROFILE_V1.configured;
+  if (!colors && images === 0) return "Padrão do produto";
+  const parts = [colors ? "cores próprias" : "cores do produto", images ? `${images} ${images === 1 ? "imagem" : "imagens"}` : "sem imagens"];
+  return `Configurada · ${parts.join(" · ")}`;
 }
 
 // --- Página -----------------------------------------------------------------
@@ -640,7 +660,7 @@ export function SettingsView() {
       <SettingSection
         id="identidade" title="Identidade visual"
         description={<p>Cores e imagens do seu escritório no laudo gerado pelo modelo do produto.</p>}
-        state={status(settings.BRANDING_PROFILE_V1.configured, settings.BRANDING_PROFILE_V1.revision, settings.BRANDING_PROFILE_V1.created_at)}
+        state={identityState(overview)}
         history={<History kind="BRANDING_PROFILE_V1" revision={settings.BRANDING_PROFILE_V1.revision} busy={busy} onRestore={restore("BRANDING_PROFILE_V1")} />}
       >
         <IdentitySection overview={overview} busy={busy} save={save} run={run} />

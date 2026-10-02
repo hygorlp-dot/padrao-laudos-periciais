@@ -9,6 +9,7 @@ colors:
   slate: "#5c655f"
   rule: "#d6dcd7"
   rule-dark: "#3b4741"
+  rule-strong: "#8a948d"
   ochre: "#7b570d"
   ochre-bright: "#c59a2a"
   error: "#9a3f2f"
@@ -76,6 +77,22 @@ components:
     backgroundColor: "{colors.ochre-bright}"
     textColor: "{colors.graphite}"
     size: "1.75rem"
+  input-field:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.graphite}"
+    rounded: "{rounded.control}"
+    padding: "0.45rem 0.6rem"
+    height: "2.5rem"
+  settings-link:
+    backgroundColor: "transparent"
+    textColor: "{colors.paper}"
+    rounded: "{rounded.control}"
+    padding: "0.5rem 0.65rem"
+  callout:
+    backgroundColor: "{colors.paper}"
+    textColor: "{colors.graphite}"
+    rounded: "{rounded.sheet}"
+    padding: "0.75rem 1rem"
   empty-sheet:
     backgroundColor: "{colors.paper}"
     rounded: "{rounded.sheet}"
@@ -129,6 +146,7 @@ A paleta combina neutros minerais levemente verdes com grafite profundo; ocre ma
 - **Technical Slate** (`slate`): texto secundário, rótulos de contexto e descrições.
 - **Pale Rule** (`rule`): divisores, bordas e linhas da folha no plano claro.
 - **Dark Rule** (`rule-dark`): divisores e trilho de conexão sobre grafite.
+- **Strong Rule** (`rule-strong`): borda de campos de formulário sobre papel; alcança 3:1 contra o fundo, como pede WCAG 1.4.11 para limites de controle.
 
 ### Named Rules
 
@@ -170,6 +188,8 @@ A topbar tem altura mínima de `5.25rem` e padding horizontal fluido entre `2rem
 
 **The Narrow Reading Rule.** Mesmo quando o workspace cresce, descrições não ultrapassam aproximadamente 60 caracteres por linha.
 
+Superfícies fora de uma perícia (Configurações, Recuperação) usam o mesmo shell: o trilho mostra o fluxo e, abaixo dele, o link Configurações. A página de Configurações limita o conteúdo a `60rem`, abre com um resumo de prontidão em linha (lista de definição com divisores, não cartões) e um índice de seções por âncora; cada seção é separada por uma regra de `1px` e tem cabeçalho com título e estado à direita.
+
 ## Elevation & Depth
 
 O sistema é plano por padrão. Profundidade vem da estratificação tonal entre trilho, topbar, fundo mineral e superfícies de papel, além de regras de `1px`. Há uma única elevação ambiente: a pequena folha do estado vazio usa `0 0.75rem 1.8rem rgb(24 32 29 / 8%)` para parecer um artefato físico pousado no workspace.
@@ -205,6 +225,21 @@ Os cantos são discretamente arredondados e próximos da geometria retangular. C
 - **Border:** regras de `1px` em Pale Rule.
 - **Internal Padding:** o estado usa `3rem` vertical e nenhum preenchimento lateral próprio.
 
+### Inputs / Fields
+
+- **Style:** papel com borda Strong Rule de `1px`, raio `control`, altura mínima `2.5rem`; o rótulo fica acima, em `0.88rem`.
+- **Grupos:** campos relacionados vivem em `fieldset` com legenda em peso 700, borda Pale Rule e grade `repeat(auto-fill, minmax(13rem, 1fr))`. Caixas de seleção ficam juntas numa linha própria (`settings-form__toggles`), nunca intercaladas com campos de texto.
+- **Erro / aviso:** erro em ferrugem com `role="alert"`; aviso em ocre, peso 600. Ambos nomeiam o problema e a saída.
+- O mesmo vocabulário vale para Configurações e para o painel editorial do Laudo: um só componente, `EditorialPanel`.
+
+### Callouts e trechos de fonte
+
+- Avisos e trechos citados são caixas de papel com borda de `1px` (Pale Rule, ou ocre/ferrugem misturado ao papel quando o aviso tem estado) e raio `sheet`. Nunca uma faixa colorida grossa num só lado.
+
+### Linhas de ativo
+
+- Ativos de identidade aparecem em linhas: miniatura de `5.5rem × 3.6rem` sobre papel, nome e metadados, ações de texto à direita. Sem imagem, a miniatura mostra só uma regra curta.
+
 ### Navigation
 
 O trilho apresenta dez etapas e o início em uma sequência vertical conectada. Cada link combina um índice monoespaçado de `1.75rem` com um rótulo; o hover recebe papel sobre um véu branco de 5%, e o ativo recebe véu de 7% e peso 650. Somente o índice ativo muda para Calibrated Brass. A posição atual também aparece na topbar como coordenada monoespaçada com borda fina.
@@ -232,3 +267,6 @@ Loading usa uma barra ocre curta; empty usa a folha física; ready e error usam 
 - **Don't** adicione sombras a navegação, topbar, botões ou contêineres comuns.
 - **Don't** invente dados de caso, métricas, evidências, atividade ou alegações para preencher o shell.
 - **Don't** introduza fontes remotas, glifos de fonte como ícones ou ornamentos sem função operacional.
+- **Don't** use borda lateral grossa e colorida em avisos, cartões ou itens de lista; use a borda de `1px` da caixa inteira.
+- **Don't** intercale caixas de seleção com campos de texto na mesma grade; agrupe-as numa linha.
+- **Don't** escreva "formatação obrigatória" para o perfil editorial: ele é um perfil de referência, e cada fonte declara a sua natureza.
