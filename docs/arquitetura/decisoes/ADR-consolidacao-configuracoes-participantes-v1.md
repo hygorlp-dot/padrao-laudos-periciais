@@ -216,6 +216,9 @@ personalizados preservam a identidade visual e a formatação existentes no arqu
   `TEMPLATE_IN_USE`, "escolha o modelo padrão do produto antes"), e restaurar uma
   seleção que cita outro arquivo também. A criação da perícia confere a seleção antes
   de copiar qualquer byte.
+- O envio do modelo próprio faz uma vinculação de teste com o laudo fictício. Word
+  válido que não vincula como modelo enviado é recusado na hora (`TEMPLATE_FIELDS`),
+  e não na entrega.
 - O modelo próprio declara o seu `TEMPLATE_ID` e vincula os campos dos modelos
   enviados (`EXPERT_FULL_NAME`, `EXPERT_REGISTRATION`, `REPORT_ID`). O identificador
   de um modelo do produto é recusado, porque implica outro conjunto de campos.

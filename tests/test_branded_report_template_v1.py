@@ -318,3 +318,110 @@ def test_word_16_renders_the_branded_template_faithfully():
     word = render_word_candidate(template_bytes=template, report=report, manifest=branded_template_manifest()).output_bytes
     pdf = dr.render_final_pdf_candidate(word_content=word, word_format="DOCX", converter=LocalOfficePdfConverter())
     dr.validate_final_artifact(pdf, "PDF")
+
+
+# --- Prova Word 16 do V2 (C2 do HUMAN_RC_WINDOWS_V2, Round 3) -----------------
+# Um laudo fictício com várias partes, citação longa, logotipo, marca d'água,
+# fundo, cabeçalho, rodapé "Página X de Y" e sumário. O pacote é conferido em
+# qualquer máquina; a paginação real e o PDF derivado fiel só com o Word 16.
+
+
+def _word16_proof_word() -> tuple[object, bytes]:
+    from scripts.backend_contract.sample_report import sample_report
+    base = _report()
+    report = sample_report(base.editorial_profile, base.expert_profile)
+    presentation = replace(
+        DEFAULT_PRESENTATION,
+        watermark=replace(DEFAULT_PRESENTATION.watermark, enabled=True, kind=WatermarkKind.SYMBOL, opacity=0.08, apply_cover=True, apply_body=True),
+        background=replace(DEFAULT_PRESENTATION.background, kind=BackgroundKind.SOLID, color="#F4F6F8", apply_cover=True, apply_body=True),
+    )
+    template = branded_report_template(report.editorial_profile, _branding(report, presentation=presentation))
+    word = render_word_candidate(template_bytes=template, report=report, manifest=branded_template_manifest()).output_bytes
+    return report, word
+
+
+def _word16_custom_word() -> tuple[bytes, object]:
+    from scripts.backend_contract.application.delivery_foundation import UPLOADED_TEMPLATE_FIELDS, custom_template_identity
+    from scripts.backend_contract.report_default_template import DEFAULT_TEMPLATE_ID
+    from scripts.backend_contract.report_template import TemplateBinding, TemplateBindingManifest
+    report = _report()
+    with ZipFile(BytesIO(default_report_template(report.editorial_profile))) as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    entries["docProps/custom.xml"] = entries["docProps/custom.xml"].replace(DEFAULT_TEMPLATE_ID.encode(), b"ESCRITORIO-SINTETICO-V1")
+    # Um modelo enviado vincula só nome, registro e identificação do laudo; o
+    # resto é texto fixo do escritório.
+    for name, data in entries.items():
+        if name.startswith("word/") and name.endswith(".xml"):
+            data = data.replace(b"[[COURT]]", b"[[REPORT_ID]]").replace(b"[[PROCESS_NUMBER]]", "Escritório Sintético".encode()).replace(b"[[EXPERT_TITLE]]", b"Engenharia")
+            entries[name] = data
+    output = BytesIO()
+    with ZipFile(output, "w", ZIP_DEFLATED) as target:
+        for name, data in entries.items():
+            target.writestr(name, data)
+    template = output.getvalue()
+    manifest = TemplateBindingManifest("1.0.0", custom_template_identity(template), "DOCX", tuple(TemplateBinding(field, f"[[{field}]]") for field in UPLOADED_TEMPLATE_FIELDS))
+    return render_word_candidate(template_bytes=template, report=report, manifest=manifest).output_bytes, report
+
+
+def test_word16_proof_package_carries_every_element_the_native_proof_checks():
+    report, word = _word16_proof_word()
+    validate_final_artifact(word, "DOCX")
+    with ZipFile(BytesIO(word)) as package:
+        names = package.namelist()
+        document = package.read("word/document.xml").decode("utf-8")
+        headers = [package.read(name).decode("utf-8") for name in names if name.startswith("word/header")]
+        footers = [package.read(name).decode("utf-8") for name in names if name.startswith("word/footer")]
+    assert "SUMÁRIO" in document and "TOC" in document, "sumário com campo TOC"
+    assert any("PAGE" in item and "NUMPAGES" in item and "Página " in item for item in footers), "rodapé Página X de Y"
+    assert sum("behindDoc=\"1\"" in item for item in headers) >= 1, "fundo e marca d'água atrás do texto"
+    assert any(item.count("<wp:inline") + item.count("<wp:anchor") >= 2 for item in headers), "logotipo e imagem de página no cabeçalho do corpo"
+    assert len([name for name in names if name.startswith("word/media/")]) >= 2
+    for participant in report.process_record.confirmed_participants:
+        assert participant.name in document, "relação completa das partes no item 1"
+    custom, _custom_report = _word16_custom_word()
+    validate_final_artifact(custom, "DOCX")
+
+
+@pytest.mark.skipif("not __import__('tests.test_branded_report_template_v1', fromlist=['_native'])._native()", reason="Microsoft Word 16 unavailable")
+def test_word16_real_proof_of_the_v2_and_the_custom_template():
+    import pypdfium2 as pdfium
+    from scripts.backend_contract.infrastructure.office_pdf import LocalOfficePdfConverter
+
+    converter = LocalOfficePdfConverter()
+    report, word = _word16_proof_word()
+    # PDF derivado: conversão pelo Word 16 local + validação de fidelidade.
+    pdf = dr.render_final_pdf_candidate(word_content=word, word_format="DOCX", converter=converter)
+    dr.validate_final_artifact(pdf, "PDF")
+    document = pdfium.PdfDocument(pdf)
+    try:
+        count = len(document)
+        assert count >= 3, "capa, sumário e corpo"
+        texts = []
+        images = []
+        for index in range(count):
+            page = document[index]
+            textpage = page.get_textpage()
+            texts.append(textpage.get_text_range())
+            images.append(sum(1 for item in page.get_objects() if item.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE))
+            textpage.close()
+            page.close()
+    finally:
+        document.close()
+    # PAGE/NUMPAGES atualizados pelo Word em cada página depois da capa.
+    for number in range(2, count + 1):
+        assert f"Página {number} de {count}" in texts[number - 1], f"rodapé da página {number}"
+    # Sumário preenchido pelo Word: títulos das seções presentes.
+    assert "SUMÁRIO" in "".join(texts)
+    section = sorted(report.sections, key=lambda item: item.order)[0].title
+    toc_page = next(text for text in texts if "SUMÁRIO" in text)
+    assert section.split()[0] in toc_page
+    # Várias partes: todas na relação do item 1.
+    joined = "\n".join(texts)
+    for participant in report.process_record.confirmed_participants:
+        assert participant.name in joined
+    # Logotipo, marca d'água e fundo: imagem em toda página do corpo.
+    assert all(count_images >= 1 for count_images in images[1:])
+    # Modelo personalizado: o arquivo do escritório também gera PDF fiel.
+    custom, _custom_report = _word16_custom_word()
+    custom_pdf = dr.render_final_pdf_candidate(word_content=custom, word_format="DOCX", converter=converter)
+    dr.validate_final_artifact(custom_pdf, "PDF")

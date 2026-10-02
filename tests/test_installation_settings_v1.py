@@ -336,7 +336,7 @@ def test_default_template_follows_the_case_snapshot_and_custom_word_is_the_visua
     from io import BytesIO
     from zipfile import ZipFile
     from scripts.backend_contract.application.models import WorkspaceId
-    from scripts.backend_contract.report_default_template import BRANDED_TEMPLATE_ID, DEFAULT_TEMPLATE_ID
+    from scripts.backend_contract.report_default_template import BRANDED_TEMPLATE_ID
     runtime = _runtime(tmp_path)
     try:
         _upload(runtime, "PRIMARY_LOGO", _png(), "logo.png", "image/png", None)
@@ -349,17 +349,7 @@ def test_default_template_follows_the_case_snapshot_and_custom_word_is_the_visua
             media = [name for name in package.namelist() if name.startswith("word/media/")]
             assert any(package.read(name) == _png() for name in media)
         # Modelo Word personalizado escolhido na instalacao: devolvido como capturado.
-        from tests.test_default_report_template_v1 import _report
-        from scripts.backend_contract.report_default_template import default_report_template
-        product = default_report_template(_report().editorial_profile)
-        with ZipFile(BytesIO(product)) as source:
-            entries = {name: source.read(name) for name in source.namelist()}
-        entries["docProps/custom.xml"] = entries["docProps/custom.xml"].replace(DEFAULT_TEMPLATE_ID.encode(), b"ESCRITORIO-SINTETICO-V1")
-        output = BytesIO()
-        with ZipFile(output, "w") as target:
-            for name, data in entries.items():
-                target.writestr(name, data)
-        custom = output.getvalue()
+        custom = _custom_template(b"ESCRITORIO-SINTETICO-V1")
         docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         status, uploaded = _upload(runtime, "DEFAULT_WORD_TEMPLATE", custom, "modelo-escritorio.docx", docx, None)
         assert status == 201
@@ -382,6 +372,10 @@ def _custom_template(template_id: bytes) -> bytes:
     with ZipFile(BytesIO(default_report_template(_report().editorial_profile))) as source:
         entries = {name: source.read(name) for name in source.namelist()}
     entries["docProps/custom.xml"] = entries["docProps/custom.xml"].replace(DEFAULT_TEMPLATE_ID.encode(), template_id)
+    # Um modelo enviado vincula só nome, registro e identificação do laudo.
+    for name, data in entries.items():
+        if name.startswith("word/") and name.endswith(".xml"):
+            entries[name] = data.replace(b"[[COURT]]", b"[[REPORT_ID]]").replace(b"[[PROCESS_NUMBER]]", "Escritório Sintético".encode()).replace(b"[[EXPERT_TITLE]]", b"Engenharia")
     output = BytesIO()
     with ZipFile(output, "w") as target:
         for name, data in entries.items():
@@ -455,5 +449,30 @@ def test_test_document_uses_the_real_renderer_with_fictitious_data_and_writes_no
         assert _http(runtime, "GET", "/v1/installation/settings")[1] == before
         assert _http(runtime, "GET", "/v1/workspaces")[1] == workspaces
         assert http_request(runtime.server, "GET", "/v1/installation/test-document")[0] in (401, 403)
+    finally:
+        runtime.close()
+
+
+def test_uploaded_template_must_bind_as_an_uploaded_template(tmp_path):
+    # Um Word válido, mas com os campos do modelo do produto, era aceito e só
+    # falhava na entrega.
+    from zipfile import ZipFile
+    from tests.test_default_report_template_v1 import _report
+    from scripts.backend_contract.report_default_template import DEFAULT_TEMPLATE_ID, default_report_template
+    docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    with ZipFile(BytesIO(default_report_template(_report().editorial_profile))) as source:
+        entries = {name: source.read(name) for name in source.namelist()}
+    entries["docProps/custom.xml"] = entries["docProps/custom.xml"].replace(DEFAULT_TEMPLATE_ID.encode(), b"ESCRITORIO-SINTETICO-V1")
+    output = BytesIO()
+    with ZipFile(output, "w") as target:
+        for name, data in entries.items():
+            target.writestr(name, data)
+    runtime = _runtime(tmp_path)
+    try:
+        status, body = _upload(runtime, "DEFAULT_WORD_TEMPLATE", output.getvalue(), "produto.docx", docx, None)
+        assert status == 422 and body["error"]["code"] == "ASSET_TEMPLATE_FIELDS"
+        status, body = _upload(runtime, "DEFAULT_WORD_TEMPLATE", default_report_template(_report().editorial_profile), "v1.docx", docx, None)
+        assert status == 422 and body["error"]["code"] == "ASSET_TEMPLATE_FIELDS", "the product identity is refused"
+        assert _upload(runtime, "DEFAULT_WORD_TEMPLATE", _custom_template(b"ESCRITORIO-SINTETICO-V1"), "escritorio.docx", docx, None)[0] == 201
     finally:
         runtime.close()

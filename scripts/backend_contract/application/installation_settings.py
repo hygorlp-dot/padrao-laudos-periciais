@@ -64,10 +64,32 @@ class InstallationAssetRejected(ValueError):
         self.reason = reason
 
 
+class TemplateFieldsInvalid(ValueError):
+    """O Word é válido, mas não vincula como modelo enviado (TEMPLATE_ID e campos)."""
+
+
 def validate_installation_template(content: bytes, output_kind: str) -> None:
-    """O modelo Word enviado passa pela mesma validação do artefato final."""
-    from ..delivery_renderer import validate_final_artifact
+    """O modelo Word enviado passa pela validação do artefato final e por uma
+    vinculação de teste com o laudo fictício.
+
+    Sem a vinculação de teste, um modelo sem `TEMPLATE_ID` ou sem os campos
+    `[[EXPERT_FULL_NAME]]`, `[[EXPERT_REGISTRATION]]` e `[[REPORT_ID]]` (cada um
+    uma vez, nenhum outro) era aceito e escolhido, e só falhava na entrega.
+    """
+    from ..delivery_renderer import render_word_candidate, validate_final_artifact
+    from ..report_template import TemplateBinding, TemplateBindingManifest
+    from ..sample_report import sample_report
+    from .delivery_foundation import UPLOADED_TEMPLATE_FIELDS, custom_template_identity
     validate_final_artifact(content, output_kind)
+    try:
+        manifest = TemplateBindingManifest(
+            "1.0.0", custom_template_identity(content), output_kind,
+            tuple(TemplateBinding(field, f"[[{field}]]") for field in UPLOADED_TEMPLATE_FIELDS),
+        )
+        editorial = editorial_profile_from_mapping(default_payload(SettingKind.EDITORIAL_PROFILE_DEFAULT))
+        render_word_candidate(template_bytes=content, report=sample_report(editorial), manifest=manifest)
+    except ValueError as exc:
+        raise TemplateFieldsInvalid("the template does not bind as an uploaded template") from exc
 
 
 class InstallationSettingsUnavailable(RepositoryError):
@@ -227,6 +249,8 @@ class InstallationSettings:
                 raise InstallationAssetRejected("FILE_TOO_LARGE")
             try:
                 self.validate_template(content, TEMPLATE_MEDIA_TYPES[media_type])
+            except TemplateFieldsInvalid as exc:
+                raise InstallationAssetRejected("TEMPLATE_FIELDS") from exc
             except ValueError as exc:
                 raise InstallationAssetRejected("TEMPLATE_INVALID") from exc
             width = height = None

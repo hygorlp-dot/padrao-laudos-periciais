@@ -61,6 +61,7 @@ const REJECTIONS: Record<string, string> = {
   ASSET_ANIMATED_IMAGE: "Imagens animadas não são aceitas.",
   ASSET_COLOR_MODE_NOT_SUPPORTED: "O modo de cor desta imagem não é aceito. Salve em RGB.",
   ASSET_TEMPLATE_INVALID: "Este arquivo não é um modelo Word válido (DOCX ou DOCM).",
+  ASSET_TEMPLATE_FIELDS: "O modelo precisa declarar a propriedade TEMPLATE_ID e conter os campos [[EXPERT_FULL_NAME]], [[EXPERT_REGISTRATION]] e [[REPORT_ID]], cada um uma única vez e nenhum outro.",
 };
 
 const SETTING_LABELS: Record<SettingKind, string> = {
