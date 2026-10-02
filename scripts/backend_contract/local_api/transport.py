@@ -894,7 +894,7 @@ class LocalApi:
             normalized_method = method.upper()
             private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "property-record", "process-participants", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             private_route = private_route or (len(raw_segments) >= 2 and raw_segments[:2] == ("v1", "installation")) or (len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "settings-snapshot")
-            if (normalized_method in {"POST", "PUT"} or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
+            if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
                     "FORBIDDEN_LOCAL_REQUEST",

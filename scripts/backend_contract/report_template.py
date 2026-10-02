@@ -393,7 +393,7 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     # no cabecalho; so vincula ao laudo cujo perfil e exatamente aquele.
     profile_properties = [item for item in custom_root.iter() if item.attrib.get("name") == "EXPERT_PROFILE_DIGEST"]
     if profile_properties:
-        from .report_default_template import expert_profile_digest
+        from .report_foundation import expert_profile_digest
         declared = [text.strip() for item in profile_properties for text in item.itertext() if text.strip()]
         if declared != [expert_profile_digest(report.expert_profile)]:
             raise ValueError("template identity belongs to another expert profile")

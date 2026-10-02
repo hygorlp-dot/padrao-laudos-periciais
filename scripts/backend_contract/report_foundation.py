@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from enum import StrEnum
+import hashlib
 import json
 import re
 from typing import Any, TypeVar
@@ -1116,6 +1117,12 @@ def expert_profile_from_mapping(value: object) -> ExpertMasterProfile:
     if "presentation" in data:
         data["presentation"] = _construct(ProfilePresentation, data["presentation"])
     return ExpertMasterProfile(**data)
+
+
+def expert_profile_digest(profile: ExpertMasterProfile) -> str:
+    """Identidade exata do perfil que gerou um modelo com texto fixo de cabeçalho (#271)."""
+    canonical = json.dumps(expert_profile_to_mapping(profile), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def expert_profile_to_mapping(value: ExpertMasterProfile) -> dict[str, Any]:

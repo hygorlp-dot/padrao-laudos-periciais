@@ -117,6 +117,7 @@ def test_process_case_domain_fields_stay_out_of_bridge_and_in_exact_frontend_mod
         # Cadastros em tribunais e UF do contato profissional são texto do
         # perfil da instalação (#270), não campos do ProcessCase.
         "frontend/src/workspaces/SettingsView.tsx",
+        "frontend/src/workspaces/WorkspaceSettingsPanel.tsx",
         "frontend/src/workspaces/ExpertProfileSetup.tsx",
         "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",

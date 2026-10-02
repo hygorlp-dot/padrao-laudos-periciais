@@ -10,9 +10,7 @@ declared binding placeholders and the CANONICAL_REPORT content control.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 from io import BytesIO
-import json
 from xml.sax.saxutils import escape
 from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
@@ -21,7 +19,7 @@ from .report_foundation import (
     EditorialProfile,
     ExpertMasterProfile,
     court_registration_line,
-    expert_profile_to_mapping,
+    expert_profile_digest,
 )
 from .report_template import TemplateBinding, TemplateBindingManifest
 
@@ -310,11 +308,6 @@ def branded_template_manifest() -> TemplateBindingManifest:
         "1.0.0", BRANDED_TEMPLATE_ID, "DOCX",
         tuple(TemplateBinding(field, placeholder) for field, placeholder in _BRANDED_BINDINGS),
     )
-
-
-def expert_profile_digest(profile: ExpertMasterProfile) -> str:
-    canonical = json.dumps(expert_profile_to_mapping(profile), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)
