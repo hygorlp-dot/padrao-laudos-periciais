@@ -192,6 +192,8 @@ class LocalApiServices:
     get_property_proposals: object | None = None
     get_process_participants: object | None = None
     decide_process_participants: object | None = None
+    installation_settings: object | None = None
+    workspace_settings: object | None = None
     get_photo_library: object | None = None
     ai_assistant_status: object | None = None
     curate_photo_library: object | None = None
@@ -297,6 +299,18 @@ def _material_processing_dto(record: PrivateContentMetadata, state: str, expecte
     if state not in PROCESSING_STATES:
         raise RepositoryIntegrityError("estado de processamento desconhecido")
     return {"content_id": str(record.content_id), "state": state}
+
+
+_INSTALLATION_ASSET_ROLES = frozenset({"PRIMARY_LOGO", "SYMBOL", "WATERMARK", "SIGNATURE_IMAGE", "PROFESSIONAL_SEAL", "BACKGROUND", "DEFAULT_WORD_TEMPLATE"})
+
+
+def _installation_record_dto(record) -> dict:
+    return {"revision": record.revision, "revision_id": record.revision_id, "created_at": record.created_at, "checksum_sha256": record.checksum_sha256, "payload": record.payload}
+
+
+def _workspace_settings_dto(snapshot) -> dict:
+    from ..application.installation_settings import workspace_settings_to_mapping
+    return workspace_settings_to_mapping(snapshot)
 
 
 def _participants_dto(view) -> dict:
@@ -685,7 +699,113 @@ class LocalApi:
         deu à recuperação o teto de 128 MiB sem lhe dar o spool: o corpo inteiro
         entrava por `rfile.read(length)`.
         """
-        return self.is_document_upload(method, target) or self.is_recovery_upload(method, target)
+        return self.is_document_upload(method, target) or self.is_recovery_upload(method, target) or self.is_installation_asset_upload(method, target)
+
+    def is_installation_asset_upload(self, method: str, target: str) -> bool:
+        """POST binario de ativo da instalacao (#270): imagem ou modelo Word."""
+        try:
+            raw_segments, _segments = _target_segments(target)
+        except (TypeError, ValueError):
+            return False
+        return (
+            type(method) is str and method.upper() == "POST" and len(raw_segments) == 4
+            and raw_segments[:3] == ("v1", "installation", "assets") and raw_segments[3] in _INSTALLATION_ASSET_ROLES
+        )
+
+    def _installation(self, method: str, tail: tuple[str, ...], headers: dict[str, str], body, body_size: int) -> HttpResponse:
+        service = self._services.installation_settings
+        if service is None:
+            return _error(503, "SETTINGS_UNAVAILABLE")
+        from ..application.installation_settings import InstallationAssetRejected, SettingKind as _Kind, AssetRole as _Role
+        if tail == ("settings",):
+            if method != "GET":
+                return _error(405, "METHOD_NOT_ALLOWED")
+            return _json_response(200, service.overview())
+        if len(tail) in {2, 3} and tail[0] == "settings":
+            try:
+                kind = _Kind(tail[1])
+            except ValueError:
+                return _error(404, "NOT_FOUND")
+            if kind is _Kind.INSTALLATION_ASSET:
+                return _error(404, "NOT_FOUND")
+            if len(tail) == 2:
+                if method != "PUT":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                dto = self._request_dto(headers, body)
+                if set(dto) != {"expected_revision", "payload"}:
+                    raise ValueError("setting request is invalid")
+                service.save(kind, dto["payload"], dto["expected_revision"])
+                return _json_response(200, service.overview())
+            if tail[2] == "history":
+                if method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                return _json_response(200, {"items": [_installation_record_dto(item) for item in service.history(kind)]})
+            if tail[2] == "restore":
+                if method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                dto = self._request_dto(headers, body)
+                if set(dto) != {"revision", "expected_revision"} or type(dto["revision"]) is not int or type(dto["expected_revision"]) is not int:
+                    raise ValueError("restore request is invalid")
+                service.restore(kind, dto["revision"], dto["expected_revision"])
+                return _json_response(200, service.overview())
+            return _error(404, "NOT_FOUND")
+        if len(tail) in {2, 3} and tail[0] == "assets":
+            try:
+                role = _Role(tail[1])
+            except ValueError:
+                return _error(404, "NOT_FOUND")
+            if len(tail) == 2:
+                if method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                media_type = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                if media_type == "application/vnd.ms-word.document.macroenabled.12":
+                    media_type = "application/vnd.ms-word.document.macroEnabled.12"
+                filename = _document_filename(headers.get("x-document-filename"))
+                if _parse_content_length(headers.get("content-length", "")) != body_size:
+                    raise ValueError("Content-Length diverge")
+                raw_expected = headers.get("x-expected-revision", "")
+                if raw_expected == "none":
+                    expected = None
+                elif raw_expected.isascii() and raw_expected.isdecimal() and int(raw_expected) >= 1:
+                    expected = int(raw_expected)
+                else:
+                    raise ValueError("expected revision header is invalid")
+                if type(body) is bytes:
+                    content = body
+                else:
+                    body.rewind()
+                    content = body.stream.read(body.byte_size + 1)
+                    if len(content) != body.byte_size:
+                        raise ValueError("asset body diverges from its declared size")
+                try:
+                    service.upload_asset(role, filename=filename, media_type=media_type, content=content, expected_revision=expected)
+                except InstallationAssetRejected as exc:
+                    return _error(422, f"ASSET_{exc.reason}", "arquivo recusado")
+                return _json_response(201, service.overview())
+            if tail[2] == "removal":
+                if method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                dto = self._request_dto(headers, body)
+                if set(dto) != {"expected_revision"} or type(dto["expected_revision"]) is not int:
+                    raise ValueError("asset removal is invalid")
+                service.remove_asset(role, dto["expected_revision"])
+                return _json_response(200, service.overview())
+            if tail[2] == "content":
+                if method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                record, content = service.asset_content(role)
+                if record.media_type not in {"image/png", "image/jpeg"}:
+                    return _error(404, "NOT_FOUND")
+                return HttpResponse(
+                    status=200,
+                    headers=MappingProxyType({"Content-Type": record.media_type, "Content-Length": str(len(content)), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}),
+                    body=content,
+                )
+            if tail[2] == "history":
+                if method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                return _json_response(200, {"items": [_installation_record_dto(item) for item in service.history(_Kind.INSTALLATION_ASSET, role.value)]})
+        return _error(404, "NOT_FOUND")
 
     def _request_dto(self, headers: dict[str, str], body: bytes) -> dict:
         if type(body) is not bytes or len(body) > self._max_body_bytes:
@@ -751,7 +871,8 @@ class LocalApi:
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
             private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "property-record", "process-participants", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
-            if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
+            private_route = private_route or (len(raw_segments) >= 2 and raw_segments[:2] == ("v1", "installation")) or (len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "settings-snapshot")
+            if (normalized_method in {"POST", "PUT"} or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
                     "FORBIDDEN_LOCAL_REQUEST",
@@ -775,9 +896,48 @@ class LocalApi:
                     dto = self._request_dto(request_headers, body)
                     if set(dto) != {"name"} or type(dto["name"]) is not str or not dto["name"].strip():
                         raise ValueError("name inválido")
-                    record = self._services.create_workspace.execute(dto["name"])
+                    from ..application.installation_settings import WorkspaceSettingsCaptureFailed
+                    try:
+                        record = self._services.create_workspace.execute(dto["name"])
+                    except WorkspaceSettingsCaptureFailed as exc:
+                        # A pericia existe; os padroes nao foram capturados. Dizer
+                        # "criada" sem ressalva seria falso sucesso.
+                        return _json_response(500, {"error": {"code": "WORKSPACE_SETTINGS_CAPTURE_FAILED", "message": "perícia criada sem as configurações padrão"}, "workspace": _workspace_dto(exc.workspace)})
                     return _json_response(201, _workspace_dto(record))
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) >= 3 and raw_segments[:2] == ("v1", "installation"):
+                return self._installation(normalized_method, raw_segments[2:], request_headers, body, body_size)
+
+            if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "settings-snapshot":
+                workspace_id = self._workspace_id(raw_segments[2])
+                self._services.get_workspace.execute(workspace_id)
+                service = self._services.workspace_settings
+                if service is None:
+                    return _error(503, "SETTINGS_UNAVAILABLE")
+                if len(raw_segments) == 5:
+                    if raw_segments[4] != "refresh":
+                        return _error(404, "NOT_FOUND")
+                    if normalized_method != "POST":
+                        return _error(405, "METHOD_NOT_ALLOWED")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"include_profile", "expected_snapshot_revision", "expected_profile_revision"}:
+                        raise ValueError("settings refresh is invalid")
+                    for name in ("expected_snapshot_revision", "expected_profile_revision"):
+                        if dto[name] is not None and (type(dto[name]) is not int or dto[name] < 1):
+                            raise ValueError("settings refresh is invalid")
+                    service.update_from_defaults(
+                        workspace_id, include_profile=dto["include_profile"],
+                        expected_snapshot_revision=dto["expected_snapshot_revision"], expected_profile_revision=dto["expected_profile_revision"],
+                    )
+                elif normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                record, snapshot = service.current(workspace_id)
+                return _json_response(200, {
+                    "revision": record.revision if record else None, "updated_at": record.created_at if record else None,
+                    "snapshot": _workspace_settings_dto(snapshot) if snapshot else None,
+                    "differences": service.differences(workspace_id),
+                })
 
             if raw_segments == ("v1", "ai-assistant", "status"):
                 if normalized_method != "GET":

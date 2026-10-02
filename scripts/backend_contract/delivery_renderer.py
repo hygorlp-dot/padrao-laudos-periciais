@@ -24,7 +24,7 @@ from pypdf.generic import BooleanObject
 from pypdf.generic import ContentStream, StreamObject
 
 from .report_figures import figure_numbers, image_size, resolve_references
-from .report_foundation import FINDING_SITUATIONS, ReportSnapshot
+from .report_foundation import FINDING_SITUATIONS, ReportSnapshot, apply_heading_case
 from .report_foundation import report_snapshot_to_mapping
 from .report_template import (
     DocumentBindingResult,
@@ -938,7 +938,10 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
         if not body:
             continue
         number += 1
-        blocks.append(ReportPresentationBlock("HEADING_1", f"{number}. {_canonical_text(section.title).upper()}"))
+        # A caixa do titulo e politica editorial do perfil (#271), nao codigo:
+        # perfil sem `layout` mantem o titulo 1 em caixa-alta, como antes.
+        title = apply_heading_case(_canonical_text(section.title), report.editorial_profile.effective_layout.heading1_case)
+        blocks.append(ReportPresentationBlock("HEADING_1", f"{number}. {title}"))
         blocks.extend(body)
     return tuple(blocks)
 

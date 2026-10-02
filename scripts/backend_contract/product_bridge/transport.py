@@ -89,6 +89,10 @@ def _is_spa_path(path: str) -> bool:
 
 
 _RECOVERY_UPLOAD_TARGETS = frozenset({"/v1/recovery/verify", "/v1/recovery/staging"})
+_SETTING_KIND = re.compile(r"[A-Z][A-Z_]{2,40}_V1")
+_ASSET_ROLES = frozenset({"PRIMARY_LOGO", "SYMBOL", "WATERMARK", "SIGNATURE_IMAGE", "PROFESSIONAL_SEAL", "BACKGROUND", "DEFAULT_WORD_TEMPLATE"})
+_ASSET_UPLOAD = re.compile(r"/v1/installation/assets/(" + "|".join(sorted(_ASSET_ROLES)) + r")")
+_ASSET_CONTENT = re.compile(r"/v1/installation/assets/(" + "|".join(sorted(_ASSET_ROLES)) + r")/content")
 
 
 def _proxy_target(path: str, method: str) -> str | None:
@@ -100,6 +104,20 @@ def _proxy_target(path: str, method: str) -> str | None:
         return "/v1/ai-assistant/status"
     # Recuperação (#183): sem estas rotas, proteger ou restaurar uma perícia
     # continuaria exigindo terminal — bloqueador de produto.
+    installation_prefix = "/app-api/v1/installation/"
+    if path.startswith(installation_prefix):
+        remainder = path[len(installation_prefix):].split("/")
+        if remainder == ["settings"] and method == "GET":
+            return "/v1/installation/settings"
+        if len(remainder) == 2 and remainder[0] == "settings" and _SETTING_KIND.fullmatch(remainder[1]) and method == "PUT":
+            return f"/v1/installation/settings/{remainder[1]}"
+        if len(remainder) == 3 and remainder[0] == "settings" and _SETTING_KIND.fullmatch(remainder[1]) and ((remainder[2] == "history" and method == "GET") or (remainder[2] == "restore" and method == "POST")):
+            return f"/v1/installation/settings/{remainder[1]}/{remainder[2]}"
+        if len(remainder) == 2 and remainder[0] == "assets" and remainder[1] in _ASSET_ROLES and method == "POST":
+            return f"/v1/installation/assets/{remainder[1]}"
+        if len(remainder) == 3 and remainder[0] == "assets" and remainder[1] in _ASSET_ROLES and ((remainder[2] in {"content", "history"} and method == "GET") or (remainder[2] == "removal" and method == "POST")):
+            return f"/v1/installation/assets/{remainder[1]}/{remainder[2]}"
+        return None
     recovery_prefix = "/app-api/v1/recovery/"
     if path.startswith(recovery_prefix):
         remainder = path[len(recovery_prefix) :].split("/")
@@ -169,6 +187,10 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/property-record"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["property-record", "proposals"] and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/property-record/proposals"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "settings-snapshot" and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/settings-snapshot"
+        if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["settings-snapshot", "refresh"] and method == "POST":
+            return f"/v1/workspaces/{remainder[0]}/settings-snapshot/refresh"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "process-participants" and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/process-participants"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["process-participants", "decisions"] and method == "POST":
@@ -320,6 +342,8 @@ class ProductBridge:
             return self._max_document_body_bytes
         if normalized_method == "POST" and upstream_target in _RECOVERY_UPLOAD_TARGETS:
             return self._max_document_body_bytes
+        if normalized_method == "POST" and upstream_target is not None and _ASSET_UPLOAD.fullmatch(upstream_target):
+            return self._max_document_body_bytes
         return self._max_body_bytes
 
     def _response_body_limit(self, method: str, upstream_target: str) -> int:
@@ -339,6 +363,8 @@ class ProductBridge:
             rf"/v1/workspaces/{_CANONICAL_UUID.pattern}/delivery-snapshot/artifacts/"
             rf"{_CANONICAL_UUID.pattern}", upstream_target,
         ):
+            return self._max_document_body_bytes
+        if method == "GET" and _ASSET_CONTENT.fullmatch(upstream_target):
             return self._max_document_body_bytes
         return self._max_body_bytes
 
@@ -389,7 +415,8 @@ class ProductBridge:
         body: bytes | SeekableContent,
     ) -> BridgeResponse:
         recovery_upload = method == "POST" and upstream_target in _RECOVERY_UPLOAD_TARGETS
-        request_limit = self._max_document_body_bytes if (method == "POST" and upstream_target.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files"))) or recovery_upload else self._max_body_bytes
+        asset_upload = method == "POST" and _ASSET_UPLOAD.fullmatch(upstream_target) is not None
+        request_limit = self._max_document_body_bytes if (method == "POST" and upstream_target.endswith(("/materials", "/inspection-photos", "/delivery-templates", "/delivery-supporting-files"))) or recovery_upload or asset_upload else self._max_body_bytes
         body_size = len(body) if type(body) is bytes else as_seekable_content(body).byte_size
         if body_size > request_limit:
             return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
@@ -405,13 +432,19 @@ class ProductBridge:
             is_supporting = upstream_target.endswith("/delivery-supporting-files")
             template_types = {"application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/vnd.ms-word.document.macroenabled.12"}
             supporting_types = {"application/pdf", "image/jpeg", "image/png", *template_types}
-            if content_type not in ({"application/pdf"} if is_document else {"image/jpeg", "image/png"} if is_photo else template_types if is_template else supporting_types if is_supporting else {"application/octet-stream"} if recovery_upload else {"application/json"}):
+            asset_types = {"image/jpeg", "image/png", *template_types}
+            if content_type not in ({"application/pdf"} if is_document else {"image/jpeg", "image/png"} if is_photo else template_types if is_template else supporting_types if is_supporting else {"application/octet-stream"} if recovery_upload else asset_types if asset_upload else {"application/json"}):
                 return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
-            if is_document or is_photo or is_template or is_supporting:
+            if is_document or is_photo or is_template or is_supporting or asset_upload:
                 filename = headers.get("x-document-filename", "")
                 if not filename or len(filename) > 1024 or not filename.isascii() or any(ord(character) < 33 or ord(character) > 126 for character in filename):
                     return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
                 upstream_headers["X-Document-Filename"] = filename
+            if asset_upload:
+                expected = headers.get("x-expected-revision", "")
+                if expected != "none" and not (expected.isascii() and expected.isdecimal() and len(expected) <= 9):
+                    return _error(400, "INVALID_PRODUCT_REQUEST", "requisição local inválida")
+                upstream_headers["X-Expected-Revision"] = expected
             upstream_headers["Content-Type"] = content_type
             upstream_headers["Content-Length"] = str(body_size)
         connection = http.client.HTTPConnection(
@@ -440,7 +473,8 @@ class ProductBridge:
                     "application/vnd.ms-word.document.macroenabled.12",
                 }
                 delivery_read = "/delivery-snapshot/artifacts/" in upstream_target
-                if not raw_length.isascii() or not raw_length.isdecimal() or int(raw_length) > response_limit or content_type not in (allowed_delivery_types if delivery_read else {"application/pdf"}):
+                asset_read = _ASSET_CONTENT.fullmatch(upstream_target) is not None
+                if not raw_length.isascii() or not raw_length.isdecimal() or int(raw_length) > response_limit or content_type not in (allowed_delivery_types if delivery_read else {"image/jpeg", "image/png"} if asset_read else {"application/pdf"}):
                     return _error(502, "INVALID_LOCAL_API_RESPONSE", "resposta local inválida")
                 length = int(raw_length)
                 retained_connection = True

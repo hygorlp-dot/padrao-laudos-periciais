@@ -242,6 +242,8 @@ def test_every_portable_material_artifact_has_an_explicit_finite_strategy() -> N
         "PROPERTY_RECORD_V1",
         # #268: colecao de participantes, autoridade portavel da pericia.
         "PROCESS_PARTICIPANTS_V1",
+        # #270: snapshot dos padroes da instalacao capturado pela pericia.
+        "WORKSPACE_SETTINGS_SNAPSHOT_V1",
         "REPORT_SNAPSHOT_V1",
         "SITE_LOCATION_V1",
         "TECHNICAL_SNAPSHOT_V1",
