@@ -9,6 +9,7 @@ import json
 import re
 from typing import Any, TypeVar
 from .property_record import PropertyRecord, property_record_from_mapping
+from .process_participants import CaseParticipant, participant_from_mapping, participant_to_mapping
 
 
 REPORT_SNAPSHOT_ARTIFACT_KIND = "REPORT_SNAPSHOT_V1"
@@ -547,18 +548,39 @@ class ReportProcess:
     uf: str
     parte_requerente: str
     parte_requerida: str
+    # Colecao de participantes (#268), capturada com a revisao do registro que
+    # a sustenta. Ausente em laudos anteriores e enquanto o perito nao gravou o
+    # registro: omitida do mapping, nunca nula, para preservar o digest antigo.
+    participants: tuple[CaseParticipant, ...] | None = None
+    participants_revision: int | None = None
+    participants_checksum: str | None = None
 
     @property
     def has_identity(self) -> bool:
         return bool(self.numero_processo.strip() and (self.vara.strip() or self.tribunal.strip()))
+
+    @property
+    def confirmed_participants(self) -> tuple[CaseParticipant, ...]:
+        return tuple(item for item in self.participants or () if item.review_state.value == "CONFIRMED")
 
     def __post_init__(self):
         if not _text(self.workspace_id):
             raise ValueError("report process workspace is invalid")
         if type(self.source_revision) is not int or self.source_revision < 1 or type(self.source_checksum) is not str or not _SHA256.fullmatch(self.source_checksum):
             raise ValueError("report process binding is invalid")
+        binding = (self.participants, self.participants_revision, self.participants_checksum)
+        if any(value is None for value in binding):
+            if any(value is not None for value in binding):
+                raise ValueError("report participants binding is incomplete")
+        elif (
+            type(self.participants) is not tuple or any(type(item) is not CaseParticipant for item in self.participants)
+            or len({item.participant_id for item in self.participants}) != len(self.participants)
+            or type(self.participants_revision) is not int or self.participants_revision < 1
+            or type(self.participants_checksum) is not str or not _SHA256.fullmatch(self.participants_checksum)
+        ):
+            raise ValueError("report participants binding is invalid")
         for field in fields(self):
-            if field.name in {"workspace_id", "source_revision", "source_checksum"}:
+            if field.name in {"workspace_id", "source_revision", "source_checksum", "participants", "participants_revision", "participants_checksum"}:
                 continue
             value = getattr(self, field.name)
             if type(value) is not str:
@@ -756,7 +778,7 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     if not allowed - optional <= set(value) <= allowed:
         raise ValueError("ReportSnapshot fields are invalid")
     data = dict(value)
-    data["process_record"] = _construct(ReportProcess, data["process_record"]) if "process_record" in data else None
+    data["process_record"] = report_process_from_mapping(data["process_record"]) if "process_record" in data else None
     if "property_record" not in data:
         data["property_record"] = None
     else:
@@ -825,6 +847,40 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     return ReportSnapshot(**data)
 
 
+_PARTICIPANT_CAPTURE = ("participants", "participants_revision", "participants_checksum")
+
+
+def report_process_from_mapping(value: object) -> ReportProcess:
+    if type(value) is not dict:
+        raise ValueError("ReportProcess mapping is invalid")
+    capture = dict(value)
+    present = [name for name in _PARTICIPANT_CAPTURE if name in capture]
+    if present and len(present) != len(_PARTICIPANT_CAPTURE):
+        raise ValueError("ReportProcess participants capture is incomplete")
+    participants = None
+    if present:
+        if type(capture["participants"]) is not list or any(capture[name] is None for name in _PARTICIPANT_CAPTURE):
+            # Ausente e escrito por omissao; nulo seria um segundo mapping.
+            raise ValueError("ReportProcess participants capture is invalid")
+        participants = tuple(participant_from_mapping(item) for item in capture.pop("participants"))
+        revision, checksum = capture.pop("participants_revision"), capture.pop("participants_checksum")
+    else:
+        revision = checksum = None
+    names = {item.name for item in fields(ReportProcess)} - set(_PARTICIPANT_CAPTURE)
+    if set(capture) != names:
+        raise ValueError("ReportProcess fields are invalid")
+    return ReportProcess(**capture, participants=participants, participants_revision=revision, participants_checksum=checksum)
+
+
+def report_process_to_mapping(value: ReportProcess) -> dict[str, Any]:
+    mapping = {item.name: getattr(value, item.name) for item in fields(ReportProcess) if item.name not in _PARTICIPANT_CAPTURE}
+    if value.participants is not None:
+        mapping["participants"] = [participant_to_mapping(item) for item in value.participants]
+        mapping["participants_revision"] = value.participants_revision
+        mapping["participants_checksum"] = value.participants_checksum
+    return mapping
+
+
 def expert_profile_from_mapping(value: object) -> ExpertMasterProfile:
     return _construct(ExpertMasterProfile, value)
 
@@ -847,4 +903,6 @@ def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     for name in ("references", "findings_table", "site_location", "figures", "property_record", "process_record"):
         if mapping[name] is None:
             del mapping[name]
+    if value.process_record is not None:
+        mapping["process_record"] = json.loads(json.dumps(report_process_to_mapping(value.process_record), ensure_ascii=False))
     return mapping

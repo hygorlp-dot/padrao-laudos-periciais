@@ -14,6 +14,7 @@ from ..construction_defect_analysis import (
     ConstructionDefectAnalysisSnapshot,
     construction_defect_analysis_to_mapping,
 )
+from ..process_participants import PROCESS_PARTICIPANTS_ID, PROCESS_PARTICIPANTS_KIND, participants_register_from_mapping
 from ..report_foundation import (
     ContextCompletenessItem,
     ContextStatus,
@@ -233,7 +234,20 @@ class GetReportProcess:
         if record.workspace_id != workspace_id:
             raise ValueError("report process workspace mismatch")
         data = ProcessCaseData.from_mapping(thaw_payload(record.payload)).as_dict()
-        return ReportProcess(str(workspace_id), record.revision, record.checksum_sha256, **data)
+        # Os participantes so entram na captura depois que o perito gravou o
+        # registro (#268): a projecao legada nao torna um laudo antigo stale.
+        try:
+            participants = self.get_latest_revision.execute(workspace_id, PROCESS_PARTICIPANTS_KIND, PROCESS_PARTICIPANTS_ID)
+        except ArtifactRevisionNotFound:
+            return ReportProcess(str(workspace_id), record.revision, record.checksum_sha256, **data)
+        register = participants_register_from_mapping(thaw_payload(participants.payload))
+        if register.workspace_id != str(workspace_id):
+            raise ValueError("report participants workspace mismatch")
+        return ReportProcess(
+            str(workspace_id), record.revision, record.checksum_sha256, **data,
+            participants=register.participants, participants_revision=participants.revision,
+            participants_checksum=participants.checksum_sha256,
+        )
 
 
 def _capture_process(get_process_record, workspace_id):
@@ -588,6 +602,8 @@ class SaveReportSnapshot:
             ):
                 if capture is not None:
                     dependencies += ({"artifact_kind": kind, "artifact_id": identity, "revision": capture.source_revision, "checksum_sha256": capture.source_checksum},)
+            if snapshot.process_record is not None and snapshot.process_record.participants is not None:
+                dependencies += ({"artifact_kind": PROCESS_PARTICIPANTS_KIND, "artifact_id": PROCESS_PARTICIPANTS_ID, "revision": snapshot.process_record.participants_revision, "checksum_sha256": snapshot.process_record.participants_checksum},)
             return self.revisions.append_if_latest(
                 workspace_id=workspace_id, artifact_kind=REPORT_SNAPSHOT_ARTIFACT_KIND, artifact_id=REPORT_SNAPSHOT_ARTIFACT_ID,
                 revision_id=str(self.ids.new_uuid()), created_at=created_at.isoformat(), payload=report_snapshot_to_mapping(snapshot),

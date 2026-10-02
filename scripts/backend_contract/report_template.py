@@ -75,6 +75,17 @@ def _context_note(field: str):
     return value
 
 
+def _participants_summary(pole: str):
+    """Resumo de um polo para a capa; a relacao completa fica no item 1."""
+    def value(report):
+        from .process_participants import ParticipantPole, participants_summary
+        captured = report.process_record
+        if captured is None or captured.participants is None:
+            raise ValueError(f"template field PARTICIPANTS_{pole} requires confirmed participants")
+        return participants_summary(captured.participants, ParticipantPole(pole)) or "—"
+    return value
+
+
 _FIELD_VALUES = {
     "EXPERT_FULL_NAME": lambda report: report.expert_profile.full_name,
     "EXPERT_REGISTRATION": lambda report: report.expert_profile.registration,
@@ -83,6 +94,9 @@ _FIELD_VALUES = {
     "EXPERT_COURT_REGISTRATION": lambda report: report.expert_profile.court_registration,
     "PROCESS_NUMBER": _context_note("PROCESS_NUMBER"),
     "COURT": _context_note("COURT"),
+    "PARTICIPANTS_ACTIVE": _participants_summary("ACTIVE"),
+    "PARTICIPANTS_PASSIVE": _participants_summary("PASSIVE"),
+    "PARTICIPANTS_OTHER": _participants_summary("OTHER"),
 }
 # Pagination a professional document cannot do without; the other protected
 # fields stay protected whenever a template carries them.

@@ -37,6 +37,25 @@ etapa.
 | `JUIZO` / `VARA` | Órgão julgador | Nomenclatura divergente; validar |
 | `CEP` | CEP do imóvel | Ausente em parte dos arquivos; validar |
 
+## Participantes processuais (#268)
+
+O PJe admite várias partes em cada polo, outros participantes e representantes
+vinculados a cada parte. A autoridade é a lista de participantes confirmada pelo
+perito (`PROCESS_PARTICIPANTS_V1`), não um campo singular.
+
+| Campo do modelo | Conteúdo | Observação |
+|---|---|---|
+| `[[PARTICIPANTS_ACTIVE]]` | Resumo do polo ativo para a capa | Até três nomes; acima disso, "e outros N (relação completa no item 1)" |
+| `[[PARTICIPANTS_PASSIVE]]` | Resumo do polo passivo para a capa | Mesma regra |
+| `[[PARTICIPANTS_OTHER]]` | Resumo de outros participantes | Mesma regra |
+
+- A relação completa, com papel e representantes de cada participante, é escrita
+  no item de identificação do laudo. Nenhum participante confirmado é omitido.
+- O bookmark legado `POLOATIVO` (singular) continua preservado nos modelos antigos,
+  mas não é autoridade e não é preenchido com "o primeiro nome" do polo.
+- Participante descartado ou removido pelo perito não aparece no documento; a
+  decisão fica no histórico do registro.
+
 ## Campos Word
 
 | Campo | Uso canônico |

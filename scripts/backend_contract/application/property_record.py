@@ -74,29 +74,26 @@ def _excluded_pages(indexed_documents) -> dict[str, frozenset[int]]:
 
 @dataclass(frozen=True, slots=True)
 class GetPropertyProposals:
-    list_documents: object
-    open_document: object
-    extractor: object
-    # Leitor do inventario PJe vigente. Obrigatorio: sem ele nao ha como saber o
-    # que o perito excluiu, e o silencio equivaleria a tratar tudo como disponivel.
-    pje_documents: object
+    """Propostas a partir do texto ja lido de cada documento do caso (#269).
+
+    O leitor compartilhado reaproveita o cache OCR da pericia e a leitura ja
+    feita na derivacao (#266); um documento ainda em leitura nao produz
+    proposta, e isso e dito em vez de calado. Pagina de peca excluida pelo
+    perito nunca alimenta proposta.
+    """
+    texts: object
 
     def execute(self, workspace_id):
         proposals = []
-        excluded = _excluded_pages(self.pje_documents.execute(workspace_id))
-        for document in self.list_documents.execute(workspace_id):
-            if document.workspace_id != workspace_id:
-                raise RepositoryIntegrityError("property source workspace mismatch")
-            with self.open_document.execute(workspace_id, document.content_id) as opened:
-                if opened.metadata != document:
-                    raise RepositoryIntegrityError("property source identity mismatch")
-                extracted = self.extractor.extract(opened.stream, document_sha256=document.checksum_sha256)
-                if extracted.document_sha256 != document.checksum_sha256:
-                    raise RepositoryIntegrityError("property extraction source mismatch")
-                skipped = excluded.get(str(document.content_id), frozenset())
-                pages = tuple(page for page in extracted.pages if page.number not in skipped)
-                proposals.extend(property_proposals(workspace_id, document.content_id, document.checksum_sha256, document.original_filename, pages))
+        for document in self.texts.execute(workspace_id):
+            if document.reading_pending:
+                continue
+            pages = tuple(page for page in document.pages if not document.excluded(page.number))
+            proposals.extend(property_proposals(workspace_id, document.content_id, document.checksum_sha256, document.filename, pages))
         return tuple(proposals)
+
+    def pending_documents(self, workspace_id) -> tuple[str, ...]:
+        return tuple(document.filename for document in self.texts.execute(workspace_id) if document.reading_pending)
 
 
 @dataclass(frozen=True, slots=True)

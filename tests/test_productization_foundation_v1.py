@@ -240,6 +240,8 @@ def test_every_portable_material_artifact_has_an_explicit_finite_strategy() -> N
         "PJE_INTAKE_V1",
         "PROCESS_CASE",
         "PROPERTY_RECORD_V1",
+        # #268: colecao de participantes, autoridade portavel da pericia.
+        "PROCESS_PARTICIPANTS_V1",
         "REPORT_SNAPSHOT_V1",
         "SITE_LOCATION_V1",
         "TECHNICAL_SNAPSHOT_V1",

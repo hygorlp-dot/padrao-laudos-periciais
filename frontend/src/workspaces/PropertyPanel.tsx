@@ -6,7 +6,9 @@ import { getPropertyRecord, getPropertyProposals, savePropertyRecord, PropertyAp
 
 function Source({ evidence }: { evidence: PropertyEvidence | null }) {
   if (!evidence) return <small className="field-hint">Informado e confirmado pelo perito</small>;
-  return <details className="property-source"><summary>Extraído dos autos · {evidence.filename}, p. {evidence.page}</summary><blockquote>{evidence.excerpt}</blockquote><small>{evidence.method.includes("OCR") ? "Leitura por OCR" : "Texto do documento"}</small></details>;
+  const reading = evidence.method.includes("OCR") ? "Leitura por OCR" : "Texto do documento";
+  const how = evidence.method.startsWith("LABEL_") ? "campo identificado no documento" : evidence.method.startsWith("CONTEXT_BOUND_") ? "trecho que se refere ao imóvel objeto" : "padrão do tipo de documento";
+  return <details className="property-source"><summary>Extraído dos autos · {evidence.filename}, p. {evidence.page}</summary><blockquote>{evidence.excerpt}</blockquote><small>{reading} · {how}</small></details>;
 }
 
 function message(error: unknown) {
@@ -29,6 +31,7 @@ function PropertyContent({ workspaceId, readOnly }: { workspaceId: string; readO
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Record<string, string | null>>({});
   const [proposals, setProposals] = useState<PropertyProposal[] | null>(null);
+  const [pending, setPending] = useState<string[]>([]);
   const [busy, setBusy] = useState<"search" | "save" | null>(null);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState(false);
@@ -52,7 +55,7 @@ function PropertyContent({ workspaceId, readOnly }: { workspaceId: string; readO
   }, [workspaceId, opened, loadVersion]);
   async function search() {
     setBusy("search"); setError("");
-    try { setProposals(await getPropertyProposals(workspaceId)); }
+    try { const found = await getPropertyProposals(workspaceId); setProposals(found.proposals); setPending(found.pendingDocuments); }
     catch (failure) { setError(message(failure)); }
     finally { setBusy(null); }
   }
@@ -75,7 +78,9 @@ function PropertyContent({ workspaceId, readOnly }: { workspaceId: string; readO
     {!record && !error && opened && <p role="status">Carregando cadastro do imóvel…</p>}
     {record && <form onSubmit={(event) => void confirm(event)}>
       <button className="text-action" type="button" disabled={busy !== null} onClick={() => void search()}>{busy === "search" ? "Lendo os documentos…" : "Buscar informações nos documentos"}</button>
-      {proposals?.length === 0 && <p role="status">Não foram encontrados campos explícitos nos materiais lidos. Isso não confirma a ausência da informação nos autos.</p>}
+      {pending.length > 0 && <p role="status">Leitura em andamento: {pending.join(", ")}. Busque de novo quando terminar.</p>}
+      {proposals?.length === 0 && <p role="status">Nenhuma proposta foi encontrada automaticamente. As informações ainda podem existir nos documentos. Revise os materiais ou preencha manualmente.</p>}
+      {proposals && proposals.length > 0 && <p role="status">{proposals.length} proposta(s) encontrada(s). Nada é salvo sem a sua confirmação; confira a fonte de cada valor.</p>}
       <div className="property-grid">{record.fields.map((field) => {
         const prior = record.record.values.find((item) => item.field === field.field);
         const candidates = proposals?.filter((proposal) => proposal.field === field.field) ?? [];
@@ -84,7 +89,7 @@ function PropertyContent({ workspaceId, readOnly }: { workspaceId: string; readO
           <label>{field.label}<input value={draft[field.field] ?? ""} inputMode={field.kind === "decimal" ? "decimal" : undefined} placeholder={field.kind === "date" ? "DD/MM/AAAA" : undefined} disabled={busy !== null} onChange={(event) => { setDraft({ ...draft, [field.field]: event.target.value }); setSelected({ ...selected, [field.field]: null }); setSaved(false); }} /></label>
           {choice ? <><small>Proposta selecionada · confirme para salvar</small><Source evidence={choice.evidence} /></> : prior && draft[field.field] === prior.value ? <Source evidence={prior.evidence} /> : null}
           {prior && record.stale_fields.includes(field.field) && <p role="alert" className="field-warning">A peça que sustentava este valor foi excluída da análise. Confirme o dado por outra fonte ou remova-o antes de usá-lo no laudo.</p>}
-          {candidates.length > 0 && <details className="property-candidates"><summary>{candidates.length} proposta(s) nos documentos{candidates.some((item) => item.state === "CONFLICTING") ? " · valores divergentes" : ""}</summary>{candidates.map((candidate) => <div className="property-candidate" key={candidate.proposal_id}><strong>{candidate.value}</strong><Source evidence={candidate.evidence} /><button type="button" className="text-action" disabled={busy !== null} onClick={() => { setDraft({ ...draft, [field.field]: candidate.value }); setSelected({ ...selected, [field.field]: candidate.proposal_id }); setSaved(false); }}>Usar esta proposta</button></div>)}</details>}
+          {candidates.length > 0 && <details className="property-candidates"><summary>{candidates.length} proposta(s) nos documentos{candidates.some((item) => item.state === "CONFLICTING") ? " · valores divergentes" : ""}</summary>{candidates.map((candidate) => <div className="property-candidate" key={candidate.proposal_id}><strong>{candidate.value}</strong>{candidate.strength === "POSSIBLE" ? <small className="field-warning">Possível informação encontrada — confira a fonte</small> : null}<Source evidence={candidate.evidence} /><button type="button" className="text-action" disabled={busy !== null} onClick={() => { setDraft({ ...draft, [field.field]: candidate.value }); setSelected({ ...selected, [field.field]: candidate.proposal_id }); setSaved(false); }}>Usar esta proposta</button></div>)}</details>}
         </div>;
       })}</div>
       <p className="field-hint">{location} <a href={workspacePath(workspaceId, "planejamento")} onClick={navigate}>Abrir localização no planejamento</a></p>

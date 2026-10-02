@@ -190,6 +190,8 @@ class LocalApiServices:
     get_property_record: object | None = None
     save_property_record: object | None = None
     get_property_proposals: object | None = None
+    get_process_participants: object | None = None
+    decide_process_participants: object | None = None
     get_photo_library: object | None = None
     ai_assistant_status: object | None = None
     curate_photo_library: object | None = None
@@ -295,6 +297,20 @@ def _material_processing_dto(record: PrivateContentMetadata, state: str, expecte
     if state not in PROCESSING_STATES:
         raise RepositoryIntegrityError("estado de processamento desconhecido")
     return {"content_id": str(record.content_id), "state": state}
+
+
+def _participants_dto(view) -> dict:
+    from ..application.process_participants import participant_to_mapping
+    return {
+        "revision": view.revision,
+        "updated_at": view.updated_at,
+        "legacy_projection": view.legacy_projection,
+        "participants": [participant_to_mapping(item) for item in view.register.participants],
+        "proposals": [participant_to_mapping(item) for item in view.proposals],
+        "pending_documents": list(view.pending_documents),
+        "interrupted_pages": [{"filename": filename, "page": page} for filename, page in view.interrupted_pages],
+        "stale_participant_ids": list(view.stale_participant_ids),
+    }
 
 
 def _json_response(status: int, value: object) -> HttpResponse:
@@ -725,7 +741,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "property-record", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "property-record", "process-participants", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
                     403,
@@ -813,9 +829,10 @@ class LocalApi:
                         return _error(503, "PROPERTY_PROPOSALS_UNAVAILABLE")
                     proposals = self._services.get_property_proposals.execute(workspace_id)
                     values_by_field = {field: {p.value for p in proposals if p.field == field} for field, *_ in PROPERTY_FIELDS}
+                    pending = getattr(self._services.get_property_proposals, "pending_documents", None)
                     return _json_response(200, {"workspace_id": str(workspace_id), "proposals": [
                         {**asdict(p), "state": "CONFLICTING" if len(values_by_field[p.field]) > 1 else "PROPOSED"} for p in proposals
-                    ]})
+                    ], "pending_documents": list(pending(workspace_id)) if callable(pending) else []})
                 if normalized_method == "GET":
                     try:
                         record, property_record = self._services.get_property_record.execute(workspace_id)
@@ -841,6 +858,26 @@ class LocalApi:
                     # Campos cuja pagina de origem o perito excluiu depois de confirmar.
                     "stale_fields": stale_fields,
                 })
+
+            if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "process-participants":
+                workspace_id = self._workspace_id(raw_segments[2])
+                self._services.get_workspace.execute(workspace_id)
+                if self._services.get_process_participants is None or self._services.decide_process_participants is None:
+                    return _error(503, "PROCESS_PARTICIPANTS_UNAVAILABLE")
+                if len(raw_segments) == 5:
+                    if raw_segments[4] != "decisions":
+                        return _error(404, "NOT_FOUND")
+                    if normalized_method != "POST":
+                        return _error(405, "METHOD_NOT_ALLOWED")
+                    dto = self._request_dto(request_headers, body)
+                    if set(dto) != {"action", "expected_revision", "payload"} or type(dto["action"]) is not str:
+                        raise ValueError("participants request is invalid")
+                    self._services.decide_process_participants.execute(
+                        workspace_id, action=dto["action"], expected_revision=dto["expected_revision"], payload=dto["payload"],
+                    )
+                elif normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                return _json_response(200, _participants_dto(self._services.get_process_participants.execute(workspace_id)))
 
             if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "site-location":
                 workspace_id = self._workspace_id(raw_segments[2])

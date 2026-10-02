@@ -303,3 +303,183 @@ def parse_pje_party_table(page_text: str) -> PjePartyTableParseResult:
     # No row-continuation grammar is currently supported. A split or incomplete
     # row therefore terminates fail-closed instead of entering that state.
     return PjePartyTableParseResult(tuple(rows), state)
+
+
+# --- Participantes (#268) -------------------------------------------------
+#
+# A gramatica acima alimenta os campos escalares legados (`parte_requerente`,
+# `parte_requerida`) e as `party_rows` do inventario PJe; ela continua
+# intocada. A gramatica abaixo e a mesma leitura estrutural da capa, estendida
+# ao que o PJe realmente admite: varias partes por polo, outros participantes,
+# parte sem procurador e varios procuradores por parte. Continua fail-closed:
+# uma linha que nao se reconhece dentro da tabela encerra a leitura.
+
+
+class PjeParticipantPole(StrEnum):
+    ACTIVE = "ACTIVE"
+    PASSIVE = "PASSIVE"
+    OTHER = "OTHER"
+
+
+_PARTICIPANT_ACTIVE_ROLES = frozenset({
+    "AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE", "IMPETRANTE", "EMBARGANTE", "RECLAMANTE",
+})
+_PARTICIPANT_PASSIVE_ROLES = frozenset({
+    "REQUERIDO", "REQUERIDA", "REU", "RE", "EXECUTADO", "EXECUTADA", "IMPETRADO", "IMPETRADA",
+    "EMBARGADO", "EMBARGADA", "RECLAMADO", "RECLAMADA",
+})
+_PARTICIPANT_OTHER_ROLES = frozenset({
+    "TERCEIRO INTERESSADO", "TERCEIRA INTERESSADA", "INTERESSADO", "INTERESSADA",
+    "ASSISTENTE", "FISCAL DA LEI", "CUSTOS LEGIS", "FISCAL DA ORDEM JURIDICA",
+    "AMICUS CURIAE", "VITIMA", "PERITO", "PERITA", "ASSISTENTE TECNICO", "ASSISTENTE TECNICA",
+})
+_PARTICIPANT_REPRESENTATIVE_ROLES = frozenset({
+    "ADVOGADO", "ADVOGADA", "PROCURADOR", "PROCURADORA", "DEFENSOR PUBLICO", "DEFENSORA PUBLICA",
+    "DEFENSORIA PUBLICA", "REPRESENTANTE", "CURADOR", "CURADORA",
+})
+_PARTICIPANT_SECTIONS = {
+    "POLO ATIVO": PjeParticipantPole.ACTIVE,
+    "POLO PASSIVO": PjeParticipantPole.PASSIVE,
+    "OUTROS PARTICIPANTES": PjeParticipantPole.OTHER,
+    "OUTROS INTERESSADOS": PjeParticipantPole.OTHER,
+    "TERCEIROS INTERESSADOS": PjeParticipantPole.OTHER,
+}
+_PARENTHESIZED_TOKEN = re.compile(r"\(([A-Z][A-Z ]{0,38}[A-Z])\)")
+_SECTION_LINE = re.compile(r"^\s*(POLO ATIVO|POLO PASSIVO|OUTROS PARTICIPANTES|OUTROS INTERESSADOS|TERCEIROS INTERESSADOS)\s*:?\s*$")
+_INLINE_POLE = re.compile(r"^\s*(POLO ATIVO|POLO PASSIVO|OUTROS PARTICIPANTES)\s*[:\-]\s*")
+
+
+def participant_pole_for_role(role: str) -> PjeParticipantPole:
+    if role in _PARTICIPANT_ACTIVE_ROLES:
+        return PjeParticipantPole.ACTIVE
+    if role in _PARTICIPANT_PASSIVE_ROLES:
+        return PjeParticipantPole.PASSIVE
+    if role in _PARTICIPANT_OTHER_ROLES:
+        return PjeParticipantPole.OTHER
+    raise ValueError("papel processual não suportado pela tabela PJe")
+
+
+@dataclass(frozen=True, slots=True)
+class PjeRepresentativeRow:
+    name: str
+    role: str
+    source_line: str
+    source_start: int
+    source_end: int
+
+
+@dataclass(frozen=True, slots=True)
+class PjeParticipantRow:
+    name: str
+    role: str
+    pole: PjeParticipantPole
+    representatives: tuple[PjeRepresentativeRow, ...]
+    source_line: str
+    source_start: int
+    source_end: int
+
+
+@dataclass(frozen=True, slots=True)
+class PjeParticipantParseResult:
+    rows: tuple[PjeParticipantRow, ...]
+    terminated: bool
+
+
+def _trimmed_span(normalized: str, start: int, end: int) -> tuple[int, int]:
+    start = _skip_whitespace_forward(normalized, start, end)
+    end = _skip_whitespace_backward(normalized, start, end)
+    return start, end
+
+
+def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
+    """Linhas de participantes da capa PJe, com polo, papel e procuradores.
+
+    Uma passagem por linha e uma busca linear de tokens entre parenteses por
+    linha. Nunca infere polo pelo nome: o polo vem do papel declarado e tem de
+    concordar com a secao ou o prefixo explicito, quando existirem.
+    """
+    if type(page_text) is not str:
+        raise TypeError("texto da página PJe inválido")
+    rows: list[PjeParticipantRow] = []
+    inside = False
+    terminated = False
+    section: PjeParticipantPole | None = None
+    line_start = 0
+    for raw_line in page_text.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        offset = line_start
+        line_start += len(raw_line)
+        normalized, source_indices = _ascii_upper_with_source_indices(line)
+        if _HEADER.fullmatch(normalized):
+            inside, terminated, section = True, False, None
+            continue
+        section_match = _SECTION_LINE.fullmatch(normalized)
+        if section_match:
+            inside, terminated, section = True, False, _PARTICIPANT_SECTIONS[section_match.group(1)]
+            continue
+        if not inside or terminated:
+            continue
+        if not normalized.strip():
+            continue
+        explicit: PjeParticipantPole | None = None
+        content_start = 0
+        inline = _INLINE_POLE.match(normalized)
+        if inline:
+            explicit = _PARTICIPANT_SECTIONS[inline.group(1)]
+            content_start = inline.end()
+        tokens = [match for match in _PARENTHESIZED_TOKEN.finditer(normalized, content_start)]
+        party_tokens = [match for match in tokens if match.group(1) in _PARTICIPANT_ACTIVE_ROLES | _PARTICIPANT_PASSIVE_ROLES | _PARTICIPANT_OTHER_ROLES]
+        representative_tokens = [match for match in tokens if match.group(1) in _PARTICIPANT_REPRESENTATIVE_ROLES]
+        unknown_tokens = len(tokens) - len(party_tokens) - len(representative_tokens)
+        line_end = _skip_whitespace_backward(normalized, 0, len(normalized))
+
+        def source(start: int, end: int) -> tuple[int, int]:
+            return (
+                offset + _source_bound(source_indices, start, len(line)),
+                offset + _source_bound(source_indices, end, len(line)),
+            )
+
+        if not party_tokens and len(representative_tokens) == 1 and unknown_tokens == 0 and explicit is None:
+            # Continuacao: mais um procurador da parte da linha anterior.
+            token = representative_tokens[0]
+            name_start, name_end = _trimmed_span(normalized, content_start, token.start())
+            if rows and token.end() == line_end and name_end > name_start:
+                start, end = source(name_start, name_end)
+                previous = rows[-1]
+                rows[-1] = PjeParticipantRow(
+                    previous.name, previous.role, previous.pole,
+                    (*previous.representatives, PjeRepresentativeRow(page_text[start:end], token.group(1), line, start, end)),
+                    previous.source_line, previous.source_start, previous.source_end,
+                )
+                continue
+            terminated = True
+            continue
+        if len(party_tokens) != 1 or unknown_tokens or len(representative_tokens) > 1:
+            terminated = True
+            continue
+        party = party_tokens[0]
+        role = party.group(1)
+        pole = participant_pole_for_role(role)
+        expected = explicit or section
+        if expected is not None and expected is not pole:
+            terminated = True
+            continue
+        name_start, name_end = _trimmed_span(normalized, content_start, party.start())
+        if name_end <= name_start:
+            terminated = True
+            continue
+        representatives: tuple[PjeRepresentativeRow, ...] = ()
+        if representative_tokens:
+            token = representative_tokens[0]
+            rep_start, rep_end = _trimmed_span(normalized, party.end(), token.start())
+            if token.start() < party.end() or token.end() != line_end or rep_end <= rep_start:
+                terminated = True
+                continue
+            start, end = source(rep_start, rep_end)
+            representatives = (PjeRepresentativeRow(page_text[start:end], token.group(1), line, start, end),)
+        elif party.end() != line_end:
+            terminated = True
+            continue
+        start, end = source(name_start, name_end)
+        rows.append(PjeParticipantRow(page_text[start:end], role, pole, representatives, line, start, end))
+    return PjeParticipantParseResult(tuple(rows), terminated)
