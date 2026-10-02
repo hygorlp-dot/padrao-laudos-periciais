@@ -88,7 +88,8 @@ JARGON = {
 }
 # Numerais romanos e unidades em maiúsculas não são siglas a desdobrar.
 _NOT_ACRONYMS = frozenset({"I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII", "PDF", "UF"})
-_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÂÊÔÃÕÇ0-9\"“(])")
+# Maiúscula ASCII ou acentuada (U+00C0 a U+00DE), dígito, aspas ou parêntese.
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=[A-Z\u00c0-\u00de0-9\"“(])")
 _WORD = re.compile(r"\w+(?:[-']\w+)*")
 
 
