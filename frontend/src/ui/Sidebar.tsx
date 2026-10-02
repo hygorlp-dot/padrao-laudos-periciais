@@ -75,6 +75,17 @@ export function Sidebar({ currentPath, workspaceId, workspaceName }: SidebarProp
         ))}
       </nav>
 
+      {/* Fora do fluxo de uma perícia: padrões da instalação. */}
+      <a
+        className="settings-link"
+        href="/configuracoes"
+        aria-current={currentPath === "/configuracoes" ? "page" : undefined}
+        data-active={currentPath === "/configuracoes" || undefined}
+        onClick={navigate}
+      >
+        Configurações
+      </a>
+
       <p className="sidebar-note">
         {workspaceName ? `Perícia ativa · ${workspaceName}` : "Estrutura local · nenhuma perícia ativa"}
       </p>

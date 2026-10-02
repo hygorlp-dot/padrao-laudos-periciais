@@ -60,6 +60,23 @@ perito (`PROCESS_PARTICIPANTS_V1`), não um campo singular.
 - Participante descartado ou removido pelo perito não aparece no documento; a
   decisão fica no histórico do registro.
 
+## Modelo padrão com identidade visual (V2)
+
+O modelo `PRODUCT-DEFAULT-REPORT-V2` é gerado do snapshot de configurações da
+perícia e vincula sempre este conjunto fixo:
+
+| Campo do modelo | Onde aparece |
+|---|---|
+| `[[PROCESS_NUMBER]]` | Capa |
+| `[[COURT]]` | Capa |
+| `[[PARTICIPANTS_ACTIVE]]` | Capa, "Polo ativo:" |
+| `[[PARTICIPANTS_PASSIVE]]` | Capa, "Polo passivo:" |
+| `[[EXPERT_FULL_NAME]]`, `[[EXPERT_TITLE]]`, `[[EXPERT_REGISTRATION]]` | Fechamento |
+
+- Cabeçalho, rodapé ("Página X de Y" com `PAGE`/`NUMPAGES`), logotipo, assinatura,
+  selo, marca d'água e fundo não são campos: são partes fixas do modelo gerado.
+- Parágrafo iniciado por "> " sai como citação longa (estilo "Quote").
+
 ## Campos Word
 
 | Campo | Uso canônico |

@@ -31,6 +31,9 @@ class PrivateContentRole(Enum):
     # So os papeis que algum caminho do produto atribui hoje. Fonte do caso e o
     # papel historico implicito e nao precisa de registro.
     DELIVERY_SUPPORT = "DELIVERY_SUPPORT"
+    # Copia, dentro da pericia, de um ativo de identidade visual da instalacao
+    # (#270). Nunca e fonte do caso, material ou documento analisado.
+    BRANDING_ASSET = "BRANDING_ASSET"
 
 
 def private_content_role_payload(metadata: PrivateContentMetadata, role: PrivateContentRole) -> dict[str, object]:

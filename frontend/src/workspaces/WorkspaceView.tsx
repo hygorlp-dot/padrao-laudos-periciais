@@ -21,6 +21,7 @@ import { BudgetFoundationView } from "./BudgetFoundationView";
 import { WorkspaceRecoveryView } from "./WorkspaceRecoveryView";
 import { FindingsLedgerView } from "./FindingsLedgerView";
 import { ReportReviewView } from "./ReportReviewView";
+import { WorkspaceSettingsPanel } from "./WorkspaceSettingsPanel";
 
 const IMPLEMENTED_STAGE_PATHS = ["/processo", "/materiais", "/analise", "/planejamento", "/vistoria", "/evidencias", "/constatacoes", "/analise-tecnica", "/laudo", "/revisao", "/exportar", "/orcamento", "/recuperacao"];
 
@@ -161,6 +162,7 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
             </div>
           </section>
         ) : null}
+        {state.kind === "ready" && route.kind === "home" ? <WorkspaceSettingsPanel workspaceId={workspaceId} /> : null}
         {state.kind === "ready" && route.path === "/processo" ? (
           <ProcessCaseView workspaceId={workspaceId} />
         ) : null}

@@ -6,6 +6,7 @@ import { getReportSnapshot, ReportApiError, reviewReportSnapshot, type ReportEnv
 import { workspacePath } from "../routes/routeCatalog";
 import { actionLabel, formatDateTime, stateLabel, reasonLabels } from "../ui/labels";
 import { TechnicalDetails } from "../ui/TechnicalDetails";
+import { ReportPreflightPanel } from "./ReportPreflightPanel";
 
 type State = { kind: "loading" } | { kind: "missing" } | { kind: "ready"; value: ReportEnvelope } | { kind: "error" };
 type Check = { label: string; done: boolean; detail: string };
@@ -62,6 +63,7 @@ export function ReportReviewView({ workspaceId }: { workspaceId: string }) {
   return <section className="report-review" aria-labelledby="report-review-title">
     <header className="planning-overview"><div><h2 id="report-review-title">Revisão do laudo</h2><p>Confira a completude antes de marcar como revisado e aprovar. A aprovação libera a entrega em Word e PDF.</p></div><div className="planning-readiness"><strong>{stateLabel(snapshot.state)}</strong><span>{snapshot.state === "APPROVED" ? "Aprovado para entrega" : ready ? "Conferência completa" : "Há pendências de conteúdo"}</span></div></header>
     <section className="analysis-section" aria-labelledby="review-checklist-title"><h3 id="review-checklist-title">Conferência</h3><ul className="review-checklist">{checks.map((check) => <li key={check.label} data-done={check.done || undefined}><span className="review-check-mark" aria-hidden="true">{check.done ? "✓" : "!"}</span><div><strong>{check.label}</strong><span>{check.done ? "Completo" : "Pendente"} · {check.detail}</span></div></li>)}</ul>{coverage.reasons.length > 0 && <ul className="planning-reasons">{reasonLabels(coverage.reasons).map((item) => <li key={item}>{item}</li>)}</ul>}<a className="text-action" href={workspacePath(workspaceId, "laudo")} onClick={navigate}>Corrigir no Laudo</a></section>
+    <ReportPreflightPanel workspaceId={workspaceId} reportRevision={state.value.revision} />
     {actionError && <section className="inline-alert" role="alert"><strong>Não foi possível registrar a revisão.</strong><p>O laudo continua no estado anterior. Confira as pendências e tente de novo.</p></section>}
     {snapshot.state !== "SUPERSEDED" && <section className="technical-authority" aria-labelledby="review-decision-title"><h3 id="review-decision-title">Decisão profissional</h3><label>Fundamentação da revisão<textarea value={reason} onChange={(event) => setReason(event.target.value)} disabled={busy || snapshot.upstream_stale}/></label><div className="action-row">
       {allowed.MARK_REVIEWED && <button className="authority-action" type="button" disabled={busy || snapshot.upstream_stale || !reason.trim()} onClick={() => act("MARK_REVIEWED")}>Marcar como revisado</button>}

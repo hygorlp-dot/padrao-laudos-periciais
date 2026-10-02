@@ -3,7 +3,9 @@ import type { PropertyEnvelope } from "./propertyRecord";
 
 export type ExpertProfile = { profile_id: string; revision: number; full_name: string; professional_title: string; registration: string; court_registration: string; contact_line: string };
 export type EditorialTypography = { heading1_pt: number; heading2_pt: number; heading3_pt: number; headings_bold: boolean; heading_space_before_pt: number; heading_space_after_pt: number; paragraph_space_after_pt: number };
-export type EditorialProfile = { profile_id: string; font_family: string; body_font_pt: number; table_font_pt?: number; caption_font_pt?: number; alignment?: string; line_spacing?: number; first_line_indent_cm?: number; page_size?: string; margin_top_cm?: number; margin_bottom_cm?: number; margin_left_cm?: number; margin_right_cm?: number; hyphenation?: boolean; overrides?: string[]; typography?: EditorialTypography };
+export type HeadingCase = "PRESERVE" | "UPPER" | "TITLE_CASE" | "SENTENCE_CASE";
+export type EditorialLayout = { header_distance_cm: number; footer_distance_cm: number; paragraph_space_before_pt: number; keep_with_next: boolean; widow_orphan_control: boolean; heading1_case: HeadingCase; heading2_case: HeadingCase; heading3_case: HeadingCase; heading1_page_break_before: boolean; long_quote_indent_cm: number; long_quote_font_pt_delta: number; long_quote_line_spacing: number };
+export type EditorialProfile = { profile_id: string; font_family: string; body_font_pt: number; table_font_pt?: number; caption_font_pt?: number; alignment?: string; line_spacing?: number; first_line_indent_cm?: number; page_size?: string; margin_top_cm?: number; margin_bottom_cm?: number; margin_left_cm?: number; margin_right_cm?: number; hyphenation?: boolean; overrides?: string[]; typography?: EditorialTypography; layout?: EditorialLayout };
 export type ReportReferenceKind = "TECHNICAL_STANDARD" | "LEGAL_REFERENCE" | "TECHNICAL_LITERATURE" | "MANUFACTURER_DOCUMENTATION" | "OTHER_REFERENCE";
 export type ReportReference = { reference_id: string; kind: ReportReferenceKind; author: string; title: string; year: number | null; identifier: string | null; details: string | null };
 export type ReportFindingRow = { manifestation: string; environment: string | null; finding: string; situation: string | null; provenance: { provenance_id: string; source_kind: string; source_id: string; source_revision: number } };
@@ -70,3 +72,14 @@ export type ReportSourceCatalog = {
 function catalog(value: unknown): ReportSourceCatalog { const item = value as ReportSourceCatalog; if (!item || !Array.isArray(item.sources) || !item.context_sources || !Array.isArray(item.questions)) throw new ReportApiError("invalid"); return item; }
 export async function getReportSources(workspaceId: string, signal?: AbortSignal) { return catalog(await decode(await fetch(`${base(workspaceId)}/report-snapshot/sources`, { method: "GET", credentials: "same-origin", cache: "no-store", signal }))); }
 export async function getReportAuditTrail(workspaceId: string) { const value = await decode(await fetch(`${base(workspaceId)}/report-snapshot/audit-trail`, { method: "GET", credentials: "same-origin", cache: "no-store" })) as { report_id: string; revision: number; lines: string[] }; if (!value || !Array.isArray(value.lines)) throw new ReportApiError("invalid"); return value; }
+
+// Pré-verificação jurídico-editorial (#272): avisos com trecho e sugestão; pendência bloqueia a emissão.
+export type PreflightFinding = { code: string; severity: "BLOCKING" | "WARNING"; section_id: string; location_id: string; excerpt: string; message: string; suggestion: string };
+export type ReportPreflight = { report_revision: number | null; profile_id: string; profile_label: string; blocking: boolean; findings: PreflightFinding[]; sources: Array<{ name: string; nature: "RECOMMENDATORY" | "MANDATORY" | "INSTITUTIONAL" }> };
+export async function getReportPreflight(workspaceId: string, signal?: AbortSignal): Promise<ReportPreflight> {
+  const response = await fetch(`/app-api/v1/workspaces/${encodeURIComponent(workspaceId)}/report-snapshot/preflight`, { credentials: "same-origin", cache: "no-store", signal });
+  if (!response.ok) throw new ReportApiError(response.status === 404 ? "not-found" : "unavailable");
+  const value = await response.json();
+  if (!value || !Array.isArray(value.findings) || typeof value.blocking !== "boolean") throw new ReportApiError("unavailable");
+  return value as ReportPreflight;
+}

@@ -24,7 +24,7 @@ from pypdf.generic import BooleanObject
 from pypdf.generic import ContentStream, StreamObject
 
 from .report_figures import figure_numbers, image_size, resolve_references
-from .report_foundation import FINDING_SITUATIONS, ReportSnapshot
+from .report_foundation import FINDING_SITUATIONS, ReportSnapshot, apply_heading_case
 from .report_foundation import report_snapshot_to_mapping
 from .report_template import (
     DocumentBindingResult,
@@ -840,6 +840,19 @@ class ReportPresentationBlock:
         return (self.visible_text,)
 
 
+# Citacao direta longa (#271): o paragrafo que o perito inicia com "> " sai no
+# Word como bloco recuado, com fonte 1 pt menor e espaco simples, sem o marcador
+# (Manual Justica Plural, cap. 4; NBR 10520).  O texto da afirmacao continua o
+# mesmo; so a apresentacao muda.
+QUOTE_MARKER = "> "
+
+
+def _prose_block(paragraph: str) -> "ReportPresentationBlock":
+    if paragraph.startswith(QUOTE_MARKER) and paragraph[len(QUOTE_MARKER):].strip():
+        return ReportPresentationBlock("QUOTE", paragraph[len(QUOTE_MARKER):].strip())
+    return ReportPresentationBlock("PARAGRAPH", paragraph)
+
+
 def _site_location_sentence(site) -> str:
     coordinates = f"coordenadas geográficas {site.coordinates_text} (WGS 84), conferidas pelo perito"
     if site.address_label:
@@ -919,13 +932,13 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
         if section.kind == "TECHNICAL_FINDINGS" and report.findings_table:
             body.extend(_findings_table_blocks(report, 1))
         for claim in claims_by_section[section.section_id]:
-            body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in prose(claim.text))
+            body.extend(_prose_block(paragraph) for paragraph in prose(claim.text))
         for index, answer in enumerate(answers_by_section[section.section_id], 1):
             question = " ".join(_presentation_paragraphs(answer.question_text)) if answer.question_text else ""
             body.append(ReportPresentationBlock("QUESTION", question, f"Quesito {index}:"))
             paragraphs = prose(answer.text)
             body.append(ReportPresentationBlock("ANSWER", paragraphs[0] if paragraphs else "", "Resposta:"))
-            body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in paragraphs[1:])
+            body.extend(_prose_block(paragraph) for paragraph in paragraphs[1:])
         if section.kind == "REFERENCES" and report.references:
             # The references section lists the works the expert selected, in
             # alphabetical order of their entries as ABNT NBR 6023 arranges them.
@@ -938,7 +951,10 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
         if not body:
             continue
         number += 1
-        blocks.append(ReportPresentationBlock("HEADING_1", f"{number}. {_canonical_text(section.title).upper()}"))
+        # A caixa do titulo e politica editorial do perfil (#271), nao codigo:
+        # perfil sem `layout` mantem o titulo 1 em caixa-alta, como antes.
+        title = apply_heading_case(_canonical_text(section.title), report.editorial_profile.effective_layout.heading1_case)
+        blocks.append(ReportPresentationBlock("HEADING_1", f"{number}. {title}"))
         blocks.extend(body)
     return tuple(blocks)
 
@@ -1498,6 +1514,9 @@ class _WordImageLayout:
     following_text: str | None = None
     preceding_occurrence: int | None = None
     following_occurrence: int | None = None
+    # An anchor with behindDoc="1": painted behind the text and behind every
+    # picture the page body draws over it.
+    behind: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1509,6 +1528,8 @@ class _PdfImageLayout:
     top: float
     page_width: float
     page_height: float
+    # Position in the page content draw order (a later object covers an earlier one).
+    order: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1522,6 +1543,8 @@ class _PaintedPath:
     stroke_color: tuple[int, int, int, int] | None = None
     fill_mode: int = 1
     stroke: bool = False
+    # Position in the page content draw order, shared with _PdfImageLayout.order.
+    order: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1626,6 +1649,7 @@ def _ordered_word_image_layouts(
                                 None,
                                 x_offset,
                                 y_offset,
+                                behind=(_attribute_named(container, "behindDoc") or "0").casefold() in {"1", "true", "on"},
                             )
                     except (KeyError, StopIteration, TypeError, ValueError):
                         layout = None
@@ -1868,6 +1892,7 @@ def _repeatable_word_images_match(
     header_layouts_by_page: list[list[_WordImageLayout | None]] | None = None,
     footer_signatures_by_page: list[list[tuple]] | None = None,
     footer_layouts_by_page: list[list[_WordImageLayout | None]] | None = None,
+    painted_paths: list[_PaintedPath] | tuple[_PaintedPath, ...] = (),
 ) -> bool:
     if (
         len(candidate_signatures) != len(candidate_layouts)
@@ -1918,9 +1943,15 @@ def _repeatable_word_images_match(
             )
         ):
             return False
-        if region == "header" and candidate.bottom < candidate.page_height * 0.75:
+        # A header/footer picture stays in its band, except a page-anchored one
+        # drawn BEHIND the text (watermark, background): that one is bound to its
+        # exact offset on every page and, below, to being drawn before every
+        # picture it crosses.  The band alone never said anything about overlap;
+        # draw order does.
+        behind_anchor = source.kind == "anchor" and source.behind
+        if not behind_anchor and region == "header" and candidate.bottom < candidate.page_height * 0.75:
             return False
-        if region == "footer" and candidate.top > candidate.page_height * 0.25:
+        if not behind_anchor and region == "footer" and candidate.top > candidate.page_height * 0.25:
             return False
         if source.kind == "anchor":
             observed_y_offset = candidate.page_height - candidate.top
@@ -1942,6 +1973,7 @@ def _repeatable_word_images_match(
         return False
 
     used: set[int] = set()
+    behind_anchors: list[int] = []
 
     def consume_repeated(
         signatures_by_page: list[list[tuple]],
@@ -1974,6 +2006,8 @@ def _repeatable_word_images_match(
                 if selected is None:
                     return False
                 used.add(selected)
+                if layout is not None and layout.kind == "anchor" and layout.behind:
+                    behind_anchors.append(selected)
                 search_start = selected + 1
         return True
 
@@ -1983,6 +2017,28 @@ def _repeatable_word_images_match(
         footer_signature_pages, footer_layout_pages, region="footer"
     ):
         return False
+    # A picture "behind the text" that the PDF paints AFTER a picture or a
+    # painted path (table shading, cell border) it overlaps hides it: a body
+    # photo or table is evidence, and a derived PDF that covers it is not the
+    # Word document.  Text is held by the raster occlusion check; pictures and
+    # paths are held here, by draw order on the same page.
+    behind = set(behind_anchors)
+    for anchor_index in behind_anchors:
+        anchor = candidate_layouts[anchor_index]
+        others = [
+            other for other_index, other in enumerate(candidate_layouts)
+            if other_index not in behind
+        ]
+        others.extend(painted_paths)
+        for other in others:
+            if other.page != anchor.page:
+                continue
+            overlaps = (
+                min(anchor.right, other.right) - max(anchor.left, other.left) > 0.5
+                and min(anchor.top, other.top) - max(anchor.bottom, other.bottom) > 0.5
+            )
+            if overlaps and anchor.order > other.order:
+                return False
     remaining_signatures = [
         signature
         for index, signature in enumerate(candidate_signatures)
@@ -4572,7 +4628,7 @@ def _pdfium_visible_layout(
                         unsafe = True
                     else:
                         glyph_regions.append((glyph_bounds, character))
-                for item in objects:
+                for object_order, item in enumerate(objects):
                     bounds = tuple(float(value) for value in item.get_bounds())
                     if len(bounds) != 4 or not all(math.isfinite(value) for value in bounds):
                         unsafe = True
@@ -4689,6 +4745,7 @@ def _pdfium_visible_layout(
                                 top,
                                 width,
                                 height,
+                                object_order,
                             )
                         )
                     elif (
@@ -4716,6 +4773,7 @@ def _pdfium_visible_layout(
                                 stroke_color,
                                 fill_mode,
                                 stroke,
+                                object_order,
                             )
                         )
                     elif item.type not in {
@@ -6656,6 +6714,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         header_layouts_by_page=header_image_layouts_by_page,
         footer_signatures_by_page=footer_image_signatures_by_page,
         footer_layouts_by_page=footer_image_layouts_by_page,
+        painted_paths=painted_paths,
     )
     tables_match = _table_rows_match(table_rows, reading_positioned, barriers)
     body_order_matches = _body_block_order_matches(
@@ -6792,8 +6851,12 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
     def element(name: bytes, attributes: bytes = b"") -> bytes:
         return b"<" + prefix + name + attributes + b"/>"
 
-    def run(text: str, bold: bool = False) -> bytes:
-        properties = b"<" + prefix + b"rPr>" + element(b"b") + b"</" + prefix + b"rPr>" if bold else b""
+    def run(text: str, bold: bool = False, size_half_points: int | None = None) -> bytes:
+        formatting = (element(b"b") if bold else b"") + (
+            element(b"sz", value(b"val", str(size_half_points))) + element(b"szCs", value(b"val", str(size_half_points)))
+            if size_half_points else b""
+        )
+        properties = b"<" + prefix + b"rPr>" + formatting + b"</" + prefix + b"rPr>" if formatting else b""
         return (
             b"<" + prefix + b"r>" + properties + b"<" + prefix + b't xml:space="preserve">'
             + escaped(text) + b"</" + prefix + b"t></" + prefix + b"r>"
@@ -6808,6 +6871,7 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
     caption_style = _named_style_id(styles, "caption")
     table_style = _named_style_id(styles, "table text")
     reference_style = _named_style_id(styles, "bibliography")
+    quote_style = _named_style_id(styles, "quote")
 
     def styled(style: str | None, fallback: bytes) -> bytes:
         # A template without the named style still gets the ABNT layout.
@@ -6874,6 +6938,16 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
         elif block.kind == "REFERENCE":
             properties = wrap(b"pPr", styled(reference_style, element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", "left"))))
             paragraphs.append(wrap(b"p", properties + run(block.text)))
+        elif block.kind == "QUOTE":
+            if quote_style:
+                paragraphs.append(wrap(b"p", wrap(b"pPr", element(b"pStyle", value(b"val", quote_style))) + run(block.text)))
+            else:
+                # Modelo sem estilo de citacao: o recuo, o corpo e o espaco do perfil
+                # editorial por formatacao direta.
+                layout = report.editorial_profile.effective_layout
+                properties = wrap(b"pPr", element(b"spacing", value(b"after", "240") + value(b"line", str(round(240 * layout.long_quote_line_spacing))) + value(b"lineRule", "auto")) + element(b"ind", value(b"left", str(round(layout.long_quote_indent_cm * 567))) + value(b"firstLine", "0")) + element(b"jc", value(b"val", "both")))
+                size = max(16, (report.editorial_profile.body_font_pt - layout.long_quote_font_pt_delta) * 2)
+                paragraphs.append(wrap(b"p", properties + run(block.text, size_half_points=size)))
         elif block.kind == "HEADING_1":
             heading_index += 1
             style = element(b"pStyle", value(b"val", heading_style)) if heading_style else b""
