@@ -18,6 +18,7 @@ from ..application.photo_library import CuratePhotoLibrary, GetPhotoLibrary, Rea
 from ..application.site_location import ConfirmSiteLocation, GetSiteLocation, ProposeSiteLocation
 from ..application.property_record import GetPropertyRecord, GetPropertyProposals, SavePropertyRecord
 from ..application.case_document_texts import CaseDocumentTexts
+from ..application.legal_editorial_preflight import GetReportPreflight
 from ..application.installation_settings import CreateWorkspaceWithSettings, GenerateTestDocument, InstallationSettings, WorkspaceSettings
 from ..infrastructure.installation_store import SQLiteInstallationStore, installation_database_path
 from ..delivery_renderer import validate_final_artifact
@@ -758,6 +759,7 @@ def build_local_api(
         installation_settings=installation_settings,
         workspace_settings=workspace_settings,
         generate_test_document=GenerateTestDocument(installation_settings),
+        get_report_preflight=GetReportPreflight(get_report_snapshot, workspace_settings),
         get_workspace=GetWorkspace(store.workspaces),
         list_workspaces=ListWorkspaces(store.workspaces),
         append_artifact_revision=append_artifact_revision,

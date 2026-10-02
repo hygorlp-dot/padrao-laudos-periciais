@@ -184,3 +184,13 @@ def legal_editorial_preflight(report, profile: LegalEditorialProfile | None = No
 
 def has_pending_marker(text: str) -> bool:
     return PENDING_MARKER.search(text) is not None
+
+
+def report_pending_markers(report) -> tuple[str, ...]:
+    """Marcadores de pendência em qualquer texto que o Word final apresentaria."""
+    from .delivery_renderer import professional_report_blocks
+    found = []
+    for block in professional_report_blocks(report):
+        for text in block.paragraph_texts:
+            found.extend(match.group() for match in PENDING_MARKER.finditer(text))
+    return tuple(found)

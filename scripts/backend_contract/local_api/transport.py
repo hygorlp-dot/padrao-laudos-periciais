@@ -195,6 +195,7 @@ class LocalApiServices:
     installation_settings: object | None = None
     workspace_settings: object | None = None
     generate_test_document: object | None = None
+    get_report_preflight: object | None = None
     get_photo_library: object | None = None
     ai_assistant_status: object | None = None
     curate_photo_library: object | None = None
@@ -1252,6 +1253,14 @@ class LocalApi:
                 if self._services.list_report_sources is None:
                     return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
                 return _json_response(200, self._services.list_report_sources.execute(workspace_id))
+
+            if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "preflight"):
+                workspace_id = self._workspace_id(raw_segments[2])
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.get_report_preflight is None:
+                    return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
+                return _json_response(200, self._services.get_report_preflight.execute(workspace_id))
 
             if len(raw_segments) == 5 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3:] == ("report-snapshot", "audit-trail"):
                 workspace_id = self._workspace_id(raw_segments[2])

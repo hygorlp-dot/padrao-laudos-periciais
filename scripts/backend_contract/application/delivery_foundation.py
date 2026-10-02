@@ -428,6 +428,11 @@ class RenderDeliveryPackage:
         _, report = self.get_report.execute(workspace_id)
         if type(report) is not ReportSnapshot or _digest(report_snapshot_to_mapping(report)) != snapshot.binding.report_digest:
             raise ValueError("Delivery report bytes diverge from bound authority")
+        # Pendencia aberta ([INFORMACAO NECESSARIA], [VALIDACAO DO PERITO]) nunca
+        # chega a um Word final (#272): emitir assim seria falso sucesso.
+        from ..legal_editorial_preflight import report_pending_markers
+        if report_pending_markers(report):
+            raise ValueError("report carries open pending markers")
         word, pdf, pdf_renderer = self._paginated(template.content, report, manifest, self._figure_images(workspace_id, report))
         word_digest, word_size, word_media = validate_final_artifact(word, manifest.output_kind)
         stem = f"laudo-{snapshot.delivery_id.lower()}-r{snapshot.revision + 1}"

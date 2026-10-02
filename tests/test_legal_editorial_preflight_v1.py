@@ -83,3 +83,54 @@ def test_clean_text_has_no_findings_and_disabled_checks_stay_silent():
 def test_unknown_profile_type_is_refused():
     with pytest.raises(TypeError):
         legal_editorial_preflight(_report(), object())
+
+
+def test_delivery_render_refuses_a_report_with_open_pending_markers():
+    from hashlib import sha256
+    import json
+    from scripts.backend_contract.application.delivery_foundation import RenderDeliveryPackage
+    from scripts.backend_contract.delivery_foundation import DeliveryState
+    from scripts.backend_contract.delivery_renderer import DELIVERY_RENDERING_VERSION
+    from scripts.backend_contract.legal_editorial_preflight import report_pending_markers
+    from scripts.backend_contract.report_default_template import default_report_template, default_template_manifest
+    from scripts.backend_contract.report_foundation import report_snapshot_to_mapping
+
+    report = _report()
+    assert report_pending_markers(report) == ()
+    marked = replace(report, claims=(replace(report.claims[0], text="Área a confirmar [INFORMAÇÃO NECESSÁRIA: área privativa]."), *report.claims[1:]))
+    assert report_pending_markers(marked) == ("[INFORMAÇÃO NECESSÁRIA",)
+    template = default_report_template(report.editorial_profile)
+    digest = sha256(json.dumps(report_snapshot_to_mapping(marked), ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    snapshot = SimpleNamespace(
+        state=DeliveryState.DRAFT, rendering_version=DELIVERY_RENDERING_VERSION, template_id=default_template_manifest().template_id,
+        template_content_id="11111111-1111-4111-8111-111111111111", template_digest=sha256(template).hexdigest(),
+        binding=SimpleNamespace(report_digest=digest),
+    )
+    service = RenderDeliveryPackage(
+        SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=1), snapshot)),
+        SimpleNamespace(execute=lambda _w: (None, marked)),
+        SimpleNamespace(execute=lambda _w, _c: SimpleNamespace(content=template, metadata=SimpleNamespace(checksum_sha256=sha256(template).hexdigest()))),
+        SimpleNamespace(execute=lambda **_k: pytest.fail("nothing may be stored")), None, None,
+    )
+    with pytest.raises(ValueError, match="pending markers"):
+        service.execute("w", manifest=default_template_manifest(), expected_revision=1)
+
+
+def test_preflight_service_uses_the_case_profile_and_states_source_nature():
+    from scripts.backend_contract.application.legal_editorial_preflight import GetReportPreflight
+    report = _with_text("Ab initio, a CEF entregou o imóvel.", "Falta [VALIDAÇÃO DO PERITO: cota].")
+    report = SimpleNamespace(**vars(report))
+    settings = SimpleNamespace(legal_editorial=replace(DEFAULT_LEGAL_EDITORIAL, check_latinisms=False))
+    import scripts.backend_contract.legal_editorial_preflight as module
+    original = module.report_pending_markers
+    module.report_pending_markers = lambda _report: ("[VALIDAÇÃO DO PERITO",)
+    try:
+        result = GetReportPreflight(SimpleNamespace(execute=lambda _w: (SimpleNamespace(revision=4), report)), SimpleNamespace(current=lambda _w: (None, settings))).execute("w")
+    finally:
+        module.report_pending_markers = original
+    codes = [item["code"] for item in result["findings"]]
+    assert result["blocking"] is True and result["report_revision"] == 4
+    assert "LATINISM" not in codes and "ACRONYM_NOT_DEFINED" in codes and "PENDING_MARKER" in codes
+    assert result["profile_label"] == "Sistema Pericial — CNJ/TRF5"
+    assert {item["nature"] for item in result["sources"]} == {"RECOMMENDATORY", "MANDATORY", "INSTITUTIONAL"}
+    assert "obrigatória" not in str(result).lower()
