@@ -65,8 +65,22 @@ def _parts(content: bytes) -> dict[str, bytes]:
 
 
 def test_v1_stays_byte_identical_without_branding():
-    # Hash do V1 gerado pelo codigo anterior a #271 para o perfil da fixture.
-    assert sha256(default_report_template(_report().editorial_profile)).hexdigest() == "91a2add913f2cb8bfd7e0f9fa87ed7a53441373e5ab50e4db281efe38e6aa3a6"
+    # Digests do V1 gerado pelo codigo anterior a #271 (main 1b82c34) para o
+    # perfil da fixture. Cada parte do pacote (nome, data, compressao,
+    # atributos e conteudo) e identica em qualquer plataforma; os bytes do ZIP
+    # dependem tambem da versao do zlib, entao o hash do arquivo inteiro so e
+    # exigido com o zlib do registro.
+    import json
+    import zlib
+    content = default_report_template(_report().editorial_profile)
+    with ZipFile(BytesIO(content)) as package:
+        parts = [
+            (info.filename, list(info.date_time), info.compress_type, info.external_attr, sha256(package.read(info)).hexdigest())
+            for info in package.infolist()
+        ]
+    assert sha256(json.dumps(parts).encode()).hexdigest() == "b5baadc278bf9de96421a6af03c131d67b7cc38d8fdca25e93170d9bbd96c908"
+    if zlib.ZLIB_RUNTIME_VERSION == "1.3":
+        assert sha256(content).hexdigest() == "91a2add913f2cb8bfd7e0f9fa87ed7a53441373e5ab50e4db281efe38e6aa3a6"
 
 
 def test_branded_template_is_deterministic_and_binds_the_approved_report():
