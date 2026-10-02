@@ -630,3 +630,14 @@ def test_natural_table_end_is_not_an_interruption_but_a_refused_role_line_is():
     assert refused.interrupted_pages == (("autos.pdf", 1),)
     representative_next_page = _proposal_set(_text_page(_HEADER + "\nJOAO (AUTOR)\n"), _text_page("FULANO (ADVOGADO)\nOutro texto\n", 2))
     assert representative_next_page.interrupted_pages == (("autos.pdf", 2),)
+
+
+def test_a_broken_name_line_never_hides_the_rest_of_a_pole():
+    # Razao social quebrada em duas linhas: a leitura para, e isso e dito.
+    broken = _proposal_set(_text_page("\n".join([
+        _HEADER, "POLO ATIVO", "JOAO SINTETICO (AUTOR)", "POLO PASSIVO",
+        "CAIXA ECONOMICA FEDERAL - CEF E OUTRA EMPRESA", "CONSTRUTORA SINTETICA LTDA (REU)",
+    ])))
+    assert [item.name for item in broken.proposals] == ["JOAO SINTETICO"] and broken.interrupted_pages == (("autos.pdf", 1),)
+    middle = _proposal_set(_text_page("\n".join([_HEADER, "ALFA (AUTOR)", "BETA SINTETICA DE NOME", "MUITO LONGO (AUTORA)", "GAMA (AUTOR)"])))
+    assert middle.interrupted_pages == (("autos.pdf", 1),)

@@ -403,6 +403,10 @@ def _trimmed_span(normalized: str, start: int, end: int) -> tuple[int, int]:
     return start, end
 
 
+def _known_role(token: str) -> bool:
+    return token in _PARTICIPANT_PARTY_ROLES or token in _PARTICIPANT_REPRESENTATIVE_ROLES
+
+
 def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
     """Linhas de participantes da capa PJe, com polo, papel e procuradores.
 
@@ -447,6 +451,11 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
                 leading_party_like = True
             continue
         if terminated:
+            # Depois de um fim "natural", outra linha com papel na mesma pagina
+            # (nome quebrado em duas linhas, razao social longa, OCR) prova que
+            # a tabela continuava: a leitura foi interrompida, nao concluida.
+            if not interrupted and any(_known_role(match.group(1)) for match in _PARENTHESIZED_TOKEN.finditer(normalized)):
+                interrupted = True
             continue
         if not normalized.strip():
             continue
