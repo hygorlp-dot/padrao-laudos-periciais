@@ -640,3 +640,18 @@ def test_a_base_exception_in_one_job_does_not_kill_the_only_worker():
     finally:
         queue.close()
 
+
+
+def test_small_mixed_pje_export_is_decomposed_with_scanned_pages_in_the_gate(tmp_path):
+    """Versao pequena do export realista (#266), no gate cronometrado: paginas
+    escaneadas com rodape nativo e um documento de varias paginas. Mantem no gate a
+    cobertura que a prova grande (no shard) exercita, sem o custo do OCR."""
+    from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
+    from tests.test_realistic_pje_ingestion_v1 import realistic_pje_export
+
+    pdf = realistic_pje_export(tmp_path / "pequeno.pdf", pages=3)
+    work = tmp_path / "work"
+    work.mkdir()
+    outcome = PjeIntakeAdapter().logical_inventory(pdf, work)
+    assert outcome["status"] == "OK", outcome
+    assert [(item["document_id"], item["page_start"], item["page_end"]) for item in outcome["documents"]][-1] == ("DOC-PJE-002", 4, 7)
