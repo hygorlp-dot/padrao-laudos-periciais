@@ -315,6 +315,18 @@ def report_pending_markers(report) -> tuple[str, ...]:
 
 _WORD_TEXT_PARTS = re.compile(r"word/(document|header\d*|footer\d*|footnotes|endnotes)\.xml")
 _W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_CT = "{http://schemas.openxmlformats.org/package/2006/content-types}"
+# Partes com texto exibido, pelo tipo de conteúdo: um modelo feito fora do Word
+# pode dar outro nome ao cabeçalho (p.ex. word/cabecalho.xml).
+_TEXT_CONTENT_TYPES = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml",
+    "application/vnd.ms-word.document.macroEnabled.main+xml",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.template.main+xml",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+}
 # Separadores que o Word mostra como espaço entre palavras de um marcador.
 _W_SPACING = {f"{_W}tab", f"{_W}br", f"{_W}cr", f"{_W}noBreakHyphen", f"{_W}ptab"}
 
@@ -347,7 +359,17 @@ def word_pending_markers(package: bytes) -> tuple[str, ...]:
     from xml.etree import ElementTree
     try:
         with ZipFile(BytesIO(package)) as archive:
-            parts = [archive.read(name) for name in archive.namelist() if _WORD_TEXT_PARTS.fullmatch(name)]
+            names = set(archive.namelist())
+            selected = {name for name in names if _WORD_TEXT_PARTS.fullmatch(name)}
+            if "[Content_Types].xml" in names:
+                types = archive.read("[Content_Types].xml")
+                if b"<!DOCTYPE" in types or b"<!ENTITY" in types:
+                    raise ValueError("content types declare a DTD")
+                for override in ElementTree.fromstring(types).iter(f"{_CT}Override"):
+                    name = (override.get("PartName") or "").lstrip("/")
+                    if override.get("ContentType") in _TEXT_CONTENT_TYPES and name in names:
+                        selected.add(name)
+            parts = [archive.read(name) for name in sorted(selected)]
         roots = []
         for xml in parts:
             if b"<!DOCTYPE" in xml or b"<!ENTITY" in xml:

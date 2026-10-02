@@ -249,3 +249,21 @@ def test_bound_word_barrier_reads_by_namespace_tabs_text_boxes_and_plural(docume
     with ZipFile(output, "w") as archive:
         archive.writestr("word/document.xml", document_xml)
     assert len(word_pending_markers(output.getvalue())) == 1
+
+
+def test_bound_word_barrier_finds_text_parts_by_content_type_not_only_by_name():
+    # Rodada 3, nit: cabeçalho com nome fora do padrão (modelo feito fora do Word).
+    from io import BytesIO
+    from zipfile import ZipFile
+    from scripts.backend_contract.legal_editorial_preflight import word_pending_markers
+    types = (
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Override PartName="/word/cabecalho.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>'
+        '</Types>'
+    )
+    output = BytesIO()
+    with ZipFile(output, "w") as archive:
+        archive.writestr("[Content_Types].xml", types)
+        archive.writestr("word/document.xml", f'<w:document {_WNS}><w:body><w:p><w:r><w:t>limpo</w:t></w:r></w:p></w:body></w:document>')
+        archive.writestr("word/cabecalho.xml", f'<w:hdr {_WNS}><w:p><w:r><w:t>[VALIDAÇÃO DO PERITO: logotipo]</w:t></w:r></w:p></w:hdr>')
+    assert word_pending_markers(output.getvalue()) == ("[VALIDAÇÃO DO PERITO: logotipo]",)
