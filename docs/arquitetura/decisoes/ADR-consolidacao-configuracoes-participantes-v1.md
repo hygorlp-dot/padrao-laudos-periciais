@@ -175,8 +175,10 @@ conteúdo privado do workspace).
 - Decisão: o preset `JUSTICA_PLURAL_CHAPTER_4` mantém os valores da #131 (sua
   identidade nomeia exatamente esses valores). A Central oferece "Aplicar geometria
   do modelo legado aprovado", que preenche um perfil `CUSTOM` com as medidas
-  observadas. As distâncias de cabeçalho/rodapé novas seguem o documento visual
-  (1,25/0,87). Perfil sem `layout` mantém 1,25/1,25, como antes.
+  observadas (2,54/3/2,54/2,54). As distâncias de cabeçalho/rodapé novas seguem o
+  documento visual (1,25/0,87). Perfil sem `layout` mantém 1,25/1,25, como antes.
+- Implementado: o botão chama-se "Aplicar geometria do laudo legado aprovado" e grava
+  o perfil `CUSTOM` que o servidor fornece (`legacy_geometry`), sem valores na tela.
 
 ### D6. Caixa dos títulos
 
@@ -200,6 +202,24 @@ Com modelo Word personalizado selecionado, logo, marca d'água, fundo, cabeçalh
 rodapé globais **não** são aplicados por cima. A UI informa: "Modelos Word
 personalizados preservam a identidade visual e a formatação existentes no arquivo."
 
+- O modelo padrão da perícia sai do snapshot dela (#270), nunca do padrão global do
+  dia: sem snapshot, V1 byte-idêntico; com snapshot, V2 (`PRODUCT-DEFAULT-REPORT-V2`)
+  com a identidade capturada; com modelo próprio selecionado, o arquivo capturado
+  volta como está.
+- O modelo próprio declara o seu `TEMPLATE_ID` e vincula os campos dos modelos
+  enviados (`EXPERT_FULL_NAME`, `EXPERT_REGISTRATION`, `REPORT_ID`). O identificador
+  de um modelo do produto é recusado, porque implica outro conjunto de campos.
+- O V2 tem conjunto fixo de campos (`PROCESS_NUMBER`, `COURT`,
+  `PARTICIPANTS_ACTIVE`, `PARTICIPANTS_PASSIVE` e os três do perito). A capa sempre
+  identifica processo, juízo e polos; as opções de capa escolhem logotipo, perito,
+  cidade e ano.
+- O texto fixo do cabeçalho vem do perfil profissional do laudo aprovado que gerou o
+  modelo. O modelo carrega `EXPERT_PROFILE_DIGEST`, e a vinculação recusa um laudo
+  com outro perfil: o cabeçalho nunca mostra outra identidade em silêncio.
+- O que da identidade aparece (registro, cadastros, telefone, e-mail) é decidido só
+  pelo `ProfilePresentation` do perfil profissional. As opções de cabeçalho e rodapé
+  da instalação tratam apenas de disposição: uma só autoridade de exposição.
+
 ### D9. Marca d'água, fundo e imagens no Word
 
 Marca d'água e fundo são desenhados como imagem ancorada atrás do texto na parte de
@@ -207,6 +227,36 @@ cabeçalho, para aparecer igual no Word e no PDF. A cor de fundo de página do W
 é usada, porque não imprime por padrão. O padrão é sem fundo (branco) e marca d'água
 no corpo, centralizada, em baixa opacidade. Opacidade acima do limite seguro gera
 alerta.
+
+- Fundo, marca d'água e linha separadora formam **uma** imagem de página PNG, opaca e
+  pré-composta (a opacidade é aplicada na mistura com o fundo). O validador de
+  fidelidade recusa transparência, máscara e recorte; uma imagem opaca não precisa de
+  exceção.
+- A linha separadora entra nessa imagem, e não como borda de parágrafo, porque o
+  validador só aceita traços pintados vinculados a tabelas.
+- Mudança no validador (área protegida, `word-trust-rebind`): a imagem **ancorada** de
+  cabeçalho/rodapé deixa de exigir a faixa superior/inferior da página. Ela continua
+  presa à posição exata em cada página (±2 pt), o que é mais estrito que a faixa.
+  Imagem em linha continua presa à faixa. Testes provam: fundo claro atrás do texto
+  é aceito; imagem opaca por cima do texto, fundo escuro atrás do texto e imagem
+  deslocada são recusados.
+- Marca d'água de texto é desenhada como imagem com fonte local; sem fonte TrueType
+  disponível, a geração falha fechada com mensagem.
+- Toda imagem tem descrição alternativa; a imagem de página é marcada como decorativa.
+- A prova em Word 16 real (paginação, PDF derivado fiel) é do Human RC (C2); os testes
+  nativos ficam pulados onde o Word não existe.
+
+### D11. Citação longa
+
+Parágrafo de afirmação que o perito inicia com "> " vira bloco `QUOTE`: estilo
+"Quote" quando o modelo o tem; senão, formatação direta com recuo, redução de fonte e
+entrelinha do `EditorialLayout`. O texto da afirmação não muda; só a apresentação.
+
+### D12. Documento de teste
+
+`GET /v1/installation/test-document` gera um Word com um laudo fictício
+(`sample_report`), pelo mesmo caminho do laudo real (modelo V2 ou o modelo próprio,
+vinculação e validação final). Nada é gravado; nada pertence a uma perícia.
 
 ### D10. Perfil jurídico-editorial
 
@@ -241,5 +291,6 @@ obrigatória CNJ".
   apenas por atualização.
 - A configuração global é auditável (histórico append-only) e nunca reescreve uma
   perícia existente.
-- O schema SQLite passa à versão 2. Bancos versão 1 migram ao abrir; um schema
-  desconhecido continua falhando fechado.
+- O banco das perícias não muda de schema. A instalação ganha um arquivo SQLite
+  próprio (schema 1), que falha fechado com schema desconhecido.
+- Pendência aberta no texto bloqueia a renderização do Word final em qualquer perfil.

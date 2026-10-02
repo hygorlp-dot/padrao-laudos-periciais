@@ -28,6 +28,7 @@ export function EditorialPanel({
   preset = EDITORIAL_PRESET,
   hint,
   collapsible = true,
+  alternatives = [],
 }: {
   profile: EditorialProfile;
   editable: boolean;
@@ -36,6 +37,8 @@ export function EditorialPanel({
   preset?: EditorialProfile;
   hint?: ReactNode;
   collapsible?: boolean;
+  // Perfis completos oferecidos como atalho explícito (ex.: geometria do laudo legado).
+  alternatives?: { label: string; profile: EditorialProfile }[];
 }) {
   const current = { ...EDITORIAL_PRESET, ...profile };
   const [draft, setDraft] = useState<EditorialProfile>(current);
@@ -102,7 +105,7 @@ export function EditorialPanel({
       {geometry("Distância do cabeçalho (cm)", "header_distance_cm", 0.5, 3, 0.05)}
       {geometry("Distância do rodapé (cm)", "footer_distance_cm", 0.5, 3, 0.05)}
     </fieldset>
-    {editable && <div className="action-row"><button className="primary-action" type="button" disabled={busy} onClick={save}>Salvar padrão editorial</button><button className="text-action" type="button" disabled={busy || isPreset} onClick={() => void onSave(preset)}>Restaurar padrão do produto</button></div>}
+    {editable && <div className="action-row"><button className="primary-action" type="button" disabled={busy} onClick={save}>Salvar padrão editorial</button><button className="text-action" type="button" disabled={busy || isPreset} onClick={() => void onSave(preset)}>Restaurar padrão do produto</button>{alternatives.map((item) => <button key={item.label} className="text-action" type="button" disabled={busy} onClick={() => void onSave(item.profile)}>{item.label}</button>)}</div>}
   </>;
 
   if (!collapsible) return <div className="report-editorial">{body}</div>;

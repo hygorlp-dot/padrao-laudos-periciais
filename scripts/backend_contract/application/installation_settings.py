@@ -14,6 +14,7 @@ from typing import Any
 
 from ..installation_settings import (
     DEFAULT_SETTING_ID,
+    LEGACY_VISUAL_EDITORIAL_PROFILE,
     IMAGE_MEDIA_TYPES,
     IMAGE_ROLES,
     MAX_IMAGE_BYTES,
@@ -43,6 +44,7 @@ from ..report_foundation import (
     EXPERT_PROFILE_ARTIFACT_ID,
     EXPERT_PROFILE_ARTIFACT_KIND,
     editorial_profile_from_mapping,
+    editorial_profile_to_mapping,
     expert_profile_from_mapping,
     expert_profile_to_mapping,
 )
@@ -128,6 +130,9 @@ class InstallationSettings:
             # O padrão do produto acompanha cada configuração: "restaurar o padrão
             # do produto" grava exatamente isto, sem a tela inventar valores.
             settings[kind.value]["product_default"] = default_payload(kind)
+        # D5: a geometria observada no laudo legado aprovado é oferecida como
+        # perfil CUSTOM explícito, nunca escolhida em silêncio.
+        settings[SettingKind.EDITORIAL_PROFILE_DEFAULT.value]["legacy_geometry"] = editorial_profile_to_mapping(LEGACY_VISUAL_EDITORIAL_PROFILE)
         assets = {}
         for role in AssetRole:
             record, asset = self.asset_record(role)

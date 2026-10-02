@@ -626,6 +626,7 @@ export function SettingsView() {
   const settings = overview.settings;
   const restore = (kind: SettingKind) => (revision: number) => void run(() => restoreSetting(kind, revision, settings[kind].revision ?? 0), "Versão anterior restaurada como nova revisão.").then((ok) => { if (ok) setGeneration((value) => value + 1); });
   const editorialPreset = (settings.EDITORIAL_PROFILE_DEFAULT_V1.product_default as EditorialProfile | null | undefined) ?? EDITORIAL_PRESET;
+  const legacyGeometry = (settings.EDITORIAL_PROFILE_DEFAULT_V1 as { legacy_geometry?: EditorialProfile }).legacy_geometry;
 
   return (
     <div className="settings-view" key={generation}>
@@ -687,6 +688,7 @@ export function SettingsView() {
           editable busy={busy} collapsible={false}
           hint={<p className="field-hint">Perfil editorial de referência; vale para o modelo do produto. Um modelo Word próprio mantém a formatação do seu arquivo.</p>}
           onSave={(profile) => save("EDITORIAL_PROFILE_DEFAULT_V1", profile, "Perfil editorial salvo.")}
+          alternatives={legacyGeometry ? [{ label: "Aplicar geometria do laudo legado aprovado", profile: legacyGeometry }] : []}
         />
       </SettingSection>
 

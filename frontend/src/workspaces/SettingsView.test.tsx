@@ -160,4 +160,19 @@ describe("Configurações da instalação (#270)", () => {
     await user.click(screen.getByRole("button", { name: "Tentar novamente" }));
     expect(await screen.findByText("Falta preencher")).toBeInTheDocument();
   });
+
+  test("the legacy approved geometry is an explicit choice, saved as a custom profile", async () => {
+    const legacy = { ...EDITORIAL, profile_id: "CUSTOM", margin_top_cm: 2.54, margin_bottom_cm: 2.54, margin_left_cm: 3, margin_right_cm: 2.54 };
+    const base = overview();
+    const withLegacy = { ...base, settings: { ...base.settings, EDITORIAL_PROFILE_DEFAULT_V1: { ...base.settings.EDITORIAL_PROFILE_DEFAULT_V1, legacy_geometry: legacy } } } as InstallationOverview;
+    const fetchSpy = vi.fn().mockResolvedValueOnce(json(200, withLegacy)).mockResolvedValueOnce(json(200, withLegacy));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<SettingsView />);
+    const editorial = await screen.findByRole("region", { name: "Perfil editorial" });
+    await user.click(within(editorial).getByRole("button", { name: "Aplicar geometria do laudo legado aprovado" }));
+    await screen.findByText("Perfil editorial salvo.");
+    const body = JSON.parse(fetchSpy.mock.calls[1][1].body);
+    expect(body.payload).toMatchObject({ profile_id: "CUSTOM", margin_top_cm: 2.54, margin_left_cm: 3 });
+  });
 });
