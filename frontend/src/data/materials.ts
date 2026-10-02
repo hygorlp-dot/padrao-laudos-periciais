@@ -76,6 +76,21 @@ function mappedError(status: number): MaterialApiError {
   return new MaterialApiError("local-failure", "Não foi possível concluir a operação local");
 }
 
+// Codigos com que a PROPRIA Local API recusa a importacao antes de aceitar a
+// fonte: sao respostas confirmadas, nao ausencia de resposta.
+const CONFIRMED_STORAGE_FAILURES = new Set([
+  "PRIVATE_STORAGE_UNAVAILABLE", "REPOSITORY_UNAVAILABLE", "REPOSITORY_INTEGRITY_FAILURE", "PERSISTENCE_SCHEMA_FAILURE",
+]);
+
+async function errorCode(response: Response): Promise<string | null> {
+  try {
+    const value = (await response.clone().json()) as { error?: { code?: unknown } };
+    return typeof value?.error?.code === "string" ? value.error.code : null;
+  } catch {
+    return null;
+  }
+}
+
 async function jsonResponse(response: Response): Promise<unknown> {
   if (!response.ok) throw mappedError(response.status);
   if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
@@ -134,6 +149,7 @@ export async function importCaseDocument(
   if (file.size > MAX_DOCUMENT_BYTES) {
     throw new MaterialApiError("too-large", "O PDF excede o limite permitido");
   }
+  let confirmedRefusal = false;
   try {
     const response = await localFetch(
       `/app-api/v1/workspaces/${workspaceId}/materials`,
@@ -147,12 +163,13 @@ export async function importCaseDocument(
         signal,
       },
     );
+    if (!response.ok) confirmedRefusal = CONFIRMED_STORAGE_FAILURES.has((await errorCode(response)) ?? "");
     return parseMetadata(await jsonResponse(response), workspaceId);
   } catch (error) {
     // Sem resposta confirmada nao ha como afirmar que o armazenamento falhou: os
     // bytes podem ja ter sido aceitos. A tela reconsulta a lista; importar o
     // mesmo PDF de novo nunca cria uma segunda fonte (#266).
-    if (error instanceof MaterialApiError && (error.kind === "unavailable" || error.kind === "local-failure")) {
+    if (!confirmedRefusal && error instanceof MaterialApiError && (error.kind === "unavailable" || error.kind === "local-failure")) {
       throw new MaterialApiError(
         "unconfirmed",
         "Não foi possível confirmar a importação. Confira a lista abaixo antes de tentar de novo; importar o mesmo PDF novamente não cria duplicata.",

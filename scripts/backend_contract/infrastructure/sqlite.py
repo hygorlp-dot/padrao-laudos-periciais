@@ -884,10 +884,15 @@ class SQLiteApplicationStore:
                 raise RepositoryError("falha ao restaurar staging SQLite") from exc
 
     def close(self) -> None:
-        try:
-            self._connection.close()
-        except sqlite3.Error as exc:
-            raise RepositoryError("falha ao fechar armazenamento SQLite") from exc
+        # Sob a MESMA trava das operacoes: uma thread que ainda esteja numa
+        # chamada (ex.: o worker de derivacao que sobreviveu a espera limitada do
+        # encerramento, #266) termina antes do fechamento, e as seguintes falham
+        # limpas com RepositoryError em vez de derrubar o processo.
+        with self._lock:
+            try:
+                self._connection.close()
+            except sqlite3.Error as exc:
+                raise RepositoryError("falha ao fechar armazenamento SQLite") from exc
 
     def __enter__(self) -> SQLiteApplicationStore:
         return self

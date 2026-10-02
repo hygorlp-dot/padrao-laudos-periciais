@@ -142,6 +142,9 @@ describe("case material data boundary", () => {
     }
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("network")));
     await expect(importCaseDocument(WORKSPACE_ID, PDF)).rejects.toMatchObject({ kind: "unconfirmed" });
+    // A propria Local API respondeu que o armazenamento recusou: isso e confirmado.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, { error: { code: "PRIVATE_STORAGE_UNAVAILABLE" } })));
+    await expect(importCaseDocument(WORKSPACE_ID, PDF)).rejects.toMatchObject({ kind: "unavailable" });
     // Erros que provam recusa continuam sendo recusa.
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(413, { error: {} })));
     await expect(importCaseDocument(WORKSPACE_ID, PDF)).rejects.toMatchObject({ kind: "too-large" });

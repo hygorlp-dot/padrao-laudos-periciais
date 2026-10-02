@@ -87,6 +87,7 @@ export function MaterialIntakeView({ workspaceId }: MaterialIntakeViewProps) {
   useEffect(() => {
     if (!ready) return;
     const controller = new AbortController();
+    let retryTimer: number | undefined;
     listMaterialProcessing(workspaceId, controller.signal).then(
       (states) => {
         if (controller.signal.aborted) return;
@@ -100,9 +101,18 @@ export function MaterialIntakeView({ workspaceId }: MaterialIntakeViewProps) {
           setInventoryRefresh((value) => value + 1);
         }
       },
-      () => undefined,
+      () => {
+        // Uma consulta que falhou nao pode congelar a tela em "processando":
+        // nova tentativa no mesmo ritmo enquanto houver leitura em curso.
+        if (!controller.signal.aborted && Object.values(previous.current).includes("PROCESSING")) {
+          retryTimer = window.setTimeout(() => setProcessingCheck((value) => value + 1), PROCESSING_POLL_MS);
+        }
+      },
     );
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
   }, [workspaceId, ready, processingCheck]);
 
   const anyProcessing = Object.values(processing).includes("PROCESSING");

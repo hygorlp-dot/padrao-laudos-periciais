@@ -96,6 +96,7 @@ def test_red_slow_derivation_over_bridge_timeout_is_not_a_terminal_failure(tmp_p
 # ----------------------------------------------------------------- T1-T10 (#266)
 
 import os  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 from scripts.backend_contract.local_api.composition import build_local_api  # noqa: E402
 from tests.test_document_intake_v1 import provision_private_root  # noqa: E402
@@ -388,19 +389,22 @@ def test_backup_mid_processing_carries_the_source_and_never_claims_ready(tmp_pat
     from scripts.backend_contract.infrastructure.productization import VerifyWorkspaceBackup
     from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
 
-    gate = GatedPjeIntake(fail=True)
-    gate.release.set()
-    runtime = _local(tmp_path, "bk", gate, grace=10.0)
+    gate = GatedPjeIntake()
+    runtime = _local(tmp_path, "bk", gate, grace=0.5)
     try:
         workspace_id = _ws(runtime)
         content = _synthetic_pje(tmp_path)
         status, material = _post(runtime, workspace_id, content)
-        assert status == 202 and _states(runtime, workspace_id) == {material["content_id"]: "FAILED"}
+        # O backup e tirado COM a derivacao em curso (retida no leitor PJe).
+        assert status == 202 and gate.started.wait(10)
+        assert _states(runtime, workspace_id) == {material["content_id"]: "PROCESSING"}
         status, _headers, package = http_request(
             runtime.server, "POST", f"/v1/workspaces/{workspace_id}/backup", value={}, headers={"X-Local-API-Token": TOKEN},
         )
         assert status == 200
     finally:
+        gate.fail = True
+        gate.release.set()
         runtime.close()
     verified = VerifyWorkspaceBackup().execute(package)
     carried = [item for item in verified.private_contents if item.get("content_id") == material["content_id"]]
@@ -466,7 +470,9 @@ def test_queue_coalesces_requests_for_the_same_source_and_reports_failure():
         queue.submit(_Record(content_id="late"))
 
 
-def test_cancelled_derivation_writes_nothing_while_stores_are_still_open(tmp_path):
+def test_cancelled_derivation_commits_no_authoritative_artifact(tmp_path):
+    """Cancelada, a derivacao nao grava inventario nem metadados (o cache de paginas
+    OCR, que e enderecado pelo SHA da fonte e nao decide nada, pode ter sido gravado)."""
     from scripts.backend_contract.application.document_ingestion import DerivationCancelled
     from scripts.backend_contract.application.models import WorkspaceId
     from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
@@ -485,6 +491,7 @@ def test_cancelled_derivation_writes_nothing_while_stores_are_still_open(tmp_pat
         with pytest.raises(DerivationCancelled):
             importer.derive(record, lambda: False)
         assert not importer.is_derived(record)
+        assert _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")[0] == 404
     finally:
         runtime.close()
 
@@ -517,3 +524,119 @@ def test_derivation_refuses_to_commit_for_a_source_that_is_no_longer_a_case_docu
         assert _api(runtime, "GET", f"/v1/workspaces/{workspace_id}/pje-intake")[0] == 404
     finally:
         runtime.close()
+
+
+def test_ready_source_stays_ready_when_a_later_inventory_repair_fails(tmp_path):
+    """Metadados gravados sao a autoridade de pronto: uma falha em memoria no reparo
+    do inventario PJe nao pode rebaixar a fonte para FAILED."""
+    private = tmp_path / "repair-private"
+    provision_private_root(private)
+    database = tmp_path / "repair.sqlite3"
+    legacy = build_local_api(database, private_root=private, token=TOKEN)
+    legacy.start()
+    try:
+        workspace_id = _ws(legacy)
+        content = _synthetic_pje(tmp_path)
+        status, material = _post(legacy, workspace_id, content)
+        assert status == 201 and _states(legacy, workspace_id) == {material["content_id"]: "READY"}
+    finally:
+        legacy.close()
+    broken = GatedPjeIntake(fail=True)
+    broken.release.set()
+    runtime = _local(tmp_path, "repair", broken, grace=10.0)
+    try:
+        status, again = _post(runtime, workspace_id, content)
+        assert broken.calls == 1, "o reparo do inventario ausente deveria ter sido tentado"
+        assert status == 200 and again["content_id"] == material["content_id"]
+        assert _states(runtime, workspace_id) == {material["content_id"]: "READY"}
+    finally:
+        runtime.close()
+
+
+def test_reimporting_a_complete_source_answers_ready_even_behind_a_long_derivation(tmp_path):
+    from tests.test_property_record_v1 import _text_pdf
+
+    gate = GatedPjeIntake()
+    gate.release.set()
+    runtime = _local(tmp_path, "busy", gate, grace=10.0)
+    try:
+        workspace_id = _ws(runtime)
+        ready_bytes = _synthetic_pje(tmp_path)
+        status, ready = _post(runtime, workspace_id, ready_bytes)
+        assert status == 201
+        gate.release.clear()
+        status, slow = _post(runtime, workspace_id, _text_pdf(["OUTRO DOCUMENTO", "Conteudo sintetico."]))
+        # Outro documento ocupa o worker unico (leitor PJe retido)...
+        assert gate.started.wait(10)
+        began = time.monotonic()
+        status, again = _post(runtime, workspace_id, ready_bytes)
+        # ...e a fonte ja completa responde pronta, sem esperar a fila.
+        assert status == 200 and again["content_id"] == ready["content_id"]
+        assert time.monotonic() - began < 5
+        assert _states(runtime, workspace_id)[ready["content_id"]] == "READY"
+    finally:
+        gate.release.set()
+        runtime.close()
+
+
+
+_CLOSE_RACE = """
+import pathlib, sys, tempfile, threading, uuid
+from scripts.backend_contract.application.models import WorkspaceId
+from scripts.backend_contract.application.ports import RepositoryError
+from scripts.backend_contract.infrastructure.sqlite import SQLiteApplicationStore
+for _ in range(100):
+    store = SQLiteApplicationStore(pathlib.Path(tempfile.mkdtemp()) / "x.sqlite3")
+    workspace = WorkspaceId.parse(str(uuid.uuid4()))
+    stop = threading.Event()
+    def reader():
+        while not stop.is_set():
+            try:
+                store.revisions.latest(workspace, "K", "a")
+            except RepositoryError:
+                return
+    thread = threading.Thread(target=reader)
+    thread.start()
+    store.close()
+    thread.join(5)
+    stop.set()
+print("CLOSED_CLEANLY")
+"""
+
+
+def test_closing_the_store_under_a_surviving_reader_fails_cleanly_instead_of_crashing():
+    """Auditoria da #266 (P1): o worker de derivacao pode sobreviver a espera limitada do
+    `close()` e estar dentro de uma chamada SQLite quando a conexao fecha. Fechar sem a
+    trava da conexao derrubava o processo (SIGSEGV); fechado sob a trava, o leitor recebe
+    um erro de repositorio limpo. Roda num processo filho: o crash nao pode levar junto o
+    executor de testes."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-c", _CLOSE_RACE], cwd=Path(__file__).resolve().parents[1],
+        capture_output=True, text=True, timeout=300,
+        env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(Path(__file__).resolve().parents[1]), os.environ.get("PYTHONPATH", "")]))},
+    )
+    assert result.returncode == 0 and "CLOSED_CLEANLY" in result.stdout, (result.returncode, result.stderr[-2000:])
+
+
+def test_a_base_exception_in_one_job_does_not_kill_the_only_worker():
+    """Auditoria da #266 (P2): SystemExit numa derivacao matava o worker unico e todo
+    job seguinte ficava PROCESSING para sempre."""
+    from scripts.backend_contract.application.document_ingestion import DocumentDerivationQueue
+
+    def derive(record, should_continue):
+        if record.content_id == "exit":
+            raise SystemExit(3)
+
+    queue = DocumentDerivationQueue(derive)
+    queue.start()
+    try:
+        assert queue.submit(_Record(content_id="exit")).wait(10)
+        assert queue.state_of(_Record(content_id="exit")) == "FAILED"
+        assert queue.submit(_Record(content_id="next")).wait(10), "o worker morreu"
+        assert queue.state_of(_Record(content_id="next")) is None
+    finally:
+        queue.close()
+

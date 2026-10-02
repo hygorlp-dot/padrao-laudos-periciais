@@ -131,7 +131,10 @@ class DocumentDerivationQueue:
                 self._derive(job.record, self._should_continue)
             except DerivationCancelled:
                 pass
-            except Exception:  # noqa: BLE001 -- a falha vira estado FAILED, nunca sucesso
+            except BaseException:  # noqa: BLE001 -- vira FAILED; o worker nunca morre por um job
+                # Nem um SystemExit vindo de uma dependencia pode matar o unico
+                # worker: com ele morto, todo job seguinte ficaria PROCESSING
+                # para sempre.
                 failed = True
             finally:
                 with self._lock:
@@ -151,7 +154,7 @@ class CaseDocumentIngestion:
     """
 
     def __init__(self, importer, queue: DocumentDerivationQueue, documents, *, grace_seconds: float):
-        if not callable(getattr(importer, "accept", None)) or not callable(getattr(importer, "is_derived", None)):
+        if not all(callable(getattr(importer, name, None)) for name in ("accept", "is_derived", "needs_derivation")):
             raise TypeError("importador de documentos invalido")
         if type(queue) is not DocumentDerivationQueue:
             raise TypeError("executor de derivacao invalido")
@@ -164,12 +167,20 @@ class CaseDocumentIngestion:
 
     def state(self, record) -> str:
         running = self._queue.state_of(record)
-        if running is not None:
-            return running
-        # Autoridade persistida: so os metadados dizem "pronto".
-        return READY if self._importer.is_derived(record) else INTERRUPTED
+        if running == PROCESSING:
+            return PROCESSING
+        # Autoridade persistida: so os metadados dizem "pronto". Uma falha em
+        # memoria (por exemplo, no reparo de um inventario ausente) nunca
+        # contradiz metadados ja gravados.
+        if self._importer.is_derived(record):
+            return READY
+        return FAILED if running == FAILED else INTERRUPTED
 
     def _derive_within_grace(self, record) -> str:
+        if not self._importer.needs_derivation(record):
+            # Fonte pronta e completa: nada a agendar, nada a esperar atras de
+            # outra derivacao longa no worker unico.
+            return READY
         self._queue.submit(record).wait(self._grace_seconds)
         return self.state(record)
 

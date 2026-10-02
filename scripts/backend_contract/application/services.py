@@ -712,6 +712,14 @@ class ImportCaseDocumentWithMetadata:
             record.workspace_id, _PROCESS_METADATA_EXTRACTION_KIND, str(record.content_id)
         ) is not None
 
+    def needs_derivation(self, record: PrivateContentMetadata) -> bool:
+        """Ha algo a derivar: metadados ausentes, ou inventario PJe ausente com leitor."""
+        if not self.is_derived(record):
+            return True
+        return self.pje_intake is not None and self.revisions.latest(
+            record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _pje_intake_artifact_id(record.content_id)
+        ) is None
+
     def _require_current_source(self, record: PrivateContentMetadata) -> None:
         """A fonte derivada ainda e esta fonte, deste workspace, como documento do caso."""
         if self.existing_documents is None:

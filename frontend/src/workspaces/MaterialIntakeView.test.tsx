@@ -119,6 +119,24 @@ describe("material intake view", () => {
     expect(screen.queryByText(/Processando conteúdo localmente/)).not.toBeInTheDocument();
   });
 
+  test("one failed status check does not freeze the row in processing", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", routedFetch({
+      [`GET ${ROOT}/materials`]: () => jsonResponse(200, { items: [ITEM] }),
+      [`GET ${ROOT}/material-processing`]: () => {
+        calls += 1;
+        if (calls === 1) return processing("PROCESSING");
+        if (calls === 2) return jsonResponse(503, { error: { code: "PRODUCT_BRIDGE_UNAVAILABLE" } });
+        return processing("READY");
+      },
+    }));
+    render(<MaterialIntakeView workspaceId={WORKSPACE_ID} />);
+
+    expect(await screen.findByText("Documento recebido. Processando conteúdo localmente…")).toBeInTheDocument();
+    expect(await screen.findByText("Processamento concluído.", undefined, { timeout: 6000 })).toBeInTheDocument();
+    expect(calls).toBeGreaterThanOrEqual(3);
+  });
+
   test("a failed or interrupted reading offers an explicit retry on the same source", async () => {
     let state = "INTERRUPTED";
     const fetchSpy = routedFetch({

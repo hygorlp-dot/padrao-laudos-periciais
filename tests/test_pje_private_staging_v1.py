@@ -127,8 +127,12 @@ def test_cleanup_is_deterministic_when_the_parser_raises_midway(tmp_path, monkey
     try:
         _s, workspace = _request(runtime, "POST", "/v1/workspaces", value={"name": "Caso"})
         status, _payload = _import(runtime, workspace["workspace_id"], pdf.read_bytes(), "autos.pdf")
-        # A falha e interna e nao mascarada como erro do cliente.
-        assert status == 500, status
+        # #266: a fonte ja foi aceita; a falha interna do parser nao vira erro
+        # terminal sobre ela (nem e mascarada como erro do cliente): 202 com o
+        # estado FAILED explicito e nova tentativa possivel.
+        assert status == 202, status
+        status, states = _request(runtime, "GET", f"/v1/workspaces/{workspace['workspace_id']}/material-processing")
+        assert status == 200 and [item["state"] for item in states["items"]] == ["FAILED"], states
     finally:
         runtime.close()
 
