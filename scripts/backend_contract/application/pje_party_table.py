@@ -392,6 +392,9 @@ class PjeParticipantParseResult:
     # Linha com papel de parte antes de qualquer cabecalho: continuacao de uma
     # tabela da pagina anterior que esta leitura nao associa a nenhum polo.
     leading_party_like: bool = False
+    # A leitura parou numa linha com papel que nao reconhece, num conflito de
+    # polo ou numa tabela PJe vazia; o fim natural da tabela nao conta.
+    interrupted: bool = False
 
 
 def _trimmed_span(normalized: str, start: int, end: int) -> tuple[int, int]:
@@ -414,6 +417,12 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
     terminated = False
     opened = False
     leading_party_like = False
+    # Interrupcao (aviso) e diferente de fim de tabela: a tabela termina
+    # naturalmente numa linha sem papel entre parenteses ("Documentos").
+    # Interrompe quando a linha recusada tem papel, quando o polo conflita ou
+    # quando o cabecalho PJe abriu a tabela e nenhuma linha foi lida.
+    interrupted = False
+    header_rows: int | None = None
     section: PjeParticipantPole | None = None
     # Indice da parte que pode receber procurador em linha de continuacao; zera
     # a cada cabecalho ou secao, para nunca ligar o advogado de um polo a parte
@@ -427,13 +436,14 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
         normalized, source_indices = _ascii_upper_with_source_indices(line)
         if _HEADER.fullmatch(normalized):
             inside, terminated, section, opened, continuation_target = True, False, None, True, None
+            header_rows = 0
             continue
         section_match = _SECTION_LINE.fullmatch(normalized)
         if section_match:
             inside, terminated, section, opened, continuation_target = True, False, _PARTICIPANT_SECTIONS[section_match.group(1)], True, None
             continue
         if not inside:
-            if not opened and any(match.group(1) in _PARTICIPANT_PARTY_ROLES for match in _PARENTHESIZED_TOKEN.finditer(normalized)):
+            if not opened and any(match.group(1) in _PARTICIPANT_PARTY_ROLES or match.group(1) in _PARTICIPANT_REPRESENTATIVE_ROLES for match in _PARENTHESIZED_TOKEN.finditer(normalized)):
                 leading_party_like = True
             continue
         if terminated:
@@ -451,6 +461,9 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
         representative_tokens = [match for match in tokens if match.group(1) in _PARTICIPANT_REPRESENTATIVE_ROLES]
         unknown_tokens = len(tokens) - len(party_tokens) - len(representative_tokens)
         line_end = _skip_whitespace_backward(normalized, 0, len(normalized))
+        # Linha que encerra a tabela: so e interrupcao se tinha papel ou se o
+        # cabecalho PJe abriu uma tabela vazia.
+        refused = bool(tokens) or header_rows == 0
 
         def source(start: int, end: int) -> tuple[int, int]:
             return (
@@ -471,35 +484,37 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
                     previous.source_line, previous.source_start, previous.source_end,
                 )
                 continue
-            terminated = True
+            terminated, interrupted = True, interrupted or refused
             continue
         if len(party_tokens) != 1 or unknown_tokens or len(representative_tokens) > 1:
-            terminated = True
+            terminated, interrupted = True, interrupted or refused
             continue
         party = party_tokens[0]
         role = party.group(1)
         pole = participant_pole_for_role(role)
         expected = explicit or section
         if expected is not None and expected is not pole:
-            terminated = True
+            terminated, interrupted = True, True
             continue
         name_start, name_end = _trimmed_span(normalized, content_start, party.start())
         if name_end <= name_start:
-            terminated = True
+            terminated, interrupted = True, interrupted or refused
             continue
         representatives: tuple[PjeRepresentativeRow, ...] = ()
         if representative_tokens:
             token = representative_tokens[0]
             rep_start, rep_end = _trimmed_span(normalized, party.end(), token.start())
             if token.start() < party.end() or token.end() != line_end or rep_end <= rep_start:
-                terminated = True
+                terminated, interrupted = True, interrupted or refused
                 continue
             start, end = source(rep_start, rep_end)
             representatives = (PjeRepresentativeRow(page_text[start:end], token.group(1), line, start, end),)
         elif party.end() != line_end:
-            terminated = True
+            terminated, interrupted = True, interrupted or refused
             continue
         start, end = source(name_start, name_end)
         rows.append(PjeParticipantRow(page_text[start:end], role, pole, representatives, line, start, end))
         continuation_target = len(rows) - 1
-    return PjeParticipantParseResult(tuple(rows), terminated, opened, inside and not terminated, leading_party_like)
+        if header_rows is not None:
+            header_rows += 1
+    return PjeParticipantParseResult(tuple(rows), terminated, opened, inside and not terminated, leading_party_like, interrupted)

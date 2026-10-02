@@ -975,6 +975,11 @@ class VerifyWorkspaceBackup:
                     sources = (*participant.provenance, *(item for representative in participant.representatives for item in representative.provenance))
                     if any(private_authority.get(item.content_id) != item.source_sha256 for item in sources):
                         raise RepositoryIntegrityError("backup participant source authority is incomplete")
+                    # Procurador lido da fonte esta na mesma linha (ou continuacao)
+                    # da parte: sua proveniencia nunca aponta outra pagina.
+                    party_pages = {(item.content_id, item.page) for item in participant.provenance}
+                    if any((item.content_id, item.page) not in party_pages for representative in participant.representatives for item in representative.provenance):
+                        raise RepositoryIntegrityError("backup participant source evidence diverges from document bytes")
                     # O nome, o trecho e a posicao tem de sair dos bytes, como a
                     # evidencia do imovel: a linha da tabela e relida da pagina.
                     for source in participant.provenance:

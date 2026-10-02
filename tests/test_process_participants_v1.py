@@ -584,7 +584,7 @@ def test_cover_fields_fall_back_to_the_exact_legacy_text():
     assert _FIELD_VALUES["PARTICIPANTS_ACTIVE"](replace(report, process_record=None)) == "—"
 
 
-@pytest.mark.parametrize("tamper", ["name", "excerpt", "span"])
+@pytest.mark.parametrize("tamper", ["name", "excerpt", "span", "representative_page"])
 def test_backup_rederives_participant_name_excerpt_and_span_from_the_bytes(tmp_path, tamper):
     from scripts.backend_contract.application.ports import RepositoryIntegrityError
     from scripts.backend_contract.infrastructure.productization import VerifyWorkspaceBackup
@@ -593,7 +593,7 @@ def test_backup_rederives_participant_name_excerpt_and_span_from_the_bytes(tmp_p
     try:
         _, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Fonte forjada"})
         root = f"/v1/workspaces/{workspace['workspace_id']}"
-        _import(runtime, root, _cover([_HEADER, "ALFA SINTETICA (AUTOR)", "BETA SINTETICA (REU)"]), "capa.pdf")
+        _import(runtime, root, _cover([_HEADER, "ALFA SINTETICA (AUTOR) ADVOGADA SINTETICA (ADVOGADA)", "BETA SINTETICA (REU)"]), "capa.pdf")
         _save_process(runtime, root)
         proposal = _http(runtime, "GET", root + "/process-participants")[1]["proposals"][0]
         assert _http(runtime, "POST", root + "/process-participants/decisions", {"action": "CONFIRM", "expected_revision": None, "payload": {"proposal_id": proposal["participant_id"]}})[0] == 200
@@ -608,9 +608,25 @@ def test_backup_rederives_participant_name_excerpt_and_span_from_the_bytes(tmp_p
             participant["name"] = "NOME FORJADO"
         elif tamper == "excerpt":
             source["excerpt"] = "NOME FORJADO (AUTOR)"
-        else:
+        elif tamper == "span":
             source["source_start"] += 1
+        else:
+            participant["representatives"][0]["provenance"][0]["page"] += 1
         with pytest.raises(RepositoryIntegrityError, match="participant source"):
             VerifyWorkspaceBackup().execute(_reseal(altered))
     finally:
         runtime.close()
+
+
+def test_natural_table_end_is_not_an_interruption_but_a_refused_role_line_is():
+    complete = _proposal_set(_text_page("\n".join([
+        "Processo Judicial Eletrônico", _HEADER, "POLO ATIVO", "JOAO SINTETICO (AUTOR) MARIA ADV (ADVOGADO)",
+        "POLO PASSIVO", "CAIXA SINTETICA (REU)", "", "Documentos", "Id. Data da Assinatura Documento Tipo",
+    ])))
+    assert [item.name for item in complete.proposals] == ["JOAO SINTETICO", "CAIXA SINTETICA"] and complete.interrupted_pages == ()
+    petition = _proposal_set(_text_page("DOS FATOS\nPOLO PASSIVO\nA ré é instituição financeira.\n"))
+    assert petition.interrupted_pages == ()
+    refused = _proposal_set(_text_page(_HEADER + "\nJOAO (AUTOR)\nMARIA (LITISCONSORTE)\n"))
+    assert refused.interrupted_pages == (("autos.pdf", 1),)
+    representative_next_page = _proposal_set(_text_page(_HEADER + "\nJOAO (AUTOR)\n"), _text_page("FULANO (ADVOGADO)\nOutro texto\n", 2))
+    assert representative_next_page.interrupted_pages == (("autos.pdf", 2),)
