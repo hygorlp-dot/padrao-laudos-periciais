@@ -142,18 +142,17 @@ class PageNumbering(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class CoverPresentation:
+    """Capa. Processo, juízo e polos aparecem sempre: são a identificação do laudo."""
     enabled: bool
     show_logo: bool
     title: str
     subtitle: str | None
-    show_court: bool
-    show_participants: bool
     show_expert: bool
     show_city_year: bool
     city: str | None
 
     def __post_init__(self):
-        if any(type(getattr(self, name)) is not bool for name in ("enabled", "show_logo", "show_court", "show_participants", "show_expert", "show_city_year")):
+        if any(type(getattr(self, name)) is not bool for name in ("enabled", "show_logo", "show_expert", "show_city_year")):
             raise ValueError("cover flags are invalid")
         if not _text(self.title, 120) or not _optional(self.subtitle, 200) or not _optional(self.city, 80):
             raise ValueError("cover text is invalid")
@@ -161,21 +160,20 @@ class CoverPresentation:
 
 @dataclass(frozen=True, slots=True)
 class HeaderPresentation:
+    """Disposição do cabeçalho. O que da identidade aparece (registro, cadastros,
+    telefone, e-mail) é decidido no perfil profissional (`ProfilePresentation`),
+    nunca aqui: uma só autoridade para exposição de dados do perito."""
     enabled: bool
     show_logo: bool
     show_name: bool
     show_title: bool
-    show_council: bool
-    show_court_registration: bool
-    show_phone: bool
-    show_email: bool
     logo_width_cm: float
     alignment: Alignment
     separator_enabled: bool
     separator_thickness_pt: float
 
     def __post_init__(self):
-        flags = ("enabled", "show_logo", "show_name", "show_title", "show_council", "show_court_registration", "show_phone", "show_email", "separator_enabled")
+        flags = ("enabled", "show_logo", "show_name", "show_title", "separator_enabled")
         if any(type(getattr(self, name)) is not bool for name in flags):
             raise ValueError("header flags are invalid")
         if not _number(self.logo_width_cm, 0.8, 6) or not _number(self.separator_thickness_pt, 0.25, 3) or type(self.alignment) is not Alignment:
@@ -184,16 +182,13 @@ class HeaderPresentation:
 
 @dataclass(frozen=True, slots=True)
 class FooterPresentation:
+    """Numeração e texto institucional; o e-mail no rodapé segue o perfil profissional."""
     page_numbering: PageNumbering
     institutional_text: str | None
-    show_registration: bool
-    show_contact: bool
 
     def __post_init__(self):
         if type(self.page_numbering) is not PageNumbering or not _optional(self.institutional_text, 160):
             raise ValueError("footer is invalid")
-        if type(self.show_registration) is not bool or type(self.show_contact) is not bool:
-            raise ValueError("footer flags are invalid")
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,9 +253,9 @@ class DocumentPresentationProfile:
 
 
 DEFAULT_PRESENTATION = DocumentPresentationProfile(
-    CoverPresentation(True, True, "LAUDO PERICIAL", None, True, True, True, True, None),
-    HeaderPresentation(True, True, True, True, True, False, False, False, 2.5, Alignment.LEFT, True, 0.75),
-    FooterPresentation(PageNumbering.PAGE_X_OF_Y, None, False, False),
+    CoverPresentation(True, True, "LAUDO PERICIAL", None, True, True, None),
+    HeaderPresentation(True, True, True, True, 2.5, Alignment.LEFT, True, 0.75),
+    FooterPresentation(PageNumbering.PAGE_X_OF_Y, None),
     WatermarkPresentation(False, WatermarkKind.SYMBOL, None, 0.08, 0.5, 0, False, True, False),
     BackgroundPresentation(BackgroundKind.WHITE, None, False, False),
 )

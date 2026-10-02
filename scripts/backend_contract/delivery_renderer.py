@@ -840,6 +840,19 @@ class ReportPresentationBlock:
         return (self.visible_text,)
 
 
+# Citacao direta longa (#271): o paragrafo que o perito inicia com "> " sai no
+# Word como bloco recuado, com fonte 1 pt menor e espaco simples, sem o marcador
+# (Manual Justica Plural, cap. 4; NBR 10520).  O texto da afirmacao continua o
+# mesmo; so a apresentacao muda.
+QUOTE_MARKER = "> "
+
+
+def _prose_block(paragraph: str) -> "ReportPresentationBlock":
+    if paragraph.startswith(QUOTE_MARKER) and paragraph[len(QUOTE_MARKER):].strip():
+        return ReportPresentationBlock("QUOTE", paragraph[len(QUOTE_MARKER):].strip())
+    return ReportPresentationBlock("PARAGRAPH", paragraph)
+
+
 def _site_location_sentence(site) -> str:
     coordinates = f"coordenadas geográficas {site.coordinates_text} (WGS 84), conferidas pelo perito"
     if site.address_label:
@@ -919,13 +932,13 @@ def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentati
         if section.kind == "TECHNICAL_FINDINGS" and report.findings_table:
             body.extend(_findings_table_blocks(report, 1))
         for claim in claims_by_section[section.section_id]:
-            body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in prose(claim.text))
+            body.extend(_prose_block(paragraph) for paragraph in prose(claim.text))
         for index, answer in enumerate(answers_by_section[section.section_id], 1):
             question = " ".join(_presentation_paragraphs(answer.question_text)) if answer.question_text else ""
             body.append(ReportPresentationBlock("QUESTION", question, f"Quesito {index}:"))
             paragraphs = prose(answer.text)
             body.append(ReportPresentationBlock("ANSWER", paragraphs[0] if paragraphs else "", "Resposta:"))
-            body.extend(ReportPresentationBlock("PARAGRAPH", paragraph) for paragraph in paragraphs[1:])
+            body.extend(_prose_block(paragraph) for paragraph in paragraphs[1:])
         if section.kind == "REFERENCES" and report.references:
             # The references section lists the works the expert selected, in
             # alphabetical order of their entries as ABNT NBR 6023 arranges them.
@@ -1921,9 +1934,13 @@ def _repeatable_word_images_match(
             )
         ):
             return False
-        if region == "header" and candidate.bottom < candidate.page_height * 0.75:
+        # An inline header/footer picture flows in its band.  A page-anchored
+        # one (logo at a fixed spot, watermark or background drawn behind the
+        # text) is bound to its exact offset on every page instead, which is a
+        # stricter claim than the band.
+        if source.kind != "anchor" and region == "header" and candidate.bottom < candidate.page_height * 0.75:
             return False
-        if region == "footer" and candidate.top > candidate.page_height * 0.25:
+        if source.kind != "anchor" and region == "footer" and candidate.top > candidate.page_height * 0.25:
             return False
         if source.kind == "anchor":
             observed_y_offset = candidate.page_height - candidate.top
@@ -6795,8 +6812,12 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
     def element(name: bytes, attributes: bytes = b"") -> bytes:
         return b"<" + prefix + name + attributes + b"/>"
 
-    def run(text: str, bold: bool = False) -> bytes:
-        properties = b"<" + prefix + b"rPr>" + element(b"b") + b"</" + prefix + b"rPr>" if bold else b""
+    def run(text: str, bold: bool = False, size_half_points: int | None = None) -> bytes:
+        formatting = (element(b"b") if bold else b"") + (
+            element(b"sz", value(b"val", str(size_half_points))) + element(b"szCs", value(b"val", str(size_half_points)))
+            if size_half_points else b""
+        )
+        properties = b"<" + prefix + b"rPr>" + formatting + b"</" + prefix + b"rPr>" if formatting else b""
         return (
             b"<" + prefix + b"r>" + properties + b"<" + prefix + b't xml:space="preserve">'
             + escaped(text) + b"</" + prefix + b"t></" + prefix + b"r>"
@@ -6811,6 +6832,7 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
     caption_style = _named_style_id(styles, "caption")
     table_style = _named_style_id(styles, "table text")
     reference_style = _named_style_id(styles, "bibliography")
+    quote_style = _named_style_id(styles, "quote")
 
     def styled(style: str | None, fallback: bytes) -> bytes:
         # A template without the named style still gets the ABNT layout.
@@ -6877,6 +6899,16 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
         elif block.kind == "REFERENCE":
             properties = wrap(b"pPr", styled(reference_style, element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", "left"))))
             paragraphs.append(wrap(b"p", properties + run(block.text)))
+        elif block.kind == "QUOTE":
+            if quote_style:
+                paragraphs.append(wrap(b"p", wrap(b"pPr", element(b"pStyle", value(b"val", quote_style))) + run(block.text)))
+            else:
+                # Modelo sem estilo de citacao: o recuo, o corpo e o espaco do perfil
+                # editorial por formatacao direta.
+                layout = report.editorial_profile.effective_layout
+                properties = wrap(b"pPr", element(b"spacing", value(b"after", "240") + value(b"line", str(round(240 * layout.long_quote_line_spacing))) + value(b"lineRule", "auto")) + element(b"ind", value(b"left", str(round(layout.long_quote_indent_cm * 567))) + value(b"firstLine", "0")) + element(b"jc", value(b"val", "both")))
+                size = max(16, (report.editorial_profile.body_font_pt - layout.long_quote_font_pt_delta) * 2)
+                paragraphs.append(wrap(b"p", properties + run(block.text, size_half_points=size)))
         elif block.kind == "HEADING_1":
             heading_index += 1
             style = element(b"pStyle", value(b"val", heading_style)) if heading_style else b""
