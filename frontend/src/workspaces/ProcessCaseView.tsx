@@ -16,6 +16,7 @@ import {
   type ProcessMetadataEvidence,
   type ProcessMetadataReview,
 } from "../data/processMetadata";
+import { listMaterialProcessing, type MaterialProcessingState } from "../data/materials";
 import { navigate } from "../app/router";
 import { workspacePath } from "../routes/routeCatalog";
 
@@ -131,6 +132,9 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
   const saveButton = useRef<HTMLButtonElement | null>(null);
   const sourceText = useRef<HTMLTextAreaElement | null>(null);
   const sourceReturnFocus = useRef<string | null>(null);
+  // #266: extracao ausente pode ser leitura EM ANDAMENTO, nao falha. O estado vem
+  // do produto; sem ele, a tela mantem o comportamento anterior.
+  const [processing, setProcessing] = useState<Record<string, MaterialProcessingState>>({});
 
   useEffect(() => {
     const controller = new AbortController();
@@ -138,6 +142,10 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
       try {
         const snapshot = await getProcessCase(workspaceId, controller.signal);
         const review = await getProcessMetadataReview(workspaceId, controller.signal);
+        const states = review.documents.some((document) => document.text_state === "ERROR")
+          ? await listMaterialProcessing(workspaceId, controller.signal).catch(() => ({}))
+          : {};
+        if (!controller.signal.aborted) setProcessing(states);
         if (!controller.signal.aborted) {
           setState({
             kind: "ready",
@@ -321,6 +329,20 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
       : undefined;
   const saved = saveState.kind === "saved" && saveState.workspaceId === workspaceId;
   const review = visibleState.kind === "ready" ? visibleState.review : undefined;
+  const readingIds = new Set(
+    Object.entries(processing).filter(([, value]) => value === "PROCESSING").map(([id]) => id),
+  );
+  const unfinishedIds = new Set(
+    Object.entries(processing).filter(([, value]) => value === "FAILED" || value === "INTERRUPTED").map(([id]) => id),
+  );
+  // So vira "extraindo" quando TODA extracao ausente esta em leitura agora.
+  const stillReading = review !== undefined
+    && review.state === "ERROR"
+    && readingIds.size > 0
+    && review.documents
+      .filter((document) => document.text_state === "ERROR")
+      .every((document) => readingIds.has(document.document_id));
+  const reviewState = stillReading ? "EXTRACTING" : review?.state;
 
   if (visibleState.kind === "loading") {
     return (
@@ -364,13 +386,15 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
       </div>
       {review ? (
         <section
-          className={`metadata-review-state metadata-review-state--${review.state.toLowerCase()}`}
-          role={review.state === "CONFLICT" || review.state === "ERROR" ? "alert" : "status"}
+          className={`metadata-review-state metadata-review-state--${(reviewState ?? review.state).toLowerCase()}`}
+          role={reviewState === "CONFLICT" || reviewState === "ERROR" ? "alert" : "status"}
         >
           <div>
-            <strong>{REVIEW_LABELS[review.state]}</strong>
+            <strong>{REVIEW_LABELS[reviewState ?? review.state]}</strong>
             {review.state === "WAITING_FOR_DOCUMENTS" ? (
               <p>Importe os PDFs dos autos para preencher a identificação automaticamente.</p>
+            ) : stillReading ? (
+              <p>Os documentos foram recebidos e ainda estão sendo lidos localmente. Volte a esta etapa quando a leitura terminar.</p>
             ) : (
               <p>Confira os valores e suas fontes antes de confirmar.</p>
             )}
@@ -392,13 +416,17 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
           <section
             className="metadata-document-notice"
             key={document.document_id}
-            role={document.text_state === "ERROR" ? "alert" : "status"}
+            role={document.text_state === "ERROR" && !readingIds.has(document.document_id) ? "alert" : "status"}
           >
             <strong>{document.source_filename}</strong>
             <span>
               {document.text_state === "TEXT_EXTRACTION_UNAVAILABLE"
                 ? "O OCR local não conseguiu obter texto utilizável. Revise o arquivo ou importe uma cópia legível."
-                : "A extração local deste PDF não pôde ser concluída."}
+                : readingIds.has(document.document_id)
+                  ? "Documento recebido. A leitura local ainda está em andamento."
+                  : unfinishedIds.has(document.document_id)
+                    ? "A leitura deste PDF não foi concluída. Use “Tentar novamente” em Materiais."
+                    : "A extração local deste PDF não pôde ser concluída."}
             </span>
           </section>
         ))}
