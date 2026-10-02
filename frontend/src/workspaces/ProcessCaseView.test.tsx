@@ -106,6 +106,45 @@ describe("process case form", () => {
     expect(screen.queryByText(/C:\\|\/private|token/i)).not.toBeInTheDocument();
   });
 
+  test("a document still being read is shown as reading, never as an extraction failure (#266)", async () => {
+    const READING = "33333333-3333-4333-8333-333333333333";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse(200, snapshot()))
+        .mockResolvedValueOnce(jsonResponse(200, review("ERROR", {}, ID, [{
+          document_id: READING, source_filename: "autos-grandes.pdf", text_state: "ERROR",
+        }])))
+        .mockResolvedValueOnce(jsonResponse(200, { items: [{ content_id: READING, state: "PROCESSING" }] })),
+    );
+
+    render(<ProcessCaseView workspaceId={ID} />);
+
+    expect(await screen.findByText("Extraindo identificação local")).toBeInTheDocument();
+    expect(screen.getByText("Documento recebido. A leitura local ainda está em andamento.")).toBeInTheDocument();
+    expect(screen.queryByText(/Não foi possível extrair|não pôde ser concluída/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  test("an interrupted reading points to the retry in Materials instead of a generic failure", async () => {
+    const STOPPED = "33333333-3333-4333-8333-333333333333";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn()
+        .mockResolvedValueOnce(jsonResponse(200, snapshot()))
+        .mockResolvedValueOnce(jsonResponse(200, review("ERROR", {}, ID, [{
+          document_id: STOPPED, source_filename: "autos-grandes.pdf", text_state: "ERROR",
+        }])))
+        .mockResolvedValueOnce(jsonResponse(200, { items: [{ content_id: STOPPED, state: "INTERRUPTED" }] })),
+    );
+
+    render(<ProcessCaseView workspaceId={ID} />);
+
+    expect(await screen.findByText("A leitura deste PDF não foi concluída. Use “Tentar novamente” em Materiais.")).toBeInTheDocument();
+    // Nao finge que esta lendo: o estado global continua sendo de falha.
+    expect(screen.getByText("Não foi possível extrair a camada de texto")).toBeInTheDocument();
+  });
+
   test("loads ten real fields and confirms only through the explicit primary action", async () => {
     const fetchSpy = vi
       .fn()

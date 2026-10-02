@@ -10,6 +10,7 @@ from decimal import Decimal
 from types import MappingProxyType
 from urllib.parse import unquote_to_bytes, urlsplit
 
+from ..application.document_ingestion import PROCESSING_STATES, READY as PROCESSING_READY
 from ..application.photo_library import DuplicatePhoto, photo_library_to_mapping
 from ..application.site_location import LocationInputError, site_location_to_mapping
 from ..application.property_record import PROPERTY_FIELDS, property_record_to_mapping
@@ -223,6 +224,9 @@ class LocalApiServices:
     get_process_metadata_review: object | None = None
     confirm_process_metadata_source_span: object | None = None
     import_case_document: object | None = None
+    # #266: aceite duravel + derivacao no executor local. Sem ele (composicoes
+    # parciais de teste), `import_case_document.execute` segue sincrono.
+    case_document_ingestion: object | None = None
     list_case_documents: object | None = None
     read_case_document: object | None = None
     import_inspection_photo: object | None = None
@@ -282,6 +286,15 @@ def _private_content_dto(record: PrivateContentMetadata, expected_workspace_id: 
         "imported_at": record.imported_at,
         "origin": record.origin.value,
     }
+
+
+def _material_processing_dto(record: PrivateContentMetadata, state: str, expected_workspace_id: WorkspaceId) -> dict:
+    """Estado de processamento sem detalhe interno: identidade e um estado fechado."""
+    if type(record) is not PrivateContentMetadata or record.workspace_id != expected_workspace_id:
+        raise RepositoryIntegrityError("identidade documental divergente")
+    if state not in PROCESSING_STATES:
+        raise RepositoryIntegrityError("estado de processamento desconhecido")
+    return {"content_id": str(record.content_id), "state": state}
 
 
 def _json_response(status: int, value: object) -> HttpResponse:
@@ -1621,24 +1634,59 @@ class LocalApi:
                         {"items": [_private_content_dto(item, workspace_id) for item in records]},
                     )
                 if normalized_method == "POST":
+                    ingestion = self._services.case_document_ingestion
                     service = self._services.import_case_document
-                    if service is None:
+                    if ingestion is None and service is None:
                         return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
                     content_type = request_headers.get("content-type", "").split(";", 1)[0].strip().lower()
                     if content_type != "application/pdf":
                         raise ValueError("Content-Type de documento inválido")
                     if _parse_content_length(request_headers.get("content-length", "")) != body_size:
                         raise ValueError("Content-Length diverge")
-                    record, created = service.execute(
-                        workspace_id=workspace_id,
-                        original_filename=_document_filename(request_headers.get("x-document-filename")),
-                        content=body,
-                        media_type="application/pdf",
-                    )
+                    request = {
+                        "workspace_id": workspace_id,
+                        "original_filename": _document_filename(request_headers.get("x-document-filename")),
+                        "content": body,
+                        "media_type": "application/pdf",
+                    }
+                    if ingestion is None:
+                        record, created = service.execute(**request)
+                        state = PROCESSING_READY
+                    else:
+                        # FASE 1 aqui; a FASE 2 so e esperada dentro de uma janela
+                        # menor que o timeout do transporte (#266).
+                        record, created, state = ingestion.import_document(**request)
                     # 201 so quando houve criacao; reimportar bytes identicos e
-                    # idempotente e devolve o material que ja existia.
+                    # idempotente e devolve o material que ja existia. 202 quando a
+                    # fonte foi ACEITA (bytes duraveis) e a derivacao ainda nao
+                    # terminou ou falhou: o estado e lido em /material-processing.
+                    if state != PROCESSING_READY:
+                        return _json_response(202, _private_content_dto(record, workspace_id))
                     return _json_response(201 if created else 200, _private_content_dto(record, workspace_id))
                 return _error(405, "METHOD_NOT_ALLOWED")
+
+            if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "material-processing":
+                ingestion = self._services.case_document_ingestion
+                if ingestion is None:
+                    return _error(503, "PRIVATE_STORAGE_UNAVAILABLE", "armazenamento privado indisponível")
+                workspace_id = self._workspace_id(raw_segments[2])
+                if len(raw_segments) == 4:
+                    if normalized_method != "GET":
+                        return _error(405, "METHOD_NOT_ALLOWED")
+                    return _json_response(200, {"items": [
+                        _material_processing_dto(record, state, workspace_id)
+                        for record, state in ingestion.states(workspace_id)
+                    ]})
+                if normalized_method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._request_dto(request_headers, body) != {}:
+                    raise ValueError("nova tentativa de processamento não aceita parâmetros")
+                content_id = PrivateContentId.parse(raw_segments[4])
+                record, state = ingestion.retry(workspace_id, content_id)
+                return _json_response(
+                    200 if state == PROCESSING_READY else 202,
+                    _material_processing_dto(record, state, workspace_id),
+                )
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "pje-intake":
                 if normalized_method != "GET": return _error(405, "METHOD_NOT_ALLOWED")

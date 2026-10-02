@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from threading import Lock
 
-from ..local_api.composition import LocalApiRuntime, build_local_api
+from ..local_api.composition import DEFAULT_INGESTION_GRACE_SECONDS, LocalApiRuntime, build_local_api
 from ..local_api.server import LocalServerConfig
 from .server import ProductBridgeConfig, ProductBridgeServer
 
@@ -89,6 +89,9 @@ def build_product_runtime(
         private_root=private_root,
         pje_intake=pje_intake,
         construction_defect_analysis=construction_defect_analysis,
+        # A resposta de "aceito, processando" precisa chegar antes do timeout
+        # de transporte do bridge (#266).
+        ingestion_grace_seconds=min(DEFAULT_INGESTION_GRACE_SECONDS, bridge_config.upstream_timeout_seconds / 3),
         config=LocalServerConfig(
             max_body_bytes=bridge_config.max_body_bytes,
             max_document_body_bytes=bridge_config.max_document_body_bytes,

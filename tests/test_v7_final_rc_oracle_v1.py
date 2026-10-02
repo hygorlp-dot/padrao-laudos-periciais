@@ -40,10 +40,12 @@ _ORIGIN = re.compile(r"Sistema Pericial disponível em (http://127\.0\.0\.1:(\d+
 class _Product:
     """O produto como processo real, iniciado pelo comando documentado do Human RC."""
 
-    def __init__(self, database: Path, private: Path, frontend: Path):
+    def __init__(self, database: Path, private: Path, frontend: Path, *, module="scripts.planejamento_pericial.app_composition", extra=()):
+        arguments = ["--database", str(database), "--frontend", str(frontend), "--private-root", str(private)]
+        if module == "scripts.planejamento_pericial.app_composition":
+            arguments += ["--port", "0"]
         self.process = subprocess.Popen(
-            [sys.executable, "-m", "scripts.planejamento_pericial.app_composition",
-             "--database", str(database), "--frontend", str(frontend), "--private-root", str(private), "--port", "0"],
+            [sys.executable, "-m", module, *arguments, *extra],
             cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
             env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         )
@@ -86,7 +88,7 @@ class _Product:
         return response.status, data
 
 
-def _start(tmp_path: Path, name: str) -> _Product:
+def _start(tmp_path: Path, name: str, **launch) -> _Product:
     from tests.test_document_intake_v1 import provision_private_root
     from tests.test_product_bridge_v1 import frontend_build
 
@@ -96,13 +98,13 @@ def _start(tmp_path: Path, name: str) -> _Product:
     frontend = tmp_path / f"{name}-frontend" / "dist"
     if not frontend.exists():
         frontend_build(tmp_path / f"{name}-frontend")
-    return _Product(tmp_path / f"{name}.sqlite3", private, frontend)
+    return _Product(tmp_path / f"{name}.sqlite3", private, frontend, **launch)
 
 
 def _state(product: _Product, workspace: str) -> dict:
     root = f"/v1/workspaces/{workspace}"
     state = {}
-    for name in ("materials", "case-analysis", "pericial-planning", "inspection-session", "technical-snapshot", "pje-intake"):
+    for name in ("materials", "material-processing", "case-analysis", "pericial-planning", "inspection-session", "technical-snapshot", "pje-intake"):
         status, value = product.call("GET", f"{root}/{name}")
         state[name] = (status, value)
     return state
@@ -205,6 +207,8 @@ def test_v7_adversarial_oracle_through_the_real_product_process(tmp_path):
         pdf = _distinct_pje_pdf(tmp_path / "autos.pdf", "oraculo-v7")
         status, autos = product.call("POST", pje_root + "/materials", raw=pdf.read_bytes(), headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"})
         assert status == 201
+        # #266: fonte aceita e derivacao concluida tem estado explicito READY.
+        assert product.call("GET", pje_root + "/material-processing") == (200, {"items": [{"content_id": autos["content_id"], "state": "READY"}]})
         assert product.call("POST", pje_root + "/case-analysis", {})[0] == 201
 
         def availability(available):
@@ -260,3 +264,62 @@ def test_v7_adversarial_oracle_through_the_real_product_process(tmp_path):
             assert reopened[name] == before_restart["a"][name], name
     finally:
         recovered.kill()
+
+
+def test_realistic_document_ingestion_lifecycle_survives_a_real_kill_mid_processing(tmp_path):
+    """REALISTIC_DOCUMENT_INGESTION_LIFECYCLE (#266) sobre processos reais.
+
+    O export PJe e aceito por um produto cuja leitura PJe esta retida (mesma
+    composicao, adaptador de producao atras de um portao), o processo e MORTO no
+    meio da derivacao e o produto normal (`app_composition`) reabre o mesmo
+    armazenamento: a fonte existe, nunca aparece como pronta, a analise nao a conta
+    como lida, e a nova tentativa explicita conclui sem segunda fonte.
+    """
+    import time
+
+    from tests.test_pje_multisource_identity_v1 import _distinct_pje_pdf
+
+    gate = tmp_path / "gate-never-opened"
+    pdf = _distinct_pje_pdf(tmp_path / "autos-grandes.pdf", "oraculo-266").read_bytes()
+    gated = _start(tmp_path, "ingest", module="tests.gated_product_launcher", extra=("--gate", str(gate)))
+    try:
+        status, workspace = gated.call("POST", "/v1/workspaces", {"name": "Ingestão interrompida"})
+        root = f"/v1/workspaces/{workspace['workspace_id']}"
+        status, material = gated.call("POST", root + "/materials", raw=pdf, headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"})
+        assert status == 202, material
+        assert gated.call("GET", root + "/material-processing")[1]["items"] == [{"content_id": material["content_id"], "state": "PROCESSING"}]
+        assert gated.call("GET", root + "/materials")[1]["items"][0]["checksum_sha256"] == material["checksum_sha256"]
+    finally:
+        gated.kill()
+
+    product = _start(tmp_path, "ingest")
+    try:
+        assert product.call("GET", root + "/material-processing")[1]["items"] == [{"content_id": material["content_id"], "state": "INTERRUPTED"}]
+        assert product.call("GET", root + "/pje-intake")[0] == 404
+        status, analysis = product.call("POST", root + "/case-analysis", {})
+        assert status == 201 and analysis["snapshot"]["coverage"]["status"] != "COMPLETE", analysis
+        status, retried = product.call("POST", root + f"/material-processing/{material['content_id']}", {})
+        assert status in {200, 202}, retried
+        deadline = time.monotonic() + 120
+        while product.call("GET", root + "/material-processing")[1]["items"][0]["state"] != "READY":
+            assert time.monotonic() < deadline, "a nova tentativa nao concluiu"
+            time.sleep(0.2)
+        status, intake = product.call("GET", root + "/pje-intake")
+        inventory = intake["intakes"][0]["inventory"]
+        assert inventory["storage_content_id"] == material["content_id"]
+        assert inventory["source_sha256"] == material["checksum_sha256"]
+        # Reimportar os mesmos bytes nao cria segunda fonte.
+        status, again = product.call("POST", root + "/materials", raw=pdf, headers={"Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"})
+        assert status == 200 and again["content_id"] == material["content_id"]
+        assert len(product.call("GET", root + "/materials")[1]["items"]) == 1
+        ready = _state(product, workspace["workspace_id"])
+    finally:
+        product.kill()
+
+    # Pronto sobrevive a outro reinicio real com o mesmo estado.
+    product = _start(tmp_path, "ingest")
+    try:
+        assert _state(product, workspace["workspace_id"]) == ready
+    finally:
+        product.kill()
+

@@ -455,6 +455,10 @@ main {
 .material-list li > div { display: grid; min-width: 0; gap: 0.3rem; }
 .material-list strong { overflow-wrap: anywhere; }
 .material-list span { color: var(--color-slate); font-size: 0.75rem; }
+.material-list .material-processing { font-weight: 600; }
+.material-list .material-processing--failed,
+.material-list .material-processing--interrupted { color: var(--color-error); }
+.material-list li > div .text-action { justify-self: start; }
 .material-message--error { color: var(--color-error); }
 
 .material-review-action {

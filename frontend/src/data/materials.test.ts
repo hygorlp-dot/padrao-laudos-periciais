@@ -3,8 +3,10 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   importCaseDocument,
   listCaseDocuments,
+  listMaterialProcessing,
   materialUrl,
   MaterialApiError,
+  retryMaterialProcessing,
 } from "./materials";
 
 const WORKSPACE_ID = "11111111-1111-4111-8111-111111111111";
@@ -124,5 +126,53 @@ describe("case material data boundary", () => {
       `/app-api/v1/workspaces/${WORKSPACE_ID}/materials/${CONTENT_ID}`,
     );
     expect(() => materialUrl(WORKSPACE_ID, "../secret")).toThrow(/material/i);
+  });
+
+  test("an import accepted but still processing (202) resolves to the same source", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(202, ITEM)));
+    await expect(importCaseDocument(WORKSPACE_ID, PDF)).resolves.toEqual(ITEM);
+  });
+
+  test("an unconfirmed import is never reported as a storage failure (#266)", async () => {
+    for (const status of [503, 500]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(status, { error: { code: "LOCAL_API_UNAVAILABLE" } })));
+      const failure = importCaseDocument(WORKSPACE_ID, PDF);
+      await expect(failure).rejects.toMatchObject({ kind: "unconfirmed" });
+      await expect(importCaseDocument(WORKSPACE_ID, PDF)).rejects.toThrow("Não foi possível confirmar a importação");
+    }
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("network")));
+    await expect(importCaseDocument(WORKSPACE_ID, PDF)).rejects.toMatchObject({ kind: "unconfirmed" });
+    // A propria Local API respondeu que o armazenamento recusou: isso e confirmado.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, { error: { code: "PRIVATE_STORAGE_UNAVAILABLE" } })));
+    await expect(importCaseDocument(WORKSPACE_ID, PDF)).rejects.toMatchObject({ kind: "unavailable" });
+    // Erros que provam recusa continuam sendo recusa.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(413, { error: {} })));
+    await expect(importCaseDocument(WORKSPACE_ID, PDF)).rejects.toMatchObject({ kind: "too-large" });
+  });
+
+  test("reads a closed set of processing states and rejects anything else", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { items: [{ content_id: CONTENT_ID, state: "PROCESSING" }] })));
+    await expect(listMaterialProcessing(WORKSPACE_ID)).resolves.toEqual({ [CONTENT_ID]: "PROCESSING" });
+    for (const item of [
+      { content_id: CONTENT_ID, state: "DONE" },
+      { content_id: "not-a-uuid", state: "READY" },
+      { content_id: CONTENT_ID, state: "READY", detail: "C:/private" },
+    ]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { items: [item] })));
+      await expect(listMaterialProcessing(WORKSPACE_ID)).rejects.toBeInstanceOf(MaterialApiError);
+    }
+  });
+
+  test("retry posts an empty body to the exact source and checks the echoed identity", async () => {
+    const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(202, { content_id: CONTENT_ID, state: "PROCESSING" }));
+    vi.stubGlobal("fetch", fetchSpy);
+    await expect(retryMaterialProcessing(WORKSPACE_ID, CONTENT_ID)).resolves.toBe("PROCESSING");
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `/app-api/v1/workspaces/${WORKSPACE_ID}/material-processing/${CONTENT_ID}`,
+      expect.objectContaining({ method: "POST", body: "{}" }),
+    );
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(202, { content_id: "33333333-3333-4333-8333-333333333333", state: "READY" })));
+    await expect(retryMaterialProcessing(WORKSPACE_ID, CONTENT_ID)).rejects.toMatchObject({ kind: "invalid-response" });
+    await expect(retryMaterialProcessing(WORKSPACE_ID, "../x")).rejects.toMatchObject({ kind: "invalid-request" });
   });
 });

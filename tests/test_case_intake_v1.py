@@ -1,5 +1,6 @@
 from dataclasses import replace
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -239,7 +240,14 @@ def _intake_workspace(tmp_path, data):
     root = f"/v1/workspaces/{workspace['workspace_id']}"
     profile = json.loads((Path(__file__).parent / "fixtures/report-snapshot-v1.json").read_text(encoding="utf-8"))["expert_profile"]
     assert _http(runtime, "PUT", root + "/expert-profile", {"expected_revision": None, "profile": profile})[0] == 200
-    assert _http(runtime, "POST", root + "/materials", raw_body=data, headers={"Content-Type": "application/pdf", "X-Document-Filename": "quesitos.pdf"})[0] == 201
+    # #266: a fonte e aceita na hora; a leitura (OCR de todas as paginas) pode
+    # passar da janela de espera e terminar depois -- espera-se READY.
+    assert _http(runtime, "POST", root + "/materials", raw_body=data, headers={"Content-Type": "application/pdf", "X-Document-Filename": "quesitos.pdf"})[0] in {201, 202}
+    deadline = time.monotonic() + 600
+    while (states := _http(runtime, "GET", root + "/material-processing")[1]["items"])[0]["state"] == "PROCESSING":
+        assert time.monotonic() < deadline, "a leitura do PDF nao terminou"
+        time.sleep(0.2)
+    assert [item["state"] for item in states] == ["READY"], states
     status, case = _http(runtime, "POST", root + "/case-analysis", {})
     assert status == 201
     return runtime, root, case, _http

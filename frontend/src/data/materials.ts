@@ -13,7 +13,12 @@ export type MaterialMetadata = {
   origin: "USER_IMPORT";
 };
 
+// #266: estado da leitura local de cada documento, separado da fonte em si.
+export type MaterialProcessingState = "READY" | "PROCESSING" | "FAILED" | "INTERRUPTED";
+const PROCESSING_STATES: readonly string[] = ["READY", "PROCESSING", "FAILED", "INTERRUPTED"];
+
 export type MaterialApiErrorKind =
+  | "unconfirmed"
   | "invalid-request"
   | "not-found"
   | "unsupported"
@@ -69,6 +74,21 @@ function mappedError(status: number): MaterialApiError {
   if (status === 400) return new MaterialApiError("invalid-request", "O documento PDF é inválido");
   if (status === 503) return new MaterialApiError("unavailable", "Armazenamento local indisponível");
   return new MaterialApiError("local-failure", "Não foi possível concluir a operação local");
+}
+
+// Codigos com que a PROPRIA Local API recusa a importacao antes de aceitar a
+// fonte: sao respostas confirmadas, nao ausencia de resposta.
+const CONFIRMED_STORAGE_FAILURES = new Set([
+  "PRIVATE_STORAGE_UNAVAILABLE", "REPOSITORY_UNAVAILABLE", "REPOSITORY_INTEGRITY_FAILURE", "PERSISTENCE_SCHEMA_FAILURE",
+]);
+
+async function errorCode(response: Response): Promise<string | null> {
+  try {
+    const value = (await response.clone().json()) as { error?: { code?: unknown } };
+    return typeof value?.error?.code === "string" ? value.error.code : null;
+  } catch {
+    return null;
+  }
 }
 
 async function jsonResponse(response: Response): Promise<unknown> {
@@ -129,19 +149,93 @@ export async function importCaseDocument(
   if (file.size > MAX_DOCUMENT_BYTES) {
     throw new MaterialApiError("too-large", "O PDF excede o limite permitido");
   }
-  const response = await localFetch(
-    `/app-api/v1/workspaces/${workspaceId}/materials`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/pdf",
-        "X-Document-Filename": encodeURIComponent(file.name),
+  let confirmedRefusal = false;
+  try {
+    const response = await localFetch(
+      `/app-api/v1/workspaces/${workspaceId}/materials`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/pdf",
+          "X-Document-Filename": encodeURIComponent(file.name),
+        },
+        body: file,
+        signal,
       },
-      body: file,
-      signal,
-    },
-  );
-  return parseMetadata(await jsonResponse(response), workspaceId);
+    );
+    if (!response.ok) confirmedRefusal = CONFIRMED_STORAGE_FAILURES.has((await errorCode(response)) ?? "");
+    return parseMetadata(await jsonResponse(response), workspaceId);
+  } catch (error) {
+    // Sem resposta confirmada nao ha como afirmar que o armazenamento falhou: os
+    // bytes podem ja ter sido aceitos. A tela reconsulta a lista; importar o
+    // mesmo PDF de novo nunca cria uma segunda fonte (#266).
+    if (!confirmedRefusal && error instanceof MaterialApiError && (error.kind === "unavailable" || error.kind === "local-failure")) {
+      throw new MaterialApiError(
+        "unconfirmed",
+        "Não foi possível confirmar a importação. Confira a lista abaixo antes de tentar de novo; importar o mesmo PDF novamente não cria duplicata.",
+      );
+    }
+    throw error;
+  }
+}
+
+function parseProcessing(value: unknown): { contentId: string; state: MaterialProcessingState } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new MaterialApiError("invalid-response", "Resposta local inválida");
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    Object.keys(record).sort().join("|") !== "content_id|state" ||
+    typeof record.content_id !== "string" || !CANONICAL_UUID.test(record.content_id) ||
+    typeof record.state !== "string" || !PROCESSING_STATES.includes(record.state)
+  ) {
+    throw new MaterialApiError("invalid-response", "Resposta local inválida");
+  }
+  return { contentId: record.content_id, state: record.state as MaterialProcessingState };
+}
+
+export async function listMaterialProcessing(
+  workspaceId: string,
+  signal?: AbortSignal,
+): Promise<Record<string, MaterialProcessingState>> {
+  requireWorkspace(workspaceId);
+  const value = await jsonResponse(await localFetch(
+    `/app-api/v1/workspaces/${workspaceId}/material-processing`,
+    { method: "GET", signal },
+  ));
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new MaterialApiError("invalid-response", "Resposta local inválida");
+  }
+  const envelope = value as Record<string, unknown>;
+  if (Object.keys(envelope).join("|") !== "items" || !Array.isArray(envelope.items)) {
+    throw new MaterialApiError("invalid-response", "Resposta local inválida");
+  }
+  const states: Record<string, MaterialProcessingState> = {};
+  for (const item of envelope.items) {
+    const parsed = parseProcessing(item);
+    states[parsed.contentId] = parsed.state;
+  }
+  return states;
+}
+
+export async function retryMaterialProcessing(
+  workspaceId: string,
+  contentId: string,
+  signal?: AbortSignal,
+): Promise<MaterialProcessingState> {
+  requireWorkspace(workspaceId);
+  if (!CANONICAL_UUID.test(contentId)) {
+    throw new MaterialApiError("invalid-request", "Identidade do material inválida");
+  }
+  const value = await jsonResponse(await localFetch(
+    `/app-api/v1/workspaces/${workspaceId}/material-processing/${contentId}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal },
+  ));
+  const parsed = parseProcessing(value);
+  if (parsed.contentId !== contentId) {
+    throw new MaterialApiError("invalid-response", "Resposta local inválida");
+  }
+  return parsed.state;
 }
 
 export function materialUrl(workspaceId: string, contentId: string) {

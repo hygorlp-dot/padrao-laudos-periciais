@@ -6,8 +6,10 @@ import hashlib
 import json
 import re
 import tempfile
+import threading
 import warnings
-from dataclasses import dataclass
+from contextlib import nullcontext
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -28,6 +30,7 @@ from .content_roles import (
     PrivateContentRoles,
     private_content_role_payload,
 )
+from .document_ingestion import DerivationCancelled
 from .ocr_cache import RevisionOcrPageCache
 from .pje_party_table import PjePartyTableState, parse_pje_party_table
 from .process_metadata import (
@@ -675,8 +678,22 @@ def _pje_inventory_payload(record, persisted, text: PdfTextResult, pje_intake) -
     }
 
 
+def _always_continue() -> bool:
+    return True
+
+
 @dataclass(frozen=True, slots=True)
 class ImportCaseDocumentWithMetadata:
+    """Importacao de documento do caso em duas fases (#266).
+
+    `accept` e a FASE 1: grava os bytes (autoridade fisica da fonte) e decide a
+    idempotencia. `derive` e a FASE 2: extracao/OCR, inventario PJe e metadados,
+    com a revisao PROCESS_METADATA_EXTRACTION como ULTIMA escrita e unica
+    autoridade de "pronto". `execute` encadeia as duas de forma sincrona para
+    quem usa o servico diretamente; a Local API usa as fases separadas para que
+    um timeout de transporte nao vire falha da operacao ja aceita.
+    """
+
     documents: object
     document_streams: object
     extractor: object
@@ -685,8 +702,42 @@ class ImportCaseDocumentWithMetadata:
     ids: IdGenerator
     existing_documents: object | None = None
     pje_intake: object | None = None
+    authority_guard: object = nullcontext
+    # Serializa "ja existe esta fonte?" + "grave a fonte": dois pedidos
+    # concorrentes com os mesmos bytes nao podem criar duas autoridades.
+    _accept_lock: object = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
 
-    def _derive_missing_pje_inventory(self, record: PrivateContentMetadata) -> None:
+    def is_derived(self, record: PrivateContentMetadata) -> bool:
+        return self.revisions.latest(
+            record.workspace_id, _PROCESS_METADATA_EXTRACTION_KIND, str(record.content_id)
+        ) is not None
+
+    def needs_derivation(self, record: PrivateContentMetadata) -> bool:
+        """Ha algo a derivar: metadados ausentes, ou inventario PJe ausente com leitor."""
+        if not self.is_derived(record):
+            return True
+        return self.pje_intake is not None and self.revisions.latest(
+            record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _pje_intake_artifact_id(record.content_id)
+        ) is None
+
+    def _require_current_source(self, record: PrivateContentMetadata) -> None:
+        """A fonte derivada ainda e esta fonte, deste workspace, como documento do caso."""
+        if self.existing_documents is None:
+            return
+        for item in self.existing_documents.execute(record.workspace_id):
+            if item.content_id == record.content_id:
+                if item.checksum_sha256 != record.checksum_sha256:
+                    raise RepositoryIntegrityError("fonte derivada diverge do conteúdo persistido")
+                return
+        raise RepositoryIntegrityError("a fonte não é mais um documento do caso neste workspace")
+
+    def _commit(self, should_continue):
+        """Abre a janela de escrita: cancelamento checado, autoridade serializada."""
+        if not should_continue():
+            raise DerivationCancelled()
+        return self.authority_guard()
+
+    def _derive_missing_pje_inventory(self, record: PrivateContentMetadata, should_continue=_always_continue) -> None:
         """Produz o inventario de uma fonte ja armazenada que ainda nao o tem."""
         if self.pje_intake is None:
             return
@@ -704,14 +755,20 @@ class ImportCaseDocumentWithMetadata:
         if inventory is None:
             return
         validate_pje_intake_payload(inventory)
-        self.revisions.append(
-            workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
-            artifact_id=_pje_intake_artifact_id(record.content_id),
-            revision_id=str(_generated_uuid(self.ids)),
-            created_at=_generated_timestamp(self.clock), payload=inventory,
-        )
+        with self._commit(should_continue):
+            self._require_current_source(record)
+            if self.revisions.latest(
+                record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND, _pje_intake_artifact_id(record.content_id)
+            ) is not None:
+                return
+            self.revisions.append(
+                workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
+                artifact_id=_pje_intake_artifact_id(record.content_id),
+                revision_id=str(_generated_uuid(self.ids)),
+                created_at=_generated_timestamp(self.clock), payload=inventory,
+            )
 
-    def execute(
+    def accept(
         self,
         *,
         workspace_id: WorkspaceId,
@@ -719,32 +776,37 @@ class ImportCaseDocumentWithMetadata:
         content: bytes | SeekableContent,
         media_type: str,
     ) -> tuple[PrivateContentMetadata, bool]:
+        """FASE 1: a fonte fisica, e so ela. Falha real de armazenamento propaga."""
         source = as_seekable_content(content)
-        already = _already_imported_in_workspace(self.existing_documents, workspace_id, source)
-        if already is not None:
-            # Reimportar exatamente os mesmos bytes no mesmo workspace e
-            # idempotente quanto a AUTORIDADE FISICA: uma segunda autoridade
-            # sobre o mesmo conteudo duplicaria a fonte e apagaria as decisoes ja
-            # tomadas sobre ela. O escopo e o workspace -- o mesmo hash noutro
-            # workspace continua sendo outra fonte, sem identidade compartilhada.
-            #
-            # Idempotencia da fonte, porem, nao e idempotencia do PIPELINE. Uma
-            # fonte importada quando nao havia leitor de PJe nunca ganhou
-            # inventario, e o curto-circuito tornava isso permanente: reimportar
-            # devolvia sucesso e o inventario seguia ausente, sem caminho de
-            # reparo. Se a derivacao nao existe e agora pode ser feita, faz-se.
-            self._derive_missing_pje_inventory(already)
-            # Nada foi criado. O servico e frozen e compartilhado entre
-            # requisicoes, entao a distincao viaja no retorno, e nao em estado
-            # mutavel: responder "201 Created" afirmaria uma criacao que nao
-            # houve, e o nome devolvido seria o da PRIMEIRA importacao.
-            return already, False
-        record = self.documents.execute(
-            workspace_id=workspace_id,
-            original_filename=original_filename,
-            content=source,
-            media_type=media_type,
-        )
+        with self._accept_lock:
+            already = _already_imported_in_workspace(self.existing_documents, workspace_id, source)
+            if already is not None:
+                # Reimportar exatamente os mesmos bytes no mesmo workspace e
+                # idempotente quanto a AUTORIDADE FISICA: uma segunda autoridade
+                # sobre o mesmo conteudo duplicaria a fonte e apagaria as decisoes ja
+                # tomadas sobre ela. O escopo e o workspace -- o mesmo hash noutro
+                # workspace continua sendo outra fonte, sem identidade compartilhada.
+                # Nada foi criado: responder "201 Created" afirmaria uma criacao
+                # que nao houve.
+                return already, False
+            record = self.documents.execute(
+                workspace_id=workspace_id,
+                original_filename=original_filename,
+                content=source,
+                media_type=media_type,
+            )
+        return record, True
+
+    def derive(self, record: PrivateContentMetadata, should_continue=_always_continue) -> None:
+        """FASE 2: derivacao da fonte aceita. Idempotente e retomavel.
+
+        Idempotencia da fonte nao e idempotencia do PIPELINE: uma fonte
+        interrompida (sem metadados) e derivada por completo; uma fonte concluida
+        quando nao havia leitor de PJe ganha apenas o inventario que falta.
+        """
+        if self.is_derived(record):
+            self._derive_missing_pje_inventory(record, should_continue)
+            return
         page_cache = RevisionOcrPageCache(
             self.revisions,
             record.workspace_id,
@@ -809,33 +871,58 @@ class ImportCaseDocumentWithMetadata:
                 )
             pje_inventory = _pje_inventory_payload(record, persisted, text, self.pje_intake)
         if pje_inventory is not None:
-            pje_inventory = _carry_forward_availability_decisions(
-                self.revisions.latest(
-                    record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND,
-                    _pje_intake_artifact_id(record.content_id),
-                ),
-                pje_inventory,
-            )
             validate_pje_intake_payload(pje_inventory)
+        with self._commit(should_continue):
+            # A derivacao pode ter levado minutos: a fonte e reconferida sob a
+            # mesma guarda que serializa as mudancas de autoridade (restauracao,
+            # papeis), e so entao as derivacoes sao gravadas.
+            self._require_current_source(record)
+            if self.is_derived(record):
+                return
+            if pje_inventory is not None:
+                pje_inventory = _carry_forward_availability_decisions(
+                    self.revisions.latest(
+                        record.workspace_id, _PJE_INTAKE_ARTIFACT_KIND,
+                        _pje_intake_artifact_id(record.content_id),
+                    ),
+                    pje_inventory,
+                )
+                validate_pje_intake_payload(pje_inventory)
+                self.revisions.append(
+                    workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
+                    artifact_id=_pje_intake_artifact_id(record.content_id), revision_id=str(_generated_uuid(self.ids)),
+                    created_at=_generated_timestamp(self.clock), payload=pje_inventory,
+                )
+            # A revisao de metadados e a ULTIMA escrita da importacao, de proposito:
+            # `ListCaseDocumentsWithPjeInventory` le a sua ausencia como "importacao nao
+            # concluida". Gravada antes do inventario, uma falha entre as duas deixava a
+            # fonte parecendo concluida e a cobertura fechava COMPLETE sobre um export
+            # PJe que nunca foi decomposto.
             self.revisions.append(
-                workspace_id=record.workspace_id, artifact_kind=_PJE_INTAKE_ARTIFACT_KIND,
-                artifact_id=_pje_intake_artifact_id(record.content_id), revision_id=str(_generated_uuid(self.ids)),
-                created_at=_generated_timestamp(self.clock), payload=pje_inventory,
+                workspace_id=record.workspace_id,
+                artifact_kind=_PROCESS_METADATA_EXTRACTION_KIND,
+                artifact_id=str(record.content_id),
+                revision_id=str(_generated_uuid(self.ids)),
+                created_at=_generated_timestamp(self.clock),
+                payload=document_metadata_payload(extracted),
             )
-        # A revisao de metadados e a ULTIMA escrita da importacao, de proposito:
-        # `ListCaseDocumentsWithPjeInventory` le a sua ausencia como "importacao nao
-        # concluida". Gravada antes do inventario, uma falha entre as duas deixava a
-        # fonte parecendo concluida e a cobertura fechava COMPLETE sobre um export
-        # PJe que nunca foi decomposto.
-        self.revisions.append(
-            workspace_id=record.workspace_id,
-            artifact_kind=_PROCESS_METADATA_EXTRACTION_KIND,
-            artifact_id=str(record.content_id),
-            revision_id=str(_generated_uuid(self.ids)),
-            created_at=_generated_timestamp(self.clock),
-            payload=document_metadata_payload(extracted),
+
+    def execute(
+        self,
+        *,
+        workspace_id: WorkspaceId,
+        original_filename: str,
+        content: bytes | SeekableContent,
+        media_type: str,
+    ) -> tuple[PrivateContentMetadata, bool]:
+        record, created = self.accept(
+            workspace_id=workspace_id,
+            original_filename=original_filename,
+            content=content,
+            media_type=media_type,
         )
-        return record, True
+        self.derive(record)
+        return record, created
 
 
 @dataclass(frozen=True, slots=True)

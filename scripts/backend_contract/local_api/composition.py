@@ -13,6 +13,7 @@ from threading import Lock
 from uuid import UUID, uuid4
 
 from ..application.ai_assistant import AIAssistantStatus
+from ..application.document_ingestion import CaseDocumentIngestion, DocumentDerivationQueue
 from ..application.photo_library import CuratePhotoLibrary, GetPhotoLibrary, ReadPhotoThumbnail
 from ..application.site_location import ConfirmSiteLocation, GetSiteLocation, ProposeSiteLocation
 from ..application.property_record import GetPropertyRecord, GetPropertyProposals, SavePropertyRecord
@@ -204,6 +205,11 @@ def _assert_plain_single_link_database(path: Path) -> tuple[int, int] | None:
     return identity.st_dev, identity.st_ino
 
 
+#: Quanto `POST /materials` espera a derivacao antes de responder "aceito,
+#: processando" (#266). Precisa ficar abaixo do timeout de transporte do bridge
+#: (30 s), que nao pode mais decidir o destino de uma fonte ja aceita.
+DEFAULT_INGESTION_GRACE_SECONDS = 10.0
+
 @dataclass(slots=True)
 class LocalApiRuntime:
     """Dono explícito do servidor e da sessão SQLite."""
@@ -213,6 +219,8 @@ class LocalApiRuntime:
     _store: SQLiteApplicationStore = field(repr=False)
     _private_store: LocalPrivateContentStore | None = field(default=None, repr=False)
     _recovery_sessions: object | None = field(default=None, repr=False)
+    # #266: o executor das derivacoes pertence ao runtime, nao a conexao.
+    _derivations: object | None = field(default=None, repr=False)
     _closed: bool = False
     _lifecycle_lock: object = field(
         default_factory=Lock,
@@ -234,9 +242,13 @@ class LocalApiRuntime:
             if self._closed:
                 raise RuntimeError("runtime local fechado")
             try:
+                if self._derivations is not None:
+                    self._derivations.start()
                 return self.server.start()
             except LocalApiServerStartError as exc:
                 self._closed = True
+                if self._derivations is not None:
+                    self._derivations.close()
                 try:
                     if self._private_store is not None:
                         self._private_store.close()
@@ -256,6 +268,10 @@ class LocalApiRuntime:
                 self.server.close()
             finally:
                 try:
+                    # Antes dos stores: nenhuma derivação começa depois daqui e
+                    # nenhuma grava depois do fechamento (#266).
+                    if self._derivations is not None:
+                        self._derivations.close()
                     # Sessões de recuperação não sobrevivem ao processo: descartar
                     # aqui garante que nenhum staging fique com handle aberto.
                     if self._recovery_sessions is not None:
@@ -290,6 +306,7 @@ def build_local_api(
     private_root: str | Path | None = None,
     pje_intake: object | None = None,
     construction_defect_analysis: object | None = None,
+    ingestion_grace_seconds: float = DEFAULT_INGESTION_GRACE_SECONDS,
 ) -> LocalApiRuntime:
     """Compõe serviços, SQLite e listener sem esconder suas dependências."""
 
@@ -332,6 +349,8 @@ def build_local_api(
             store.close()
             raise
     import_case_document = None
+    derivation_queue = None
+    case_document_ingestion = None
     import_inspection_photo = None
     generic_store = None
     store_delivery_supporting_file = None
@@ -370,6 +389,12 @@ def build_local_api(
             local_ids,
             list_case_documents,
             pje_intake,
+            private_store.authority_guard,
+        )
+        derivation_queue = DocumentDerivationQueue(import_case_document.derive)
+        case_document_ingestion = CaseDocumentIngestion(
+            import_case_document, derivation_queue, list_case_documents,
+            grace_seconds=ingestion_grace_seconds,
         )
         import_inspection_photo = ImportInspectionPhoto(generic_store)
         case_analysis_documents = ListCaseDocumentsWithPjeInventory(list_case_documents, store.revisions)
@@ -854,6 +879,7 @@ def build_local_api(
         get_process_metadata_review=get_process_metadata_review,
         confirm_process_metadata_source_span=confirm_process_metadata_source_span,
         import_case_document=import_case_document,
+        case_document_ingestion=case_document_ingestion,
         list_case_documents=list_case_documents,
         get_pje_intake=get_pje_intake,
         set_pje_document_availability=set_pje_document_availability,
@@ -888,4 +914,5 @@ def build_local_api(
         _store=store,
         _private_store=private_store,
         _recovery_sessions=recovery_sessions,
+        _derivations=derivation_queue,
     )
