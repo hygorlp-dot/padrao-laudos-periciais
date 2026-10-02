@@ -334,7 +334,7 @@ def test_word_16_renders_the_branded_template_faithfully():
     dr.validate_final_artifact(pdf, "PDF")
 
 
-# --- Prova Word 16 do V2 (C2 do HUMAN_RC_WINDOWS_V2, Round 3) -----------------
+# --- Prova Word 16 do V2 (W16 do HUMAN_RC_WINDOWS_V2, Round 3) ----------------
 # Um laudo fictício com várias partes, citação longa, logotipo, marca d'água,
 # fundo, cabeçalho, rodapé "Página X de Y" e sumário. O pacote é conferido em
 # qualquer máquina; a paginação real e o PDF derivado fiel só com o Word 16.
