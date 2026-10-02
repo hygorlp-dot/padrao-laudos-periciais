@@ -282,3 +282,92 @@ def test_workspace_without_private_storage_keeps_legacy_behavior(tmp_path):
         assert _http(runtime, "GET", f"/v1/workspaces/{workspace['workspace_id']}/settings-snapshot")[0] == 503
     finally:
         runtime.close()
+
+
+def _default_template_service(runtime, stored):
+    from types import SimpleNamespace
+    from scripts.backend_contract.application.delivery_foundation import StoreDefaultDeliveryTemplate
+    from scripts.backend_contract.application.installation_settings import WorkspaceSettings
+    from scripts.backend_contract.application.services import GetLatestArtifact, GetPrivateContent
+    from tests.test_default_report_template_v1 import _report
+
+    def store(**kwargs):
+        stored.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+    settings = WorkspaceSettings(None, None, GetLatestArtifact(runtime._store.revisions), None, None, None, None)
+    return StoreDefaultDeliveryTemplate(
+        SimpleNamespace(execute=lambda _w: (None, _report())), SimpleNamespace(execute=store),
+        settings, GetPrivateContent(runtime._store.workspaces, runtime._private_store),
+    )
+
+
+def test_default_template_follows_the_case_snapshot_and_custom_word_is_the_visual_authority(tmp_path):
+    from io import BytesIO
+    from zipfile import ZipFile
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.report_default_template import BRANDED_TEMPLATE_ID, DEFAULT_TEMPLATE_ID
+    runtime = _runtime(tmp_path)
+    try:
+        _upload(runtime, "PRIMARY_LOGO", _png(), "logo.png", "image/png", None)
+        _, branded = _http(runtime, "POST", "/v1/workspaces", {"name": "Com identidade"})
+        stored = []
+        service = _default_template_service(runtime, stored)
+        _record, manifest = service.execute(WorkspaceId.parse(branded["workspace_id"]))
+        assert manifest.template_id == BRANDED_TEMPLATE_ID
+        with ZipFile(BytesIO(stored[-1]["content"])) as package:
+            media = [name for name in package.namelist() if name.startswith("word/media/")]
+            assert any(package.read(name) == _png() for name in media)
+        # Modelo Word personalizado escolhido na instalacao: devolvido como capturado.
+        from tests.test_default_report_template_v1 import _report
+        from scripts.backend_contract.report_default_template import default_report_template
+        product = default_report_template(_report().editorial_profile)
+        with ZipFile(BytesIO(product)) as source:
+            entries = {name: source.read(name) for name in source.namelist()}
+        entries["docProps/custom.xml"] = entries["docProps/custom.xml"].replace(DEFAULT_TEMPLATE_ID.encode(), b"ESCRITORIO-SINTETICO-V1")
+        output = BytesIO()
+        with ZipFile(output, "w") as target:
+            for name, data in entries.items():
+                target.writestr(name, data)
+        custom = output.getvalue()
+        docx = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        status, uploaded = _upload(runtime, "DEFAULT_WORD_TEMPLATE", custom, "modelo-escritorio.docx", docx, None)
+        assert status == 201
+        sha = uploaded["assets"]["DEFAULT_WORD_TEMPLATE"]["asset"]["sha256"]
+        assert _http(runtime, "PUT", "/v1/installation/settings/DEFAULT_TEMPLATE_SELECTION_V1", {"expected_revision": None, "payload": {"mode": "CUSTOM", "template_sha256": sha}})[0] == 200
+        _, chosen = _http(runtime, "POST", "/v1/workspaces", {"name": "Modelo do escritório"})
+        before = len(stored)
+        record, manifest = service.execute(WorkspaceId.parse(chosen["workspace_id"]))
+        assert len(stored) == before, "the custom template is reused, never regenerated"
+        assert manifest.template_id == "ESCRITORIO-SINTETICO-V1" and record.checksum_sha256 == sha
+        assert [item.field for item in manifest.bindings] == ["EXPERT_FULL_NAME", "EXPERT_REGISTRATION", "REPORT_ID"]
+    finally:
+        runtime.close()
+
+
+def test_test_document_uses_the_real_renderer_with_fictitious_data_and_writes_nothing(tmp_path):
+    from io import BytesIO
+    from zipfile import ZipFile
+    from scripts.backend_contract.delivery_renderer import validate_final_artifact
+    from tests.test_product_integration_oracle_v1 import TOKEN as ORACLE_TOKEN, http_request
+    runtime = _runtime(tmp_path)
+    try:
+        _http(runtime, "PUT", "/v1/installation/settings/EXPERT_PROFILE_DEFAULT_V1", {"expected_revision": None, "payload": _profile()})
+        _upload(runtime, "PRIMARY_LOGO", _png(), "logo.png", "image/png", None)
+        before = _http(runtime, "GET", "/v1/installation/settings")[1]
+        workspaces = _http(runtime, "GET", "/v1/workspaces")[1]
+        status, headers, content = http_request(runtime.server, "GET", "/v1/installation/test-document", headers={"X-Local-API-Token": ORACLE_TOKEN})
+        assert status == 200 and dict(headers)["Content-Type"].startswith("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        validate_final_artifact(content, "DOCX")
+        with ZipFile(BytesIO(content)) as package:
+            document = package.read("word/document.xml").decode("utf-8")
+            header = package.read("word/header1.xml").decode("utf-8")
+            assert any(package.read(name) == _png() for name in package.namelist() if name.startswith("word/media/"))
+        assert "0000000-00.0000.0.00.0000" in document and "Vara fictícia" in document and "AUTORA FICTÍCIA UM" in document and "Perita Sintética" in header
+        assert "e outros 1 (relação completa no item 1)" in document
+        # Nada gravado: configurações e perícias iguais.
+        assert _http(runtime, "GET", "/v1/installation/settings")[1] == before
+        assert _http(runtime, "GET", "/v1/workspaces")[1] == workspaces
+        assert http_request(runtime.server, "GET", "/v1/installation/test-document")[0] in (401, 403)
+    finally:
+        runtime.close()

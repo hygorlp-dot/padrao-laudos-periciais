@@ -92,6 +92,7 @@ _RECOVERY_UPLOAD_TARGETS = frozenset({"/v1/recovery/verify", "/v1/recovery/stagi
 _SETTING_KIND = re.compile(r"[A-Z][A-Z_]{2,40}_V1")
 _ASSET_ROLES = frozenset({"PRIMARY_LOGO", "SYMBOL", "WATERMARK", "SIGNATURE_IMAGE", "PROFESSIONAL_SEAL", "BACKGROUND", "DEFAULT_WORD_TEMPLATE"})
 _ASSET_UPLOAD = re.compile(r"/v1/installation/assets/(" + "|".join(sorted(_ASSET_ROLES)) + r")")
+_TEST_DOCUMENT = "/v1/installation/test-document"
 _ASSET_CONTENT = re.compile(r"/v1/installation/assets/(" + "|".join(sorted(_ASSET_ROLES)) + r")/content")
 
 
@@ -109,6 +110,8 @@ def _proxy_target(path: str, method: str) -> str | None:
         remainder = path[len(installation_prefix):].split("/")
         if remainder == ["settings"] and method == "GET":
             return "/v1/installation/settings"
+        if remainder == ["test-document"] and method == "GET":
+            return "/v1/installation/test-document"
         if len(remainder) == 2 and remainder[0] == "settings" and _SETTING_KIND.fullmatch(remainder[1]) and method == "PUT":
             return f"/v1/installation/settings/{remainder[1]}"
         if len(remainder) == 3 and remainder[0] == "settings" and _SETTING_KIND.fullmatch(remainder[1]) and ((remainder[2] == "history" and method == "GET") or (remainder[2] == "restore" and method == "POST")):
@@ -364,7 +367,7 @@ class ProductBridge:
             rf"{_CANONICAL_UUID.pattern}", upstream_target,
         ):
             return self._max_document_body_bytes
-        if method == "GET" and _ASSET_CONTENT.fullmatch(upstream_target):
+        if method == "GET" and (_ASSET_CONTENT.fullmatch(upstream_target) or upstream_target == _TEST_DOCUMENT):
             return self._max_document_body_bytes
         return self._max_body_bytes
 
@@ -474,7 +477,14 @@ class ProductBridge:
                 }
                 delivery_read = "/delivery-snapshot/artifacts/" in upstream_target
                 asset_read = _ASSET_CONTENT.fullmatch(upstream_target) is not None
-                if not raw_length.isascii() or not raw_length.isdecimal() or int(raw_length) > response_limit or content_type not in (allowed_delivery_types if delivery_read else {"image/jpeg", "image/png"} if asset_read else {"application/pdf"}):
+                test_document = upstream_target == _TEST_DOCUMENT
+                allowed = (
+                    allowed_delivery_types if delivery_read
+                    else {"image/jpeg", "image/png"} if asset_read
+                    else {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"} if test_document
+                    else {"application/pdf"}
+                )
+                if not raw_length.isascii() or not raw_length.isdecimal() or int(raw_length) > response_limit or content_type not in allowed:
                     return _error(502, "INVALID_LOCAL_API_RESPONSE", "resposta local inválida")
                 length = int(raw_length)
                 retained_connection = True

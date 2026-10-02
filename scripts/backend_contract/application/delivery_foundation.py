@@ -31,7 +31,7 @@ from ..delivery_foundation import (
 from ..delivery_renderer import DELIVERY_RENDERING_VERSION, has_toc_control, locate_heading_pages, render_final_pdf_candidate, render_word_candidate, report_heading_texts, validate_delivery_artifact, validate_final_artifact, validate_supporting_artifact, verify_reopened_artifact
 from ..report_figures import figure_presentation_image
 from ..report_default_template import DEFAULT_TEMPLATE_FILENAME, default_report_template, default_template_manifest
-from ..report_template import TemplateBindingManifest, template_binding_manifest_from_mapping
+from ..report_template import TemplateBinding, TemplateBindingManifest, template_binding_manifest_from_mapping
 from ..pericial_planning import PlanningSnapshot, pericial_planning_to_mapping
 from ..report_foundation import ReportSnapshot, ReportState, report_snapshot_to_mapping
 from ..technical_findings import TechnicalSnapshot, technical_snapshot_to_mapping
@@ -487,20 +487,106 @@ class StoreDefaultDeliveryTemplate:
     The template follows the report's own editorial profile, so what the expert
     configured is what the Word shows.  It is stored like an uploaded template
     and bound by its digest from then on.
+
+    With a workspace settings snapshot (#270) the default is the branded V2
+    template built from that snapshot -- never from the installation defaults
+    of today.  When the snapshot selected a custom Word template, that file is
+    the visual authority (#271, D8): it is returned as captured, with no
+    product branding laid over it.  A workspace created before the snapshot
+    existed keeps the V1 template.
     """
     get_report: object
     store_private_content: object
+    get_workspace_settings: object | None = None
+    get_private_content: object | None = None
+
+    def _image(self, workspace_id, asset):
+        from ..report_default_template import TemplateImage
+        if asset is None or asset.media_type not in ("image/png", "image/jpeg"):
+            return None
+        content = self.get_private_content.execute(workspace_id, PrivateContentId.parse(asset.content_id))
+        if content.metadata.checksum_sha256 != asset.sha256:
+            raise ValueError("workspace branding asset diverges from its captured bytes")
+        return TemplateImage(content.content, asset.media_type, asset.width, asset.height)
 
     def execute(self, workspace_id):
         _, report = self.get_report.execute(workspace_id)
         if type(report) is not ReportSnapshot or report.state is not ReportState.APPROVED or report.upstream_stale:
             raise ValueError("default delivery template requires an approved report")
-        content = default_report_template(report.editorial_profile)
+        settings = None
+        if self.get_workspace_settings is not None:
+            _record, settings = self.get_workspace_settings.current(workspace_id)
+        if settings is None:
+            content = default_report_template(report.editorial_profile)
+            manifest = default_template_manifest()
+        else:
+            if self.get_private_content is None:
+                raise ValueError("workspace branding requires private content access")
+            from ..installation_settings import AssetRole, TemplateMode
+            assets = {item.role: item for item in settings.assets}
+            if settings.template_selection.mode is TemplateMode.CUSTOM:
+                return self._custom(workspace_id, assets.get(AssetRole.DEFAULT_WORD_TEMPLATE), settings)
+            from ..report_default_template import TemplateBranding, branded_report_template, branded_template_manifest
+            approved = [item.timestamp for item in report.review_decisions if item.action.value == "APPROVE"]
+            year = approved[-1][:4] if approved else None
+            contact = report.expert_profile.contact
+            city = settings.presentation.cover.city or (contact.city if contact is not None else None)
+            branding = TemplateBranding(
+                presentation=settings.presentation, branding=settings.branding, expert=report.expert_profile,
+                logo=self._image(workspace_id, assets.get(AssetRole.PRIMARY_LOGO)),
+                symbol=self._image(workspace_id, assets.get(AssetRole.SYMBOL)),
+                watermark=self._image(workspace_id, assets.get(AssetRole.WATERMARK)),
+                background=self._image(workspace_id, assets.get(AssetRole.BACKGROUND)),
+                signature=self._image(workspace_id, assets.get(AssetRole.SIGNATURE_IMAGE)),
+                seal=self._image(workspace_id, assets.get(AssetRole.PROFESSIONAL_SEAL)),
+                city_year=", ".join(item for item in (city, year) if item) or None,
+            )
+            content = branded_report_template(report.editorial_profile, branding)
+            manifest = branded_template_manifest()
         record = self.store_private_content.execute(
             workspace_id=workspace_id, original_filename=DEFAULT_TEMPLATE_FILENAME, content=content,
             media_type=_DOCX_MEDIA_TYPE, origin=PrivateContentOrigin.LOCAL_IMPORT,
         )
-        return record, default_template_manifest()
+        return record, manifest
+
+    def _custom(self, workspace_id, asset, settings):
+        """O modelo Word personalizado capturado na pericia, sem marca sobreposta."""
+        if asset is None:
+            raise ValueError("the custom Word template selected for this case was not captured")
+        content = self.get_private_content.execute(workspace_id, PrivateContentId.parse(asset.content_id))
+        if content.metadata.checksum_sha256 != asset.sha256 or asset.sha256 != settings.template_selection.template_sha256:
+            raise ValueError("custom Word template diverges from its captured bytes")
+        template_id = custom_template_identity(content.content)
+        from ..report_default_template import BRANDED_TEMPLATE_ID, DEFAULT_TEMPLATE_ID
+        if template_id in (DEFAULT_TEMPLATE_ID, BRANDED_TEMPLATE_ID):
+            # O identificador do produto implica outro conjunto de campos.
+            raise ValueError("custom Word template must declare its own TEMPLATE_ID")
+        output_kind = "DOCM" if asset.media_type == "application/vnd.ms-word.document.macroEnabled.12" else "DOCX"
+        manifest = TemplateBindingManifest(
+            "1.0.0", template_id, output_kind,
+            tuple(TemplateBinding(field, f"[[{field}]]") for field in UPLOADED_TEMPLATE_FIELDS),
+        )
+        return content.metadata, manifest
+
+
+# Campos que um modelo Word enviado pelo perito vincula (o mesmo conjunto que a
+# tela de entrega usa para modelos enviados).
+UPLOADED_TEMPLATE_FIELDS = ("EXPERT_FULL_NAME", "EXPERT_REGISTRATION", "REPORT_ID")
+
+
+def custom_template_identity(content: bytes) -> str:
+    """O TEMPLATE_ID declarado no modelo Word; sem ele o modelo nao vincula."""
+    from xml.etree import ElementTree
+    from zipfile import BadZipFile, ZipFile
+    try:
+        with ZipFile(BytesIO(content)) as package:
+            root = ElementTree.fromstring(package.read("docProps/custom.xml"))
+    except (KeyError, BadZipFile, ElementTree.ParseError) as exc:
+        raise ValueError("custom Word template has no TEMPLATE_ID property") from exc
+    values = [text.strip() for item in root.iter() if item.attrib.get("name") == "TEMPLATE_ID" for text in item.itertext() if text.strip()]
+    if len(values) != 1 or not values[0] or len(values[0]) > 120:
+        raise ValueError("custom Word template has no TEMPLATE_ID property")
+    return values[0]
 
 
 def template_binding_manifest_to_mapping(manifest: TemplateBindingManifest) -> dict:

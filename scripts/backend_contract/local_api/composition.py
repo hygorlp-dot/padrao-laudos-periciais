@@ -18,7 +18,7 @@ from ..application.photo_library import CuratePhotoLibrary, GetPhotoLibrary, Rea
 from ..application.site_location import ConfirmSiteLocation, GetSiteLocation, ProposeSiteLocation
 from ..application.property_record import GetPropertyRecord, GetPropertyProposals, SavePropertyRecord
 from ..application.case_document_texts import CaseDocumentTexts
-from ..application.installation_settings import CreateWorkspaceWithSettings, InstallationSettings, WorkspaceSettings
+from ..application.installation_settings import CreateWorkspaceWithSettings, GenerateTestDocument, InstallationSettings, WorkspaceSettings
 from ..infrastructure.installation_store import SQLiteInstallationStore, installation_database_path
 from ..delivery_renderer import validate_final_artifact
 from ..application.process_participants import DecideProcessParticipants, GetProcessParticipants, ParticipantProposals
@@ -757,6 +757,7 @@ def build_local_api(
         create_workspace=CreateWorkspaceWithSettings(CreateWorkspace(store.workspaces, local_clock, local_ids), workspace_settings),
         installation_settings=installation_settings,
         workspace_settings=workspace_settings,
+        generate_test_document=GenerateTestDocument(installation_settings),
         get_workspace=GetWorkspace(store.workspaces),
         list_workspaces=ListWorkspaces(store.workspaces),
         append_artifact_revision=append_artifact_revision,
@@ -876,7 +877,7 @@ def build_local_api(
         list_report_sources=ListReportSources(get_case_analysis, get_inspection_session, get_technical_snapshot, get_construction_defect_analysis),
         export_report_audit_trail=ExportReportAuditTrail(get_report_snapshot),
         store_delivery_template=generic_store,
-        store_default_delivery_template=StoreDefaultDeliveryTemplate(get_report_snapshot, generic_store),
+        store_default_delivery_template=StoreDefaultDeliveryTemplate(get_report_snapshot, generic_store, workspace_settings, get_private_content),
         get_site_location=get_site_location,
         get_photo_library=get_photo_library,
         ai_assistant_status=AIAssistantStatus(),

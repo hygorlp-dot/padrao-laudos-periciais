@@ -376,7 +376,7 @@ class _Media:
 def _picture(relationship: str, identity: int, name: str, cx: int, cy: int) -> str:
     return (
         f'<a:graphic xmlns:a="{_A_NS}"><a:graphicData uri="{_PIC_NS}">'
-        f'<pic:pic xmlns:pic="{_PIC_NS}"><pic:nvPicPr><pic:cNvPr id="{identity}" name="{escape(name)}"/><pic:cNvPicPr/></pic:nvPicPr>'
+        f'<pic:pic xmlns:pic="{_PIC_NS}"><pic:nvPicPr><pic:cNvPr id="{identity}" name="{escape(name)}" descr="{escape(name)}"/><pic:cNvPicPr/></pic:nvPicPr>'
         f'<pic:blipFill><a:blip r:embed="{relationship}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
         f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
         "</pic:pic></a:graphicData></a:graphic>"
@@ -386,7 +386,7 @@ def _picture(relationship: str, identity: int, name: str, cx: int, cy: int) -> s
 def _inline_image(relationship: str, identity: int, name: str, cx: int, cy: int) -> str:
     return (
         f'<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="{_WP_NS}">'
-        f'<wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="{identity}" name="{escape(name)}"/>'
+        f'<wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="{identity}" name="{escape(name)}" descr="{escape(name)}"/>'
         f"{_picture(relationship, identity, name, cx, cy)}</wp:inline></w:drawing></w:r>"
     )
 
@@ -401,7 +401,7 @@ def _page_anchor(relationship: str, identity: int, name: str, cx: int, cy: int) 
         '<wp:positionH relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionH>'
         '<wp:positionV relativeFrom="page"><wp:posOffset>0</wp:posOffset></wp:positionV>'
         f'<wp:extent cx="{cx}" cy="{cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>'
-        f'<wp:docPr id="{identity}" name="{escape(name)}"/><wp:cNvGraphicFramePr/>'
+        f'<wp:docPr id="{identity}" name="{escape(name)}" descr="{escape(name)}"/><wp:cNvGraphicFramePr/>'
         f"{_picture(relationship, identity, name, cx, cy)}</wp:anchor></w:drawing></w:r>"
     )
 
@@ -583,12 +583,12 @@ def branded_report_template(profile: EditorialProfile, branding: TemplateBrandin
         anchor = ""
         if page_image is not None:
             relationship, identity = media.add(part, f"{'capa' if for_cover else 'pagina'}-fundo.png", page_image)
-            anchor = _page_anchor(relationship, identity, "Fundo da página", page_cx, page_cy)
+            anchor = _page_anchor(relationship, identity, "Fundo da página (decorativo)", page_cx, page_cy)
         if not for_cover and header.enabled:
             if header.show_logo and branding.logo is not None:
                 relationship, identity = media.add(part, f"logotipo.{branding.logo.extension}", branding.logo.content)
                 cx, cy = _scaled(branding.logo, min(header.logo_width_cm, text_width_cm))
-                content.append(paragraph(anchor + _inline_image(relationship, identity, "Logotipo", cx, cy), "Header", jc=alignment))
+                content.append(paragraph(anchor + _inline_image(relationship, identity, "Logotipo do perito", cx, cy), "Header", jc=alignment))
                 anchor = ""
             for line in _identity_lines(branding.expert, header):
                 content.append(paragraph(anchor + _run(line), "Header", jc=alignment))
@@ -615,7 +615,7 @@ def branded_report_template(profile: EditorialProfile, branding: TemplateBrandin
         if cover.show_logo and branding.logo is not None:
             relationship, identity = media.add("document", f"capa-logotipo.{branding.logo.extension}", branding.logo.content)
             cx, cy = _fitted(branding.logo, min(8.0, text_width_cm), 4.0)
-            body.append(paragraph(_inline_image(relationship, identity, "Logotipo", cx, cy), "CoverLogo"))
+            body.append(paragraph(_inline_image(relationship, identity, "Logotipo do perito", cx, cy), "CoverLogo"))
     body.append(paragraph(_run(cover.title), "Title"))
     if cover.subtitle:
         body.append(paragraph(_run(cover.subtitle), "CoverText"))
@@ -642,7 +642,7 @@ def branded_report_template(profile: EditorialProfile, branding: TemplateBrandin
     if branding.signature is not None:
         relationship, identity = media.add("document", f"assinatura.{branding.signature.extension}", branding.signature.content)
         cx, cy = _fitted(branding.signature, 6.0, 2.5)
-        body.append(paragraph(_inline_image(relationship, identity, "Assinatura", cx, cy), "Signature"))
+        body.append(paragraph(_inline_image(relationship, identity, "Assinatura do perito", cx, cy), "Signature"))
     body.append(_paragraph(_run("[[EXPERT_FULL_NAME]]", bold=True), "Signature"))
     body.append(_paragraph(_run("[[EXPERT_TITLE]]"), "Signature"))
     body.append(_paragraph(_run("[[EXPERT_REGISTRATION]]"), "Signature"))

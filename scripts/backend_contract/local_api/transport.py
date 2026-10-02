@@ -194,6 +194,7 @@ class LocalApiServices:
     decide_process_participants: object | None = None
     installation_settings: object | None = None
     workspace_settings: object | None = None
+    generate_test_document: object | None = None
     get_photo_library: object | None = None
     ai_assistant_status: object | None = None
     curate_photo_library: object | None = None
@@ -721,6 +722,26 @@ class LocalApi:
             if method != "GET":
                 return _error(405, "METHOD_NOT_ALLOWED")
             return _json_response(200, service.overview())
+        if tail == ("test-document",):
+            # Documento de teste com dados fictícios, pelo renderizador real;
+            # nada é gravado e nada pertence a uma perícia.
+            if method != "GET":
+                return _error(405, "METHOD_NOT_ALLOWED")
+            generator = self._services.generate_test_document
+            if generator is None:
+                return _error(503, "SETTINGS_UNAVAILABLE")
+            try:
+                content = generator.execute()
+            except ValueError:
+                return _error(422, "TEST_DOCUMENT_REJECTED", "as configurações vigentes não geram um Word válido")
+            return HttpResponse(
+                status=200,
+                headers=MappingProxyType({
+                    "Content-Type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "Content-Length": str(len(content)), "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                }),
+                body=content,
+            )
         if len(tail) in {2, 3} and tail[0] == "settings":
             try:
                 kind = _Kind(tail[1])

@@ -420,3 +420,63 @@ class CreateWorkspaceWithSettings:
         except Exception as exc:
             raise WorkspaceSettingsCaptureFailed(workspace) from exc
         return workspace
+
+
+TEST_DOCUMENT_FILENAME = "documento-de-teste.docx"
+
+
+@dataclass(frozen=True, slots=True)
+class GenerateTestDocument:
+    """"Gerar documento de teste": o Word que as configurações vigentes produzem.
+
+    Usa um laudo fictício (`sample_report`) e o mesmo caminho do laudo real:
+    modelo padrão com identidade visual (ou o modelo Word personalizado escolhido),
+    vinculação e validação do artefato final. Nada é gravado: o documento não
+    pertence a nenhuma perícia e não entra em histórico.
+    """
+    settings: InstallationSettings
+
+    def _image(self, role: AssetRole):
+        from ..report_default_template import TemplateImage
+        _, record = self.settings.asset_record(role)
+        if record is None or record.media_type not in IMAGE_MEDIA_TYPES:
+            return None
+        _, content = self.settings.asset_content(role)
+        return TemplateImage(content, record.media_type, record.width, record.height)
+
+    def execute(self) -> bytes:
+        from ..delivery_renderer import render_word_candidate, validate_final_artifact
+        from ..report_default_template import TemplateBranding, branded_report_template, branded_template_manifest
+        from ..report_template import TemplateBinding, TemplateBindingManifest
+        from ..sample_report import sample_report
+        from .delivery_foundation import UPLOADED_TEMPLATE_FIELDS, custom_template_identity
+        values = self.settings.effective()["values"]
+        editorial = editorial_profile_from_mapping(values[SettingKind.EDITORIAL_PROFILE_DEFAULT])
+        profile = self.settings.latest(SettingKind.EXPERT_PROFILE_DEFAULT)
+        expert = expert_profile_from_mapping(dict(profile.payload)) if profile is not None else None
+        report = sample_report(editorial, expert)
+        selection = template_selection_from_mapping(values[SettingKind.DEFAULT_TEMPLATE_SELECTION])
+        if selection.mode is TemplateMode.CUSTOM:
+            record, template = self.settings.asset_content(AssetRole.DEFAULT_WORD_TEMPLATE)
+            output_kind = "DOCM" if record.media_type == "application/vnd.ms-word.document.macroEnabled.12" else "DOCX"
+            manifest = TemplateBindingManifest(
+                "1.0.0", custom_template_identity(template), output_kind,
+                tuple(TemplateBinding(field, f"[[{field}]]") for field in UPLOADED_TEMPLATE_FIELDS),
+            )
+        else:
+            presentation = presentation_from_mapping(values[SettingKind.DOCUMENT_PRESENTATION_PROFILE])
+            contact = report.expert_profile.contact
+            city = presentation.cover.city or (contact.city if contact is not None else None)
+            branding = TemplateBranding(
+                presentation=presentation, branding=branding_from_mapping(values[SettingKind.BRANDING_PROFILE]),
+                expert=report.expert_profile,
+                logo=self._image(AssetRole.PRIMARY_LOGO), symbol=self._image(AssetRole.SYMBOL),
+                watermark=self._image(AssetRole.WATERMARK), background=self._image(AssetRole.BACKGROUND),
+                signature=self._image(AssetRole.SIGNATURE_IMAGE), seal=self._image(AssetRole.PROFESSIONAL_SEAL),
+                city_year=", ".join(item for item in (city, self.settings._now()[:4]) if item),
+            )
+            template = branded_report_template(editorial, branding)
+            manifest = branded_template_manifest()
+        word = render_word_candidate(template_bytes=template, report=report, manifest=manifest).output_bytes
+        validate_final_artifact(word, manifest.output_kind)
+        return word
