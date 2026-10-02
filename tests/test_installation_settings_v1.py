@@ -138,7 +138,7 @@ def test_empty_install_shows_product_defaults_and_settings_persist_across_restar
         status, overview = _http(runtime, "GET", "/v1/installation/settings")
         assert status == 200
         assert overview["readiness"] == {"expert_profile": "MISSING", "branding": "PRODUCT_DEFAULT", "document": "PRODUCT_DEFAULT", "editorial": "PRESET", "legal_editorial": "CNJ_TRF5", "template": "PRODUCT_DEFAULT"}
-        assert overview["settings"]["EXPERT_PROFILE_DEFAULT_V1"] == {"configured": False, "revision": None, "revision_id": None, "created_at": None, "checksum_sha256": None, "payload": None}
+        assert overview["settings"]["EXPERT_PROFILE_DEFAULT_V1"] == {"configured": False, "revision": None, "revision_id": None, "created_at": None, "checksum_sha256": None, "payload": None, "product_default": None}
         assert all(item["asset"] is None for item in overview["assets"].values())
         status, saved = _http(runtime, "PUT", "/v1/installation/settings/EXPERT_PROFILE_DEFAULT_V1", {"expected_revision": None, "payload": _profile()})
         assert status == 200 and saved["readiness"]["expert_profile"] == "CONFIGURED"

@@ -125,6 +125,9 @@ class InstallationSettings:
                 {"configured": True, **_record_dto(record)} if record is not None
                 else {"configured": False, "revision": None, "revision_id": None, "created_at": None, "checksum_sha256": None, "payload": default_payload(kind)}
             )
+            # O padrão do produto acompanha cada configuração: "restaurar o padrão
+            # do produto" grava exatamente isto, sem a tela inventar valores.
+            settings[kind.value]["product_default"] = default_payload(kind)
         assets = {}
         for role in AssetRole:
             record, asset = self.asset_record(role)

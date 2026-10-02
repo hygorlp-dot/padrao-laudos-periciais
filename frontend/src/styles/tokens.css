@@ -11,6 +11,8 @@
   --color-slate: #5c655f;
   --color-rule: #d6dcd7;
   --color-rule-dark: #3b4741;
+  /* Borda de controle sobre papel: 3:1 contra o fundo, como pede WCAG 1.4.11. */
+  --color-rule-strong: #8a948d;
   --color-ochre: #7b570d;
   --color-ochre-bright: #c59a2a;
   --color-error: #9a3f2f;
