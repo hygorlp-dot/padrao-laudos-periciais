@@ -65,7 +65,7 @@ class PreflightReport:
 
 
 PENDING_MARKER = re.compile(
-    r"\[\s*(?:INFORMA[CÇ][AÃ]O\s+NECESS[AÁ]RIA|(?:PEND[EÊ]NCIA\s+DE\s+)?VALIDA[CÇ][AÃ]O\s+DO\s+PERITO)",
+    r"\[\s*(?:INFORMA[CÇ](?:[AÃ]O|[OÕ]ES)\s+NECESS[AÁ]RIAS?|(?:PEND[EÊ]NCIA\s+DE\s+)?VALIDA[CÇ][AÃ]O\s+DO\s+PERITO)",
     re.IGNORECASE,
 )
 
@@ -314,8 +314,27 @@ def report_pending_markers(report) -> tuple[str, ...]:
 
 
 _WORD_TEXT_PARTS = re.compile(r"word/(document|header\d*|footer\d*|footnotes|endnotes)\.xml")
-_PARAGRAPH = re.compile(rb"<w:p[ >].*?</w:p>", re.DOTALL)
-_RUN_TEXT = re.compile(rb"<w:t(?: [^>]*)?>([^<]*)</w:t>")
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+# Separadores que o Word mostra como espaço entre palavras de um marcador.
+_W_SPACING = {f"{_W}tab", f"{_W}br", f"{_W}cr", f"{_W}noBreakHyphen", f"{_W}ptab"}
+
+
+def _paragraph_text(paragraph) -> str:
+    """Texto visível do parágrafo, sem descer em parágrafos aninhados (caixas de texto)."""
+    pieces: list[str] = []
+
+    def walk(node) -> None:
+        for child in node:
+            if child.tag == f"{_W}p":
+                continue
+            if child.tag == f"{_W}t" and child.text:
+                pieces.append(child.text)
+            elif child.tag in _W_SPACING:
+                pieces.append(" ")
+            walk(child)
+
+    walk(paragraph)
+    return "".join(pieces)
 
 
 def word_pending_markers(package: bytes) -> tuple[str, ...]:
@@ -325,15 +344,20 @@ def word_pending_markers(package: bytes) -> tuple[str, ...]:
     personalizado. Um marcador pode estar partido em vários trechos do mesmo
     parágrafo, então o texto é juntado por parágrafo.
     """
-    from html import unescape
+    from xml.etree import ElementTree
     try:
         with ZipFile(BytesIO(package)) as archive:
             parts = [archive.read(name) for name in archive.namelist() if _WORD_TEXT_PARTS.fullmatch(name)]
-    except (BadZipFile, KeyError) as exc:
+        roots = []
+        for xml in parts:
+            if b"<!DOCTYPE" in xml or b"<!ENTITY" in xml:
+                raise ValueError("word part declares a DTD")
+            # Lido pelo namespace: qualquer prefixo (w:, ns0:) é o mesmo elemento.
+            roots.append(ElementTree.fromstring(xml))
+    except (BadZipFile, KeyError, ElementTree.ParseError) as exc:
         raise ValueError("word package cannot be read for pending markers") from exc
     found = []
-    for xml in parts:
-        for paragraph in _PARAGRAPH.findall(xml):
-            text = unescape(b"".join(_RUN_TEXT.findall(paragraph)).decode("utf-8"))
-            found.extend(_marker_excerpts(text))
+    for root in roots:
+        for paragraph in root.iter(f"{_W}p"):
+            found.extend(_marker_excerpts(_paragraph_text(paragraph)))
     return tuple(found)

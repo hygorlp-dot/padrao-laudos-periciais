@@ -963,10 +963,16 @@ class LocalApi:
                 elif normalized_method != "GET":
                     return _error(405, "METHOD_NOT_ALLOWED")
                 record, snapshot = service.current(workspace_id)
+                try:
+                    differences = service.differences(workspace_id)
+                except InstallationSettingsUnavailable:
+                    # O snapshot da perícia continua íntegro sem a instalação;
+                    # só a comparação com o padrão vigente fica indisponível.
+                    differences = None
                 return _json_response(200, {
                     "revision": record.revision if record else None, "updated_at": record.created_at if record else None,
                     "snapshot": _workspace_settings_dto(snapshot) if snapshot else None,
-                    "differences": service.differences(workspace_id),
+                    "differences": differences,
                 })
 
             if raw_segments == ("v1", "ai-assistant", "status"):

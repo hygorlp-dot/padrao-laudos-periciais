@@ -1543,6 +1543,8 @@ class _PaintedPath:
     stroke_color: tuple[int, int, int, int] | None = None
     fill_mode: int = 1
     stroke: bool = False
+    # Position in the page content draw order, shared with _PdfImageLayout.order.
+    order: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1890,6 +1892,7 @@ def _repeatable_word_images_match(
     header_layouts_by_page: list[list[_WordImageLayout | None]] | None = None,
     footer_signatures_by_page: list[list[tuple]] | None = None,
     footer_layouts_by_page: list[list[_WordImageLayout | None]] | None = None,
+    painted_paths: list[_PaintedPath] | tuple[_PaintedPath, ...] = (),
 ) -> bool:
     if (
         len(candidate_signatures) != len(candidate_layouts)
@@ -2014,15 +2017,21 @@ def _repeatable_word_images_match(
         footer_signature_pages, footer_layout_pages, region="footer"
     ):
         return False
-    # A picture "behind the text" that the PDF paints AFTER a picture it
-    # overlaps hides that picture: a body photo is evidence, and a derived PDF
-    # that covers it is not the Word document.  Text is held by the raster
-    # occlusion check; pictures are held here, by draw order.
+    # A picture "behind the text" that the PDF paints AFTER a picture or a
+    # painted path (table shading, cell border) it overlaps hides it: a body
+    # photo or table is evidence, and a derived PDF that covers it is not the
+    # Word document.  Text is held by the raster occlusion check; pictures and
+    # paths are held here, by draw order on the same page.
     behind = set(behind_anchors)
     for anchor_index in behind_anchors:
         anchor = candidate_layouts[anchor_index]
-        for other_index, other in enumerate(candidate_layouts):
-            if other_index in behind or other.page != anchor.page:
+        others = [
+            other for other_index, other in enumerate(candidate_layouts)
+            if other_index not in behind
+        ]
+        others.extend(painted_paths)
+        for other in others:
+            if other.page != anchor.page:
                 continue
             overlaps = (
                 min(anchor.right, other.right) - max(anchor.left, other.left) > 0.5
@@ -4619,7 +4628,7 @@ def _pdfium_visible_layout(
                         unsafe = True
                     else:
                         glyph_regions.append((glyph_bounds, character))
-                for item in objects:
+                for object_order, item in enumerate(objects):
                     bounds = tuple(float(value) for value in item.get_bounds())
                     if len(bounds) != 4 or not all(math.isfinite(value) for value in bounds):
                         unsafe = True
@@ -4736,7 +4745,7 @@ def _pdfium_visible_layout(
                                 top,
                                 width,
                                 height,
-                                len(image_layouts),
+                                object_order,
                             )
                         )
                     elif (
@@ -4764,6 +4773,7 @@ def _pdfium_visible_layout(
                                 stroke_color,
                                 fill_mode,
                                 stroke,
+                                object_order,
                             )
                         )
                     elif item.type not in {
@@ -6704,6 +6714,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         header_layouts_by_page=header_image_layouts_by_page,
         footer_signatures_by_page=footer_image_signatures_by_page,
         footer_layouts_by_page=footer_image_layouts_by_page,
+        painted_paths=painted_paths,
     )
     tables_match = _table_rows_match(table_rows, reading_positioned, barriers)
     body_order_matches = _body_block_order_matches(

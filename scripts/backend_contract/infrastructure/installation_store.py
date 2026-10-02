@@ -192,6 +192,16 @@ class SQLiteInstallationStore:
                     pass
                 raise
 
+    @contextmanager
+    def consistent_reads(self):
+        """Leituras seguidas sem gravação no meio.
+
+        Toda gravação deste processo passa por esta mesma trava, então a seleção
+        do modelo e os ativos lidos aqui dentro pertencem ao mesmo estado.
+        """
+        with self._lock:
+            yield
+
     def latest(self, setting_kind: str, setting_id: str) -> InstallationSettingRevision | None:
         kind, identity = _key(setting_kind, "tipo"), _key(setting_id, "identidade")
         try:

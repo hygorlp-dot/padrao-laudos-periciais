@@ -110,6 +110,8 @@ def test_unreadable_installation_file_disables_settings_but_never_the_existing_c
         assert status == 503 and body["error"]["code"] == "SETTINGS_UNAVAILABLE"
         assert _http(runtime, "GET", "/v1/installation/test-document")[0] == 503
         status, body = _http(runtime, "GET", f"/v1/workspaces/{existing['workspace_id']}/settings-snapshot")
+        assert status == 200 and body["differences"] is None and body["snapshot"]["workspace_id"] == existing["workspace_id"]
+        status, body = _http(runtime, "POST", f"/v1/workspaces/{existing['workspace_id']}/settings-snapshot/refresh", {"include_profile": False, "expected_snapshot_revision": 1, "expected_profile_revision": None})
         assert status == 503 and body["error"]["code"] == "SETTINGS_UNAVAILABLE"
         status, body = _http(runtime, "POST", "/v1/workspaces", {"name": "Nova"})
         assert status == 503 and body["error"]["code"] == "SETTINGS_UNAVAILABLE"
@@ -476,3 +478,43 @@ def test_uploaded_template_must_bind_as_an_uploaded_template(tmp_path):
         assert _upload(runtime, "DEFAULT_WORD_TEMPLATE", _custom_template(b"ESCRITORIO-SINTETICO-V1"), "escritorio.docx", docx, None)[0] == 201
     finally:
         runtime.close()
+
+
+def test_case_capture_reads_the_installation_in_one_snapshot(tmp_path):
+    # Revisão do 2º conjunto, rodada 2, P2-c: seleção do modelo e ativos lidos
+    # no mesmo estado; uma gravação concorrente espera o fim da captura.
+    import threading
+    store = SQLiteInstallationStore(tmp_path / "install.sqlite3")
+    try:
+        done = threading.Event()
+
+        def write():
+            store.append_if_latest(setting_kind="BRANDING_PROFILE_V1", setting_id="DEFAULT", revision_id=str(uuid4()), created_at="2026-10-02T12:00:00+00:00", payload={"a": 1}, expected_revision=None)
+            done.set()
+
+        with store.consistent_reads():
+            writer = threading.Thread(target=write)
+            writer.start()
+            assert not done.wait(0.3), "a write must wait for the consistent read to end"
+        writer.join(5)
+        assert done.is_set()
+    finally:
+        store.close()
+    from scripts.backend_contract.application import installation_settings as module
+    entered = []
+
+    class Spy:
+        def consistent(self):
+            from contextlib import contextmanager
+
+            @contextmanager
+            def reads():
+                entered.append(True)
+                yield
+            return reads()
+
+    from contextlib import nullcontext
+    settings = module.WorkspaceSettings(Spy(), None, None, None, nullcontext, None, None)
+    with pytest.raises(Exception):
+        settings.seed("11111111-1111-4111-8111-111111111111")
+    assert entered == [True], "seed enters the installation snapshot before reading it"

@@ -8,6 +8,7 @@ atualizar uma perícia é um comando explícito, com diferença mostrada antes.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 import hashlib
 from io import BytesIO
@@ -220,6 +221,11 @@ class InstallationSettings:
                 if payload.get("removed") is True or current is None or payload.get("sha256") != current.sha256:
                     raise CustomTemplateInUse("choose the product template before replacing or removing the custom template")
 
+    def consistent(self):
+        """Um retrato só da instalação: seleção, perfil e ativos do mesmo estado."""
+        reads = getattr(self.store, "consistent_reads", None)
+        return reads() if callable(reads) else nullcontext()
+
     def history(self, kind: SettingKind, setting_id: str = DEFAULT_SETTING_ID):
         return self.store.history(kind.value, setting_id)
 
@@ -367,10 +373,10 @@ class WorkspaceSettings:
 
     def seed(self, workspace_id):
         """Na criação da perícia: snapshot dos padrões e perfil do perito, se houver."""
-        self._installation()
+        installation = self._installation()
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("workspace settings authority guard is unavailable")
-        with self.authority_guard():
+        with self.authority_guard(), installation.consistent():
             existing, _ = self.current(workspace_id)
             if existing is not None:
                 raise RepositoryConflict("workspace settings were already captured")
@@ -442,10 +448,10 @@ class WorkspaceSettings:
         """
         if type(include_profile) is not bool:
             raise ValueError("profile update choice is invalid")
-        self._installation()
+        installation = self._installation()
         if not callable(self.authority_guard):
             raise RepositoryIntegrityError("workspace settings authority guard is unavailable")
-        with self.authority_guard():
+        with self.authority_guard(), installation.consistent():
             record, _ = self.current(workspace_id)
             if (record.revision if record else None) != expected_snapshot_revision:
                 raise RepositoryConflict("workspace settings changed")
@@ -526,6 +532,10 @@ class GenerateTestDocument:
 
     def execute(self) -> tuple[bytes, str]:
         """Devolve os bytes e o formato (DOCX ou DOCM, o do modelo em uso)."""
+        with self.settings.consistent():
+            return self._execute()
+
+    def _execute(self) -> tuple[bytes, str]:
         from ..delivery_renderer import render_word_candidate, validate_final_artifact
         from ..report_default_template import TemplateBranding, branded_report_template, branded_template_manifest
         from ..report_template import TemplateBinding, TemplateBindingManifest

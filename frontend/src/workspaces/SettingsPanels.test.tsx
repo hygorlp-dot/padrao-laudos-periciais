@@ -78,4 +78,12 @@ describe("configurações desta perícia (#270)", () => {
     await user.click(within(panel).getByRole("button", { name: "Atualizar a partir das configurações" }));
     expect(within(panel).getByRole("button", { name: "Confirmar atualização" })).toBeDisabled();
   });
+
+  test("without the installation settings the case keeps its snapshot and says so", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, { revision: 2, updated_at: "2026-10-01T12:00:00+00:00", snapshot: { reason: "WORKSPACE_CREATED", assets: [] }, differences: null })));
+    render(<WorkspaceSettingsPanel workspaceId={ID} />);
+    const panel = await screen.findByRole("region", { name: "Configurações desta perícia" });
+    expect(within(panel).getByRole("status")).toHaveTextContent("Esta perícia continua com a cópia dela");
+    expect(within(panel).queryByRole("button", { name: "Atualizar a partir das configurações" })).not.toBeInTheDocument();
+  });
 });

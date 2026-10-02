@@ -65,9 +65,20 @@ export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string })
   if (!view) return null;
 
   const { differences } = view;
+  if (differences === null) {
+    return (
+      <section className="analysis-section workspace-settings" aria-labelledby="workspace-settings-title">
+        <h3 id="workspace-settings-title">Configurações desta perícia</h3>
+        <p className="field-hint">{view.revision ? `Cópia das configurações tirada em ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium" }).format(new Date(view.updated_at ?? ""))} (revisão ${view.revision}).` : "Perícia criada antes das configurações centrais."}</p>
+        <p role="status">As Configurações da instalação não puderam ser abertas agora. Esta perícia continua com a cópia dela; a comparação e a atualização voltam quando as Configurações abrirem.</p>
+      </section>
+    );
+  }
   const settingsChanges = differences.settings_changes;
   const profileChanges = differences.profile_changes;
   const upToDate = settingsChanges.length === 0 && profileChanges.length === 0;
+  const snapshotRevision = differences.snapshot_revision;
+  const profileRevision = differences.profile_revision;
 
   async function apply() {
     setBusy(true);
@@ -75,12 +86,12 @@ export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string })
     try {
       const next = await refreshWorkspaceSettings(workspaceId, {
         include_profile: includeProfile,
-        expected_snapshot_revision: differences.snapshot_revision,
-        expected_profile_revision: includeProfile ? differences.profile_revision : null,
+        expected_snapshot_revision: snapshotRevision,
+        expected_profile_revision: includeProfile ? profileRevision : null,
       });
       setView(next);
       setConfirming(false);
-      const profileKept = !includeProfile && next.differences.profile_changes.length > 0;
+      const profileKept = !includeProfile && (next.differences?.profile_changes.length ?? 0) > 0;
       setMessage({ kind: "status", text: includeProfile ? "Configurações e perfil atualizados. Um laudo já aprovado precisa ser revisado de novo." : profileKept ? "Configurações atualizadas; o perfil profissional desta perícia não mudou. A versão anterior continua no histórico." : "Configurações atualizadas; a versão anterior continua no histórico." });
     } catch (error) {
       setMessage({ kind: "alert", text: error instanceof SettingsApiError && error.kind === "conflict" ? "As configurações desta perícia mudaram em outra tela. Os dados foram recarregados; confira de novo." : "Não foi possível atualizar. Esta perícia continua com as configurações anteriores." });

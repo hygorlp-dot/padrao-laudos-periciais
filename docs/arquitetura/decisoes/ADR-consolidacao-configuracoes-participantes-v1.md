@@ -250,7 +250,8 @@ alerta.
 - Mudança no validador (área protegida, `word-trust-rebind`): só a imagem ancorada
   **atrás do texto** (`behindDoc="1"`) de cabeçalho/rodapé deixa de exigir a faixa
   superior/inferior da página. Em troca, ela fica presa à posição exata em cada página
-  (±2 pt) e à **ordem de desenho**: tem de ser pintada antes de toda imagem que cruza.
+  (±2 pt) e à **ordem de desenho**: tem de ser pintada antes de toda imagem e de todo
+  caminho pintado (sombreamento e bordas de tabela) que cruza.
   O texto que ela cruza já é protegido pela checagem de oclusão por raster. A faixa
   sozinha não dizia nada sobre sobreposição; a ordem de desenho diz. Âncora na frente
   do texto e imagem em linha continuam presas à faixa. Testes provam:
@@ -291,8 +292,13 @@ bloqueiam a emissão final em qualquer texto que o Word apresentaria:
 - o perfil profissional.
 
 Cada pendência diz onde está. Na emissão, uma última barreira varre o Word já
-vinculado (corpo, cabeçalhos e rodapés, com o texto juntado por parágrafo). Ela cobre
-o texto fixo de um modelo personalizado. Invariantes (`AI_PROPOSAL != PROFESSIONAL_DECISION`,
+vinculado (corpo, cabeçalhos e rodapés). O XML é lido pelo namespace, com qualquer
+prefixo; o texto é juntado por parágrafo, com tabulação e quebra como espaço, e as
+caixas de texto entram como parágrafos próprios. Ela cobre o texto fixo de um modelo
+personalizado.
+
+A captura das configurações na perícia, a atualização e o documento de teste leem a
+instalação num único retrato: seleção do modelo, perfil e ativos do mesmo estado. Invariantes (`AI_PROPOSAL != PROFESSIONAL_DECISION`,
 `ALLEGATION != FACT`, `DOCUMENTED_FACT != PERICIAL_FINDING`, proveniência, Word
 autoritativo, PDF derivado, egress privado negado) **não** são preferências e não
 aparecem como opção.

@@ -228,3 +228,24 @@ def test_acronym_and_sentence_heuristics_handle_uf_hyphen_neighbours_and_abbrevi
     long = "O perito verificou, conforme o art. 473 do Código de Processo Civil, " + " ".join(["a fissura"] * 22) + " na parede."
     sentences = [item for item in legal_editorial_preflight(_with_text(long)).findings if item.code is PreflightCode.LONG_SENTENCE]
     assert len(sentences) == 1 and sentences[0].excerpt.startswith("O perito verificou")
+
+
+_WNS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+
+
+@pytest.mark.parametrize("document_xml", [
+    f'<w:document {_WNS}><w:body><w:p><w:r><w:t>[INFORMAÇÃO NECES</w:t></w:r><w:r><w:t>SÁRIA: x]</w:t></w:r></w:p></w:body></w:document>',
+    '<ns0:document xmlns:ns0="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><ns0:body><ns0:p><ns0:r><ns0:t>[INFORMAÇÃO NECESSÁRIA: x]</ns0:t></ns0:r></ns0:p></ns0:body></ns0:document>',
+    f'<w:document {_WNS}><w:body><w:p><w:r><w:t>[INFORMAÇÃO</w:t><w:tab/><w:t>NECESSÁRIA: x]</w:t></w:r></w:p></w:body></w:document>',
+    f'<w:document {_WNS}><w:body><w:p><w:r><w:t>antes</w:t></w:r><w:r><w:pict><w:txbxContent><w:p><w:r><w:t>caixa</w:t></w:r></w:p></w:txbxContent></w:pict></w:r><w:r><w:t>[VALIDAÇÃO DO PERITO: y]</w:t></w:r></w:p></w:body></w:document>',
+    f'<w:document {_WNS}><w:body><w:p><w:r><w:t>[INFORMAÇÕES NECESSÁRIAS: z]</w:t></w:r></w:p></w:body></w:document>',
+])
+def test_bound_word_barrier_reads_by_namespace_tabs_text_boxes_and_plural(document_xml):
+    # Revisão do 2º conjunto, rodada 2, P2-b e nit do plural.
+    from io import BytesIO
+    from zipfile import ZipFile
+    from scripts.backend_contract.legal_editorial_preflight import word_pending_markers
+    output = BytesIO()
+    with ZipFile(output, "w") as archive:
+        archive.writestr("word/document.xml", document_xml)
+    assert len(word_pending_markers(output.getvalue())) == 1

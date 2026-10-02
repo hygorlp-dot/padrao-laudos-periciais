@@ -217,7 +217,8 @@ export type WorkspaceSettingsView = {
   revision: number | null;
   updated_at: string | null;
   snapshot: { reason: string; assets: Array<{ role: AssetRole; filename: string }> } | null;
-  differences: WorkspaceSettingsDifferences;
+  // null: as Configurações da instalação estão indisponíveis; o snapshot da perícia continua válido.
+  differences: WorkspaceSettingsDifferences | null;
 };
 
 const workspaceBase = (workspaceId: string) => `/app-api/v1/workspaces/${encodeURIComponent(workspaceId)}/settings-snapshot`;
@@ -225,7 +226,7 @@ const workspaceBase = (workspaceId: string) => `/app-api/v1/workspaces/${encodeU
 async function workspaceView(response: Response): Promise<WorkspaceSettingsView> {
   if (!response.ok) return failed(response);
   const value = await response.json();
-  if (!value || typeof value.differences !== "object" || !Array.isArray(value.differences?.settings_changes)) throw new SettingsApiError("unavailable");
+  if (!value || typeof value.differences !== "object" || (value.differences !== null && !Array.isArray(value.differences.settings_changes))) throw new SettingsApiError("unavailable");
   return value as WorkspaceSettingsView;
 }
 

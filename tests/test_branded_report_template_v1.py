@@ -415,7 +415,8 @@ def test_word16_real_proof_of_the_v2_and_the_custom_template():
         for index in range(count):
             page = document[index]
             textpage = page.get_textpage()
-            texts.append(textpage.get_text_range())
+            # pdfium separa linhas com \r\n e pode repetir espaços: normalizar.
+            texts.append(" ".join(textpage.get_text_range().split()))
             images.append(sum(1 for item in page.get_objects() if item.type == pdfium.raw.FPDF_PAGEOBJ_IMAGE))
             textpage.close()
             page.close()
@@ -426,9 +427,10 @@ def test_word16_real_proof_of_the_v2_and_the_custom_template():
         assert f"Página {number} de {count}" in texts[number - 1], f"rodapé da página {number}"
     # Sumário preenchido pelo Word: títulos das seções presentes.
     assert "SUMÁRIO" in "".join(texts)
+    # O título 1 sai com a caixa do perfil editorial (p.ex. TUDO EM MAIÚSCULAS).
     section = sorted(report.sections, key=lambda item: item.order)[0].title
     toc_page = next(text for text in texts if "SUMÁRIO" in text)
-    assert section.split()[0] in toc_page
+    assert section.split()[0].casefold() in toc_page.casefold()
     # Várias partes: todas na relação do item 1.
     joined = "\n".join(texts)
     for participant in report.process_record.confirmed_participants:
@@ -439,3 +441,23 @@ def test_word16_real_proof_of_the_v2_and_the_custom_template():
     custom, _custom_report = _word16_custom_word()
     custom_pdf = dr.render_final_pdf_candidate(word_content=custom, word_format="DOCX", converter=converter)
     dr.validate_final_artifact(custom_pdf, "PDF")
+
+
+@pytest.mark.parametrize(("anchor_order", "path_order", "accepted"), [
+    (0, 1, True),   # fundo atrás, sombreamento da tabela pintado por cima
+    (2, 1, False),  # fundo "atrás" pintado por cima do sombreamento
+])
+def test_behind_anchor_is_drawn_before_table_paint_it_crosses(anchor_order, path_order, accepted):
+    # Revisão do 2º conjunto, rodada 2, P2-a: sombreamento e bordas de tabela
+    # também são conteúdo do corpo; a ordem de desenho os protege.
+    signature = dr._image_signature(Image.new("RGB", (8, 8), (235, 238, 242)))
+    layout = dr._WordImageLayout(595, 842, "anchor", None, 0, 0, behind=True)
+    candidate = dr._PdfImageLayout(0, 0, 0, 595, 842, 595, 842, anchor_order)
+    shading = dr._PaintedPath(0, 72, 400, 520, 440, (200, 200, 200, 255), None, 1, False, path_order)
+    assert dr._repeatable_word_images_match(
+        document_signatures=[], document_layouts=[],
+        header_signatures=[signature], header_layouts=[layout],
+        footer_signatures=[], footer_layouts=[],
+        candidate_signatures=[signature], candidate_layouts=[candidate],
+        positioned_text=[], page_count=1, painted_paths=[shading],
+    ) is accepted
