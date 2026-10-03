@@ -2397,12 +2397,15 @@ def test_fidelity_binds_image_to_declared_word_extent_not_intrinsic_ratio() -> N
         image_height=20,
     )
 
+    # Right below its text, as Word sets a picture with no declared spacing:
+    # the picture's place is bound on both sides (#281).
     delivery_renderer._validate_pdf_fidelity(
         word,
         _image_pdf(
             "Synthetic",
             image.getvalue(),
             image_x=100,
+            image_y=620,
             image_width=40,
             image_height=20,
         ),
@@ -2646,6 +2649,8 @@ def test_fidelity_binds_inline_image_to_surrounding_source_flow(
         image.getvalue(),
         following_text="After-223",
     )
+    # The following text sits right below the picture, as Word sets it with
+    # no declared spacing: the picture's place is bound on both sides (#281).
     pdf = _image_pdf(
         "Before-223",
         image.getvalue(),
@@ -2653,7 +2658,7 @@ def test_fidelity_binds_inline_image_to_surrounding_source_flow(
         image_y=image_y,
         text_y=700,
         following_text="After-223",
-        following_text_y=600,
+        following_text_y=630,
     )
 
     if image_y == 650:
