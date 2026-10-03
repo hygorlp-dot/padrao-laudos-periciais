@@ -1,7 +1,10 @@
 {
   "schema_version": "1.0.0",
   "generated_from": "POST_MAIN_LONGITUDINAL_PRODUCT_INTEGRITY_ORACLE_V1 + V7_FINAL_RC_ORACLE_V1",
-  "current_main_sha": "08263c5566e96a2cc3f4327d351906c314d5415b",
+  "evidence_base_sha": "42de7be85462e6e8a38ac696dd3adb987b270ec0",
+  "evidence_base_semantics": "HISTORICAL_VALIDATED_COMMIT_NOT_LIVE_HEAD",
+  "evidence_base_proof": "post-main CI (core-safety, lint) green and final RC oracle at the frozen Round 3 candidate; recorded in #256 and #238",
+  "live_head_source": "python -m scripts.quality.product_maturity (reads .git at run time; never stored here)",
   "roadmap_v6_item_2": "COMPLETE",
   "roadmap_v7": {
     "tracking_issue": 256,

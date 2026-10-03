@@ -6,9 +6,14 @@ truth; it is not authorization to begin a later stage.
 
 ## Current-effective result
 
-- Protected main SHA (evidence base): `08263c5566e96a2cc3f4327d351906c314d5415b`. The frozen
-  `FINAL_RC_CANDIDATE_SHA` is the merge of the V7-5/V7-6 reconciliation and is
-  recorded in Issues #256 and #238 (a commit cannot carry its own SHA).
+- Evidence base: `config/product-maturity-v1.json` → `evidence_base_sha`. It names the
+  commit whose fresh post-main evidence (protected CI and final oracle) supports this
+  declaration; it is **evidence, not the live HEAD**. A tracked file cannot carry the
+  SHA of the commit that contains it, so the live HEAD is never stored: run
+  `python -m scripts.quality.product_maturity` to read it from `.git` and to see whether
+  the declaration is `CURRENT_EVIDENCE` (validated on this exact HEAD) or
+  `HISTORICAL_EVIDENCE` (validated on an earlier commit). The frozen
+  `FINAL_RC_CANDIDATE_SHA` and each Human RC round are recorded in Issues #256 and #238.
 - Roadmap V7 (#256), pre-RC closure:
   - V7-1 visit facts and quesitos intake (#255);
   - V7-2 F8 — a delivery-support PDF never enters the case source inventory (#253, PR #257);
@@ -35,8 +40,10 @@ truth; it is not authorization to begin a later stage.
   and no PDF.
 - Stage 10 is `IMPLEMENTED_PROPOSAL_ONLY`; it is not autonomous authority.
 - `HUMAN_RC_READY = TRUE`: every automated pre-RC step is closed. Human acceptance
-  (`HUMAN_RC_WINDOWS_V2`, #238) has not been executed; `HUMAN_RC_ACCEPTED = FALSE`,
-  no real case has been run and there is no installer (`PACKAGING_GAP`).
+  (`HUMAN_RC_WINDOWS_V2`, #238) has not passed: Rounds 1 and 2 stopped on P1 findings
+  (#266, #268), which were fixed together with #269–#273, and each later round is
+  recorded in #238. `HUMAN_RC_ACCEPTED = FALSE`, no real case has been run and there
+  is no installer (`PACKAGING_GAP`).
 - `PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE` because Stage 10 is proposal-only
   and human acceptance remains outstanding.
 - Repository visibility: GitHub reports the repository as public while earlier text
