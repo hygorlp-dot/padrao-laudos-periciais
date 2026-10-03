@@ -122,16 +122,31 @@ def _unclassified_skills(root):
     return installed - classified
 
 
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader que recusa chave duplicada (parsers divergem sobre qual vence)."""
+
+    def construct_mapping(self, node, deep=False):
+        keys = [self.construct_object(key, deep=deep) for key, _ in node.value]
+        if len(keys) != len(set(map(str, keys))):
+            raise yaml.constructor.ConstructorError(None, None, "duplicate key", node.start_mark)
+        return super().construct_mapping(node, deep=deep)
+
+
+GRANT_KEY = re.compile(r"(?im)^\ufeff?\s*-?\s*allowed[-_ ]?tools\s*:")
+
+
 def _frontmatter(path):
-    """Frontmatter YAML da Skill; ilegível falha fechado (None)."""
+    """Frontmatter YAML da Skill; forma ambígua ou ilegível falha fechado (None)."""
     text = path.read_text(encoding="utf-8")
     if not text.startswith("---"):
-        return {}
+        # BOM, linha em branco ou espaço antes do delimitador: outro parser
+        # poderia enxergar um frontmatter que este ignoraria.
+        return None if text.lstrip("\ufeff \t\r\n").startswith("---") else {}
     parts = text.split("---", 2)
     if len(parts) < 3:
         return None
     try:
-        data = yaml.safe_load(parts[1])
+        data = yaml.load(parts[1], Loader=_UniqueKeyLoader)
     except yaml.YAMLError:
         return None
     return data if isinstance(data, dict) else ({} if data is None else None)
@@ -157,7 +172,10 @@ def _egress_grant_problems(root, router=None):
             problems.append(f"FRONTMATTER_UNREADABLE {folder.name}")
             continue
         grants = _normalized_grants(data.get("allowed-tools"))
-        if grants != ALLOWED_TOOLS_ALLOWLIST.get(folder.name):
+        variants = sorted(key for key in data if str(key).lower().replace("_", "-").replace(" ", "-") in {"allowed-tools", "allowedtools"} and key != "allowed-tools")
+        mentions = len(GRANT_KEY.findall(skill_file.read_text(encoding="utf-8")))
+        expected_mentions = 1 if folder.name in ALLOWED_TOOLS_ALLOWLIST else 0
+        if grants != ALLOWED_TOOLS_ALLOWLIST.get(folder.name) or variants or mentions != expected_mentions:
             problems.append(f"TOOL_GRANT {folder.name}: {grants!r}")
     return problems
 
@@ -412,6 +430,14 @@ class SuperpowersAdversarialTest(unittest.TestCase):
             self.assertEqual(_egress_grant_problems(self.root), [f"TOOL_GRANT ui-pericial: {grant!r}"], grant)
         skill.write_text(original.replace("---\n", "---\nallowed-tools:\n  - Bash(npx:*)\n  - WebFetch\n", 1), encoding="utf-8")
         self.assertEqual(_egress_grant_problems(self.root), ["TOOL_GRANT ui-pericial: 'Bash(npx:*) WebFetch'"])
+        skill.write_text(original, encoding="utf-8")
+        for variant in ("\ufeff" + original.replace("---\n", "---\nallowed-tools: Bash\n", 1),
+                        "\n" + original.replace("---\n", "---\nallowed-tools: Bash\n", 1),
+                        original.replace("---\n", "---\nallowed-tools: Bash(npx:*)\nallowed-tools:\n", 1),
+                        original.replace("---\n", "---\nallowed_tools: Bash\n", 1),
+                        original.replace("---\n", "---\nallowedTools: Bash\n", 1)):
+            skill.write_text(variant, encoding="utf-8")
+            self.assertEqual(len(_egress_grant_problems(self.root)), 1, repr(variant[:60]))
         skill.write_text(original, encoding="utf-8")
         playwright = self.root / ".agents/skills/playwright-cli/SKILL.md"
         playwright.write_text(playwright.read_text(encoding="utf-8").replace("Bash(npx playwright:*)", "Bash(npx playwright@latest:*)"), encoding="utf-8")
