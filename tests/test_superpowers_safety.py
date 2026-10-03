@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import yaml
+
 from scripts.terceiros import verificar_professional_ux, verificar_superpowers
 from scripts.terceiros.verificar_superpowers import verificar
 
@@ -65,10 +67,13 @@ def _superpowers_errors(root):
 
 
 NETWORK_PATTERN = re.compile(r"https?://|\bcurl\b|\bwget\b|\bnpx\b|\bnpm install\b|\bpip install\b|\bgit clone\b")
-# Concessões de ferramenta em frontmatter de Skill roteável que podem gerar
-# egress. Exceção explícita e única: playwright-cli (ui:browser_qa), restrita
-# pelo AGENTS.md a executável já disponível e origem local.
-ALLOWED_TOOLS_EGRESS_EXCEPTIONS = {"playwright-cli": "Bash(npx playwright:*)"}
+# Allowlist de concessões de ferramenta (`allowed-tools`) em frontmatter de
+# Skill: nenhuma Skill concede ferramenta, salvo a linha upstream pinada do
+# playwright-cli (ui:browser_qa), restrita pelo AGENTS.md a executável já
+# disponível e origem local.
+ALLOWED_TOOLS_ALLOWLIST = {
+    "playwright-cli": "Bash(playwright-cli:*) Bash(npx playwright:*) Bash(npx --no-install playwright:*)",
+}
 AGENTS_REQUIRED_PHRASES = (
     "`browser_qa`", "origem local", "nunca `npx` que resolva pacote remoto",
     "somente referência", "`brainstorming-server`", "professional-ux-v1-blobs.json",
@@ -117,31 +122,43 @@ def _unclassified_skills(root):
     return installed - classified
 
 
-def _frontmatter_allowed_tools(path):
+def _frontmatter(path):
+    """Frontmatter YAML da Skill; ilegível falha fechado (None)."""
     text = path.read_text(encoding="utf-8")
     if not text.startswith("---"):
-        return ""
-    header = text.split("---", 2)[1]
-    match = re.search(r"^allowed-tools:\s*(.+)$", header, re.MULTILINE)
-    return match.group(1) if match else ""
+        return {}
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return None
+    try:
+        data = yaml.safe_load(parts[1])
+    except yaml.YAMLError:
+        return None
+    return data if isinstance(data, dict) else ({} if data is None else None)
 
 
-def _egress_grant_problems(root, router):
-    routable = set(router.get("material_bundle", []))
-    for profile in router.get("profiles", {}).values():
-        routable.update(profile.get("required", []))
-        for skills in profile.get("conditional", {}).values():
-            routable.update(skills)
+def _normalized_grants(value):
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return " ".join(str(item).strip() for item in value)
+    return " ".join(str(value).split())
+
+
+def _egress_grant_problems(root, router=None):
+    """Allowlist: qualquer `allowed-tools` fora do pinado falha, em qualquer forma."""
     problems = []
-    for skill in sorted(routable):
-        path = root / ".agents/skills" / skill / "SKILL.md"
-        if not path.is_file():
+    for folder in sorted(path for path in (root / ".agents/skills").iterdir() if path.is_dir()):
+        skill_file = folder / "SKILL.md"
+        if not skill_file.is_file():
             continue
-        grants = _frontmatter_allowed_tools(path)
-        risky = sorted(set(re.findall(r"Bash\((?:npx (?!--no-install)|curl|wget|npm install|pip install)[^)]*\)", grants)))
-        allowed = ALLOWED_TOOLS_EGRESS_EXCEPTIONS.get(skill)
-        if any(grant != allowed for grant in risky):
-            problems.append(f"EGRESS_TOOL_GRANT {skill}: {risky}")
+        data = _frontmatter(skill_file)
+        if data is None:
+            problems.append(f"FRONTMATTER_UNREADABLE {folder.name}")
+            continue
+        grants = _normalized_grants(data.get("allowed-tools"))
+        if grants != ALLOWED_TOOLS_ALLOWLIST.get(folder.name):
+            problems.append(f"TOOL_GRANT {folder.name}: {grants!r}")
     return problems
 
 
@@ -257,9 +274,7 @@ class SuperpowersIntegrationTest(unittest.TestCase):
                 self.assertIsNone(NETWORK_PATTERN.search((ROOT / relative).read_text(encoding="utf-8")), relative)
 
     def test_routable_skills_grant_no_egress_tool_beyond_the_explicit_exception(self):
-        router = json.loads((ROOT / ".agents/skill-router.json").read_text(encoding="utf-8"))
-        self.assertEqual(_egress_grant_problems(ROOT, router), [])
-        self.assertEqual(_frontmatter_allowed_tools(ROOT / ".agents/skills/playwright-cli/SKILL.md").count("Bash(npx playwright:*)"), 1)
+        self.assertEqual(_egress_grant_problems(ROOT), [])
 
     def test_agents_md_pins_the_professional_ux_restrictions(self):
         agents = re.sub(r"\s+", " ", (ROOT / "AGENTS.md").read_text(encoding="utf-8"))
@@ -385,12 +400,20 @@ class SuperpowersAdversarialTest(unittest.TestCase):
         self.assertEqual(_superpowers_errors(self.root), [])
         self.assertEqual(_verbatim_tree_problems(self.root, manifest, _index_modes()), ["VERBATIM_TREE_DIVERGENT dispatching-parallel-agents"])
 
-    def test_routable_skill_with_new_egress_grant_fails(self):
-        router = json.loads((self.root / ".agents/skill-router.json").read_text(encoding="utf-8"))
-        skill = self.root / ".agents/skills/vercel-react-best-practices/SKILL.md"
-        text = skill.read_text(encoding="utf-8")
-        skill.write_text(text.replace("---\n", "---\nallowed-tools: Bash(npx some-remote-pkg:*)\n", 1), encoding="utf-8")
-        self.assertEqual(_egress_grant_problems(self.root, router), ["EGRESS_TOOL_GRANT vercel-react-best-practices: ['Bash(npx some-remote-pkg:*)']"])
+    def test_any_new_tool_grant_fails_in_any_spelling(self):
+        skill = self.root / ".agents/skills/ui-pericial/SKILL.md"
+        original = skill.read_text(encoding="utf-8")
+        self.assertTrue(original.startswith("---\n"))
+        grants = ("Bash(npx:*)", "Bash", "Bash(*)", "WebFetch", "Bash(npm i:*)", "Bash(pnpm dlx foo:*)", "Bash(curl:*)")
+        for grant in grants:
+            skill.write_text(original.replace("---\n", f"---\nallowed-tools: {grant}\n", 1), encoding="utf-8")
+            self.assertEqual(_egress_grant_problems(self.root), [f"TOOL_GRANT ui-pericial: {grant!r}"], grant)
+        skill.write_text(original.replace("---\n", "---\nallowed-tools:\n  - Bash(npx:*)\n  - WebFetch\n", 1), encoding="utf-8")
+        self.assertEqual(_egress_grant_problems(self.root), ["TOOL_GRANT ui-pericial: 'Bash(npx:*) WebFetch'"])
+        skill.write_text(original, encoding="utf-8")
+        playwright = self.root / ".agents/skills/playwright-cli/SKILL.md"
+        playwright.write_text(playwright.read_text(encoding="utf-8").replace("Bash(npx playwright:*)", "Bash(npx playwright@latest:*)"), encoding="utf-8")
+        self.assertEqual(len(_egress_grant_problems(self.root)), 1)
 
     def test_upstream_commit_divergence_fails(self):
         manifest_path = self.root / "docs/terceiros/professional-ux-v1-blobs.json"
