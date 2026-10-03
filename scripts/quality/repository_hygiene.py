@@ -563,10 +563,13 @@ def fixture_findings(repo: Repository) -> tuple[list[dict], list[dict]]:
         return [], []
     findings: list[dict] = []
     violations: list[dict] = []
+    seen: set[str] = set()
     for item in validate_fixture_registry(repo.root):
         code = item["motivo"]
         if code == "FIXTURE_ORFA" and not repo.exists(item["teste"]):
             continue  # untracked local file: outside WORKTREE_BYTES_OF_GIT_INDEX_PATHS
+        if code == "REGISTRY_STALE":
+            seen.add(item["teste"])
         classification = _FIXTURE_CODES.get(code, "FIXTURE_REGISTRY_INVALID")
         if code == "REGISTRY_INVALIDO" and item["teste"].endswith("core-fixtures.json"):
             violations.append(_violation("FIXTURE_REGISTRY_UNREADABLE", item["teste"], item["detalhe"]))
@@ -576,6 +579,20 @@ def fixture_findings(repo: Repository) -> tuple[list[dict], list[dict]]:
             known=["tests/fixtures/core-fixtures.json"], risk="MEDIUM",
             action="RECONCILE_REGISTRY", confidence=PROVEN, registry_code=code,
         ))
+    # Same basis as the rest of the report: a registered fixture that exists only
+    # as an untracked local file is stale for every other checkout.
+    try:
+        entries = json.loads(repo.text("tests/fixtures/core-fixtures.json") or "").get("fixtures", [])
+    except (json.JSONDecodeError, AttributeError):
+        entries = []
+    for entry in entries:
+        path = entry.get("arquivo") if isinstance(entry, dict) else None
+        if isinstance(path, str) and path not in seen and not repo.exists(path):
+            findings.append(_finding(
+                path, "FIXTURE_REGISTRY_STALE", "fixture_registry: REGISTRY_STALE (registered file is not tracked)",
+                known=["tests/fixtures/core-fixtures.json"], risk="MEDIUM",
+                action="RECONCILE_REGISTRY", confidence=PROVEN, registry_code="REGISTRY_STALE",
+            ))
     return findings, violations
 
 

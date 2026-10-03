@@ -14,7 +14,8 @@ answers three questions without self-reference:
 - whether the declaration is current or historical: it is always
   `HISTORICAL_EVIDENCE`, because the commit that records an evidence SHA can
   never be that SHA. `LIVE_HEAD_UNAVAILABLE` when `.git` cannot be read; a HEAD
-  equal to the evidence SHA is `SELF_REFERENTIAL_DECLARATION`, a contract error.
+  equal to the evidence SHA (a declaration written but not yet committed) is
+  `SELF_REFERENTIAL_DECLARATION`, a contract error until it is committed.
 """
 from __future__ import annotations
 
@@ -52,7 +53,7 @@ def evaluate(declaration: dict, head: str | None) -> dict:
         status = LIVE_HEAD_UNAVAILABLE
     elif head == evidence:
         status = SELF_REFERENTIAL
-        errors.append("evidence_base_sha equals the live HEAD that contains it")
+        errors.append("declaration not yet committed: evidence_base_sha equals the live HEAD; commit it so it becomes historical evidence")
     else:
         status = HISTORICAL_EVIDENCE
     return {

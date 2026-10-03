@@ -243,10 +243,17 @@ def test_fixture_states_come_from_the_existing_registry(tmp_path):
         "tests/fixtures/stray.json": "{}",
         "tests/test_x.py": "def test_x():\n    'gone.json'\n",
     })
+    # Present on disk but never tracked: stale for any other checkout.
+    registry = json.loads((repo / "tests/fixtures/core-fixtures.json").read_text(encoding="utf-8"))
+    registry["fixtures"].append({**registry["fixtures"][0], "arquivo": "tests/fixtures/local_only.json"})
+    (repo / "tests/fixtures/core-fixtures.json").write_text(json.dumps(registry), encoding="utf-8")
+    (repo / "tests/fixtures/local_only.json").write_text("{}", encoding="utf-8")
     findings = audit(repo, config=_config())["findings"]
     codes = {(item["path"], item["registry_code"]) for item in findings if "registry_code" in item}
     assert ("tests/fixtures/stray.json", "FIXTURE_ORFA") in codes
     assert ("tests/fixtures/gone.json", "REGISTRY_STALE") in codes
+    assert ("tests/fixtures/local_only.json", "REGISTRY_STALE") in codes
+    assert ("tests/fixtures/local_only.json", "FIXTURE_ORFA") not in codes
 
 
 def test_skill_routing_audit_separates_installed_from_integrated(tmp_path):
