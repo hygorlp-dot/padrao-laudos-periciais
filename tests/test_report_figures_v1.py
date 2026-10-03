@@ -176,13 +176,23 @@ def test_the_text_after_a_picture_may_open_the_next_page() -> None:
     """RED_THIS_REPAIR: the next figure's caption, moved with its picture, was refused."""
     fragment = lambda page, top, text: dr._PositionedText(page, text, 100.0, top - 10, 10.0, 100.0 + len(text) * 5, top - 10, top, page_width=595.0, page_height=842.0, strict_text=text)  # noqa: E731
     positioned = [fragment(0, 520.0, "Figura 1"), fragment(1, 790.0, "Figura 2")]
-    source = dr._WordImageLayout(300.0, 300.0, "inline", "center", None, None, "Figura 1", "Figura 2", 0, 0)
+    # The product writes every caption with w:keepNext (render_word_candidate):
+    # Word keeps "Figura 2" with its own 300 pt picture, and the chain did not
+    # fit in the 128 pt left above the 72 pt margin (#281: proven, not assumed).
+    source = dr._WordImageLayout(300.0, 300.0, "inline", "center", None, None, "Figura 1", "Figura 2", 0, 0, following_keeps_with_next=True)
+    second = dr._WordImageLayout(300.0, 300.0, "inline", "center", None, None, "Figura 2", None, 0, None)
     picture = dr._PdfImageLayout(0, 147.5, 200.0, 447.5, 500.0, 595.0, 842.0)
-    assert dr._ordered_image_layouts_match([source], [picture], positioned)
+    second_picture = dr._PdfImageLayout(1, 147.5, 476.0, 447.5, 776.0, 595.0, 842.0)
+    assert dr._ordered_image_layouts_match([source, second], [picture, second_picture], positioned, 72.0)
+    # Without the declaration, or without the picture it keeps with, the
+    # caption alone would have fitted: moving it is refused.
+    free = replace(source, following_keeps_with_next=False)
+    assert not dr._ordered_image_layouts_match([free, second], [picture, second_picture], positioned, 72.0)
+    assert not dr._ordered_image_layouts_match([source], [picture], positioned, 72.0)
     elsewhere = [fragment(0, 520.0, "Figura 1"), fragment(1, 400.0, "Figura 2")]
-    assert not dr._ordered_image_layouts_match([source], [picture], elsewhere)
+    assert not dr._ordered_image_layouts_match([source, second], [picture, second_picture], elsewhere, 72.0)
     two_pages_on = [fragment(0, 520.0, "Figura 1"), fragment(2, 790.0, "Figura 2")]
-    assert not dr._ordered_image_layouts_match([source], [picture], two_pages_on)
+    assert not dr._ordered_image_layouts_match([source, second], [picture, second_picture], two_pages_on, 72.0)
 
 
 # --- Microsoft Word 16 ------------------------------------------------------------

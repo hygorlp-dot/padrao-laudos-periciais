@@ -2397,12 +2397,15 @@ def test_fidelity_binds_image_to_declared_word_extent_not_intrinsic_ratio() -> N
         image_height=20,
     )
 
+    # Right below its text, as Word sets a picture with no declared spacing:
+    # the picture's place is bound on both sides (#281).
     delivery_renderer._validate_pdf_fidelity(
         word,
         _image_pdf(
             "Synthetic",
             image.getvalue(),
             image_x=100,
+            image_y=620,
             image_width=40,
             image_height=20,
         ),
@@ -2646,6 +2649,8 @@ def test_fidelity_binds_inline_image_to_surrounding_source_flow(
         image.getvalue(),
         following_text="After-223",
     )
+    # The following text sits right below the picture, as Word sets it with
+    # no declared spacing: the picture's place is bound on both sides (#281).
     pdf = _image_pdf(
         "Before-223",
         image.getvalue(),
@@ -2653,7 +2658,7 @@ def test_fidelity_binds_inline_image_to_surrounding_source_flow(
         image_y=image_y,
         text_y=700,
         following_text="After-223",
-        following_text_y=600,
+        following_text_y=630,
     )
 
     if image_y == 650:
@@ -4903,7 +4908,7 @@ def test_absent_theme_reference_is_not_an_error() -> None:
 # through a synthetic Helvetica PDF and stays on the native Word matrix (N-09).
 
 
-def _word_flow_document(body: str) -> bytes:
+def _word_flow_document(body: str, *, settings: str | None = None) -> bytes:
     output = BytesIO()
     document = (
         '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
@@ -4918,16 +4923,25 @@ def _word_flow_document(body: str) -> bytes:
             "</Types>",
         )
         package.writestr("word/document.xml", document)
+        if settings is not None:
+            package.writestr(
+                "word/settings.xml",
+                '<w:settings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                f"{settings}</w:settings>",
+            )
     return output.getvalue()
 
 
-def _blank_paragraph_word(blanks: int, *, spacing: str = "") -> bytes:
+def _blank_paragraph_word(
+    blanks: int, *, spacing: str = "", settings: str | None = None
+) -> bytes:
     properties = f"<w:pPr>{spacing}</w:pPr>" if spacing else ""
     run = '<w:r><w:rPr><w:sz w:val="22"/></w:rPr>'
     return _word_flow_document(
         f"<w:p>{properties}{run}<w:t>Primeiro</w:t></w:r></w:p>"
         + f"<w:p>{properties}</w:p>" * blanks
-        + f"<w:p>{properties}{run}<w:t>Segundo</w:t></w:r></w:p>"
+        + f"<w:p>{properties}{run}<w:t>Segundo</w:t></w:r></w:p>",
+        settings=settings,
     )
 
 
@@ -4951,26 +4965,58 @@ def test_material_empty_paragraphs_are_quantised(blanks: int) -> None:
         delivery_renderer._validate_pdf_fidelity(word, _two_line_pdf(1))
 
 
-@pytest.mark.parametrize("blanks", (1, 3))
-def test_empty_paragraph_spacing_is_included_in_the_expected_gap(blanks: int) -> None:
-    spacing = '<w:spacing w:before="120" w:after="120"/>'
-    word = _blank_paragraph_word(blanks, spacing=spacing)
-    # 120 twips before + after == 6pt + 6pt per paragraph, on top of the line box.
-    extra = (blanks + 1) * 12.0
+_ADDITIVE_SPACING = "<w:compat><w:doNotUseHTMLParagraphAutoSpacing/></w:compat>"
 
-    delivery_renderer._validate_pdf_fidelity(
-        word,
-        _positioned_text_pdf(
+
+def _spaced_pair_pdf(blanks: int, per_boundary: float) -> bytes:
+    return _positioned_text_pdf(
+        [
             [
-                [
-                    ("Primeiro", 50.0, 780.0, 11.0, 0),
-                    ("Segundo", 50.0, 780.0 - (13.2 * (1 + blanks) + extra), 11.0, 0),
-                ]
+                ("Primeiro", 50.0, 780.0, 11.0, 0),
+                (
+                    "Segundo",
+                    50.0,
+                    780.0 - (13.2 * (1 + blanks) + (blanks + 1) * per_boundary),
+                    11.0,
+                    0,
+                ),
             ]
-        ),
+        ]
     )
+
+
+@pytest.mark.parametrize("blanks", (1, 3))
+@pytest.mark.parametrize(
+    ("settings", "per_boundary", "other_settings", "other_per_boundary"),
+    (
+        # Word's default "HTML paragraph auto spacing": 6pt after meets 6pt
+        # before and the larger one is used (#281, Word 16.0.20430).
+        (None, 6.0, _ADDITIVE_SPACING, 12.0),
+        # Opted out with w:doNotUseHTMLParagraphAutoSpacing: Word adds them.
+        (_ADDITIVE_SPACING, 12.0, None, 6.0),
+    ),
+    ids=("collapsed", "additive"),
+)
+def test_empty_paragraph_spacing_is_included_in_the_expected_gap(
+    blanks: int,
+    settings: str | None,
+    per_boundary: float,
+    other_settings: str | None,
+    other_per_boundary: float,
+) -> None:
+    spacing = '<w:spacing w:before="120" w:after="120"/>'
+    word = _blank_paragraph_word(blanks, spacing=spacing, settings=settings)
+
+    delivery_renderer._validate_pdf_fidelity(word, _spaced_pair_pdf(blanks, per_boundary))
     with pytest.raises(ValueError, match="faithfully represent"):
         delivery_renderer._validate_pdf_fidelity(word, _two_line_pdf(1))
+    # The gap is the document's: the other spacing model is not tolerated.
+    with pytest.raises(ValueError, match="faithfully represent"):
+        delivery_renderer._validate_pdf_fidelity(
+            word, _spaced_pair_pdf(blanks, other_per_boundary)
+        )
+    other = _blank_paragraph_word(blanks, spacing=spacing, settings=other_settings)
+    delivery_renderer._validate_pdf_fidelity(other, _spaced_pair_pdf(blanks, other_per_boundary))
 
 
 @pytest.mark.parametrize("line_count", (2, 3, 4))
