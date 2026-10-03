@@ -263,7 +263,7 @@ alerta.
 - Marca d'água de texto é desenhada como imagem com fonte local; sem fonte TrueType
   disponível, a geração falha fechada com mensagem.
 - Toda imagem tem descrição alternativa; a imagem de página é marcada como decorativa.
-- A prova em Word 16 real (paginação, PDF derivado fiel) é do Human RC (C2); os testes
+- A prova em Word 16 real (paginação, PDF derivado fiel) é do Human RC (passo W16); os testes
   nativos ficam pulados onde o Word não existe.
 
 ### D11. Citação longa

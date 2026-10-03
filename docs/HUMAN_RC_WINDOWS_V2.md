@@ -37,11 +37,11 @@ Depois, o uso normal é: duplo clique no atalho → abrir `http://127.0.0.1:8765
 no navegador. A janela do atalho é o processo do produto; fechá-la encerra o
 produto.
 
-## C2 — Prova Word 16 real (obrigatória desde a Round 3)
+## W16 — Prova Word 16 real (obrigatória desde a Round 3)
 
 Feita uma vez por SHA, na preparação, na mesma máquina com Word 16. Ela não conta
-como uso de terminal no fluxo avaliado. Na Round 2 este passo ficou `SKIPPED`; a
-partir da Round 3 sem ele o veredito é `BLOCKED`.
+como uso de terminal no fluxo avaliado. Sem ela, o veredito é `BLOCKED`. (Não
+confundir com o **C2** do bloco C, a interrupção durante a leitura do PJe.)
 
 ```powershell
 cd C:\SistemaPericial\app
@@ -77,7 +77,7 @@ Marque `PASS`, `FAIL` ou `N/A` em cada bloco e anote o que observou.
 |---|---|---|
 | **A. Inicialização** | Duplo clique no atalho; abrir o endereço no navegador. | Tela inicial carrega; nenhum erro técnico visível. |
 | **B. Workspace** | Criar um workspace; conferir a identificação; abrir um segundo workspace e voltar. | Criação e troca sem mistura de dados. |
-| **C. Materiais / PJe** | Importar um PDF PJe sintético; conferir o processamento; excluir uma peça e reabilitá-la. | Bytes preservados; exclusão e reabilitação visíveis; histórico não reescrito; erro nunca aparece como sucesso. |
+| **C. Materiais / PJe** | Importar um PDF PJe sintético; conferir o processamento; excluir uma peça e reabilitá-la. **C2 (obrigatório desde a Round 3; `SKIPPED` na Round 2):** importar um export PJe grande e, durante a leitura, fechar o produto (janela do atalho) e reabri-lo. | Bytes preservados; exclusão e reabilitação visíveis; histórico não reescrito; erro nunca aparece como sucesso. C2: depois de reabrir, o estado é honesto (leitura concluída ou **Tentar novamente**, sem reenviar o arquivo), sem duplicata e sem perda. |
 | **D. Processo / Imóvel** | Conferir os dados do processo extraídos. Em **Participantes**, conferir as propostas com várias partes em cada polo (autores, réus, terceiros); confirmar, corrigir, rejeitar e restaurar uma. No **Imóvel**, conferir as propostas por camada, com o trecho de origem, e confirmar só o que for do imóvel. | Fonte de cada dado identificável; nenhuma parte some nem vira outra; endereço de parte nunca aparece como endereço do imóvel; correção profissional possível. |
 | **E. Intake / Análise do Caso** | Aceitar quesitos propostos; revisar partes, alegações e documentos; confirmar ou corrigir. | Proposta de IA nunca vira decisão sozinha; revisão profissional registrada. |
 | **F. Planejamento** | Criar o plano e aprovar os itens. Depois, aceitar um quesito novo na Análise e usar **Criar novo planejamento**. | Plano anterior marcado como desatualizado e preservado; novo plano nasce sem decisões. |
@@ -107,7 +107,7 @@ promovida sem decisão), `P1` (fluxo bloqueado sem contorno pela UI), `P2`
 
 ## Onde registrar falhas
 
-- Um comentário na Issue #238 por rodada, com o C2, o checklist A–R, o SHA, as versões
+- Um comentário na Issue #238 por rodada, com a W16, o checklist A–R (incluindo o C2), o SHA, as versões
   de Windows e Word e os horários.
 - Cada `P0`/`P1` reproduzido em sua própria Issue causal (sem Issue guarda-chuva),
   com passos de reprodução pela UI.
@@ -116,7 +116,7 @@ promovida sem decisão), `P1` (fluxo bloqueado sem contorno pela UI), `P2`
 
 ## Veredito
 
-- `HUMAN_RC_WINDOWS_V2 = PASS` somente com o C2 aprovado, sem `P0`, sem `P1`
+- `HUMAN_RC_WINDOWS_V2 = PASS` somente com a W16 e o C2 aprovados, sem `P0`, sem `P1`
   material, com A–R alcançáveis pela UI, sem terminal no uso normal, com reinício,
   reabertura, Word/PDF e recovery aprovados.
 - `HUMAN_RC_WINDOWS_V2 = BLOCKED` se um `P0`/`P1` for reproduzido; o reparo segue

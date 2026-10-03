@@ -740,7 +740,9 @@ def frontend_build(root: Path) -> Path:
 def product_request(runtime, method, target, *, body=b"", headers=None):
     request_headers = dict(headers or {})
     request_headers.setdefault("Content-Length", str(len(body)))
-    connection = http.client.HTTPConnection(*runtime.address, timeout=5)
+    # Mesmo teto do cliente da ponte (PRODUCT_BRIDGE_CLIENT_TIMEOUT_SECONDS):
+    # sob coverage, no runner Windows, um handler correto pode passar de 5 s.
+    connection = http.client.HTTPConnection(*runtime.address, timeout=30)
     try:
         connection.request(method, target, body=body or None, headers=request_headers)
         response = connection.getresponse()

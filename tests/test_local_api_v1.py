@@ -50,6 +50,8 @@ WORKSPACE_ID = WorkspaceId(WORKSPACE_UUID)
 REVISION_UUID = "22222222-2222-4222-8222-222222222222"
 CREATED_AT = "2026-08-23T12:30:00+00:00"
 TOKEN = "local-test-token-with-sufficient-entropy"
+# Teto do cliente de teste da Local API: o mesmo de PRODUCT_BRIDGE_CLIENT_TIMEOUT_SECONDS.
+LOCAL_API_CLIENT_TIMEOUT_SECONDS = 30.0
 
 
 class RecordingService:
@@ -1754,14 +1756,21 @@ def http_request(
     value=None,
     raw_body=None,
     headers=None,
-    timeout=5.0,
+    timeout=None,
 ):
     """Issue a test-only request with a bounded socket-I/O timeout.
+
+    The default bound is generous (``LOCAL_API_CLIENT_TIMEOUT_SECONDS``): the
+    regression stage runs serially under coverage on a shared Windows runner,
+    where a correct handler can take more than a few seconds. A test that
+    proves a stall passes its own short ``timeout`` explicitly.
 
     ``HTTPConnection`` applies this bound to each blocking socket operation;
     it is not a wall-clock deadline for the complete request lifecycle.
     """
 
+    if timeout is None:
+        timeout = LOCAL_API_CLIENT_TIMEOUT_SECONDS
     if (
         isinstance(timeout, bool)
         or not isinstance(timeout, (int, float))
@@ -1905,6 +1914,7 @@ def test_synthetic_handler_stall_exposes_application_command_boundary(monkeypatc
                 server,
                 "POST",
                 "/v1/recovery/staging",
+                timeout=5.0,
                 raw_body=b"synthetic-package",
                 headers={
                     "Content-Type": "application/octet-stream",

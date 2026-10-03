@@ -43,8 +43,11 @@ def main() -> int:
         arguments.database, arguments.frontend, private_root=arguments.private_root,
         pje_intake=_GatedPjeIntake(arguments.gate),
         construction_defect_analysis=ConstructionDefectAnalysisAdapter(),
-        # Janela curta: a resposta "aceito, processando" chega logo.
-        config=ProductBridgeConfig(port=0, upstream_timeout_seconds=3.0),
+        # Janela de ingestao de 5 s (um terco do prazo da ponte): a resposta
+        # "aceito, processando" chega antes do prazo, e as demais requisicoes
+        # (criar pericia, ler estado) nao ficam presas a um prazo de 3 s, que
+        # estoura sob coverage no runner Windows.
+        config=ProductBridgeConfig(port=0, upstream_timeout_seconds=15.0),
     )
     try:
         runtime.start()
