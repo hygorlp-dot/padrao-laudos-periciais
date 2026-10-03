@@ -11,9 +11,10 @@ the commit that contains it, so the live HEAD is never stored: it is read from
 answers three questions without self-reference:
 - which commit was validated (`evidence_base_sha`);
 - which commit is HEAD now (`observed_repository_head`, live);
-- whether the declaration was validated on this exact HEAD
-  (`CURRENT_EVIDENCE`) or is evidence from an earlier commit
-  (`HISTORICAL_EVIDENCE`).
+- whether the declaration is current or historical: it is always
+  `HISTORICAL_EVIDENCE`, because the commit that records an evidence SHA can
+  never be that SHA. `LIVE_HEAD_UNAVAILABLE` when `.git` cannot be read; a HEAD
+  equal to the evidence SHA is `SELF_REFERENTIAL_DECLARATION`, a contract error.
 """
 from __future__ import annotations
 
@@ -28,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 DECLARATION = Path("config/product-maturity-v1.json")
 EVIDENCE_SEMANTICS = "HISTORICAL_VALIDATED_COMMIT_NOT_LIVE_HEAD"
 FORBIDDEN_KEYS = ("current_main_sha", "current_head_sha", "live_head")
-CURRENT_EVIDENCE = "CURRENT_EVIDENCE"
+SELF_REFERENTIAL = "SELF_REFERENTIAL_DECLARATION"
 HISTORICAL_EVIDENCE = "HISTORICAL_EVIDENCE"
 LIVE_HEAD_UNAVAILABLE = "LIVE_HEAD_UNAVAILABLE"
 
@@ -50,7 +51,8 @@ def evaluate(declaration: dict, head: str | None) -> dict:
     if head is None:
         status = LIVE_HEAD_UNAVAILABLE
     elif head == evidence:
-        status = CURRENT_EVIDENCE
+        status = SELF_REFERENTIAL
+        errors.append("evidence_base_sha equals the live HEAD that contains it")
     else:
         status = HISTORICAL_EVIDENCE
     return {

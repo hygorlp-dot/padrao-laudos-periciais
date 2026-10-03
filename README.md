@@ -62,7 +62,8 @@ Ainda não há instalador (`PACKAGING_GAP`).
 | [`docs/padroes/`](docs/padroes/) | regras de domínio, profissionais e de governança |
 | [`docs/arquitetura/decisoes/`](docs/arquitetura/decisoes/) | por que a arquitetura é assim |
 | [`docs/manual-operacional.md`](docs/manual-operacional.md) | fluxo operacional e fronteiras de autoridade |
-| [`docs/superpowers/plans/`](docs/superpowers/plans/README.md), `docs/reviews/`, `docs/stabilization/` | como chegamos aqui (registro histórico, não autoridade) |
+| [`docs/superpowers/plans/`](docs/superpowers/plans/README.md), `docs/reviews/`, `docs/arquitetura/planos/` | como chegamos aqui (registro histórico, não autoridade) |
+| `docs/stabilization/` | baselines e convenções de estabilização do Core, consumidas por gates (assurance) |
 | [`artifacts/`](artifacts/README.md) | evidência e saída histórica de assurance |
 
 O mapa completo e verificável fica em `config/repository-authority-v1.json` e é
@@ -97,7 +98,7 @@ não fica neste README, porque fica falso a cada merge:
   [`docs/HUMAN_RC_WINDOWS_V2.md`](docs/HUMAN_RC_WINDOWS_V2.md);
 - declaração de maturidade: [`config/product-maturity-v1.json`](config/product-maturity-v1.json)
   e [`docs/PRODUCT_MATURITY_REPORT_V1.md`](docs/PRODUCT_MATURITY_REPORT_V1.md);
-  o commit validado ali é evidência, e o HEAD vivo é calculado por
+  o commit validado ali é evidência histórica, e o HEAD vivo é calculado por
   `python -m scripts.quality.product_maturity`.
 
 ## Histórico de escopo inicial

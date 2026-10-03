@@ -24,7 +24,7 @@ O percurso acima é provado por oráculos sintéticos sobre a superfície HTTP
 `/app-api` (`tests/test_product_integration_oracle_v1.py`) e sobre o processo real
 do produto (`tests/test_v7_final_rc_oracle_v1.py`), sem chamadas diretas aos
 serviços; o terminal não faz parte do fluxo normal exercitado. Isso não prova a
-aceitação Human RC. O commit validado e o estado das rodadas ficam em
+UI/Data Layer nem a aceitação Human RC. O commit validado e o estado das rodadas ficam em
 `config/product-maturity-v1.json` e nas Issues #256 e #238, não neste manual.
 
 ## Autoridade e segurança

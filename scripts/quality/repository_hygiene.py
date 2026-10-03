@@ -22,6 +22,7 @@ import ast
 import hashlib
 import json
 import re
+import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -531,7 +532,7 @@ def schema_reachability(repo: Repository) -> tuple[dict[str, dict], list[dict]]:
         for other, text in texts:
             if other == path or text is None or other == "schemas/README.md":
                 continue
-            if any(name in text for name in names):
+            if any(name in text and re.search(rf"(?<![A-Za-z0-9_.-]){re.escape(name)}", text) for name in names):
                 kinds[_consumer_kind(other, path)].add(other)
         if "schemas/README.md" in repo._file_set and names[0] in (repo.text("schemas/README.md") or ""):
             kinds["DOCUMENTATION"].add("schemas/README.md")
@@ -564,6 +565,8 @@ def fixture_findings(repo: Repository) -> tuple[list[dict], list[dict]]:
     violations: list[dict] = []
     for item in validate_fixture_registry(repo.root):
         code = item["motivo"]
+        if code == "FIXTURE_ORFA" and not repo.exists(item["teste"]):
+            continue  # untracked local file: outside WORKTREE_BYTES_OF_GIT_INDEX_PATHS
         classification = _FIXTURE_CODES.get(code, "FIXTURE_REGISTRY_INVALID")
         if code == "REGISTRY_INVALIDO" and item["teste"].endswith("core-fixtures.json"):
             violations.append(_violation("FIXTURE_REGISTRY_UNREADABLE", item["teste"], item["detalhe"]))
@@ -727,6 +730,11 @@ def generated_findings(repo: Repository, config: dict) -> list[dict]:
 
 
 def _primary_class(path: str, config: dict, python: dict, frontend: dict, schemas: dict) -> str:
+    # An exact-path historical entry overrides a broader authority prefix
+    # (for example an expired protocol inside docs/padroes/).
+    for entry in config["historical"]:
+        if "path" in entry and _match_entry(path, entry):
+            return "HISTORICAL"
     for entry in config["current_authority"]:
         if _match_entry(path, entry):
             return "CURRENT_AUTHORITY"
@@ -975,7 +983,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(render_markdown(report), end="")
     if errors:
-        print("\n".join(f"OUTPUT_SCHEMA_INVALID: {error}" for error in errors))
+        print("\n".join(f"OUTPUT_SCHEMA_INVALID: {error}" for error in errors), file=sys.stderr)
     if arguments.check and (errors or report["invariant_violations"]):
         return 1
     return 0

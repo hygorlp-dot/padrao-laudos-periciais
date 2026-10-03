@@ -16,6 +16,7 @@ from pathlib import Path
 SHA_HEX = r"[0-9a-f]{40}"
 _ENTRY_FIXED = 62
 _EXTENDED_FLAG = 0x4000
+_SKIP_WORKTREE = 0x4000  # bit of the extended flag word (index v3+)
 _NAME_MASK = 0x0FFF
 _MODE_TYPE_MASK = 0o170000
 _MODE_DIRECTORY = 0o040000
@@ -85,7 +86,9 @@ def read_index(root: Path) -> tuple[IndexEntry, ...]:
         raise GitWorktreeError("index unavailable") from exc
     if len(data) < 32 or data[:4] != b"DIRC":
         raise GitWorktreeError("index signature")
-    if hashlib.sha1(data[:-20]).digest() != data[-20:]:
+    trailer = data[-20:]
+    # index.skipHash (git >= 2.40, implied by feature.manyFiles) writes a zero trailer.
+    if trailer != bytes(20) and hashlib.sha1(data[:-20]).digest() != trailer:
         raise GitWorktreeError("index checksum")
     version, count = struct.unpack(">II", data[4:12])
     if version not in {2, 3, 4}:
@@ -104,6 +107,10 @@ def read_index(root: Path) -> tuple[IndexEntry, ...]:
         if flags & _EXTENDED_FLAG:
             if version < 3:
                 raise GitWorktreeError("extended flag in index v2")
+            extended = struct.unpack(">H", data[cursor:cursor + 2])[0]
+            if extended & _SKIP_WORKTREE:
+                # Sparse checkout: the worktree is partial, so no reachability verdict is safe.
+                raise GitWorktreeError("sparse checkout (skip-worktree entries) is not supported")
             cursor += 2
         if version == 4:
             strip, cursor = _varint(data, cursor)

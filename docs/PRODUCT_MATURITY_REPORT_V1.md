@@ -10,9 +10,9 @@ truth; it is not authorization to begin a later stage.
   commit whose fresh post-main evidence (protected CI and final oracle) supports this
   declaration; it is **evidence, not the live HEAD**. A tracked file cannot carry the
   SHA of the commit that contains it, so the live HEAD is never stored: run
-  `python -m scripts.quality.product_maturity` to read it from `.git` and to see whether
-  the declaration is `CURRENT_EVIDENCE` (validated on this exact HEAD) or
-  `HISTORICAL_EVIDENCE` (validated on an earlier commit). The frozen
+  `python -m scripts.quality.product_maturity` to read it from `.git`; the declaration is
+  always reported as `HISTORICAL_EVIDENCE` (validated on an earlier commit, as any commit
+  that records it must be), together with both SHAs. The frozen
   `FINAL_RC_CANDIDATE_SHA` and each Human RC round are recorded in Issues #256 and #238.
 - Roadmap V7 (#256), pre-RC closure:
   - V7-1 visit facts and quesitos intake (#255);

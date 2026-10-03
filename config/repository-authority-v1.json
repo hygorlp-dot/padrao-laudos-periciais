@@ -14,7 +14,8 @@
     {"path": "docs/HUMAN_RC_WINDOWS_V2.md", "role": "HUMAN_RC_SCRIPT"},
     {"path": "schemas/README.md", "role": "SCHEMA_FAMILIES"},
     {"prefix": "checklists/", "role": "HUMAN_CONTROLS"},
-    {"path": "config/repository-authority-v1.json", "role": "AUTHORITY_MAP"}
+    {"path": "config/repository-authority-v1.json", "role": "AUTHORITY_MAP"},
+    {"path": "docs/PRODUCT_MATURITY_REPORT_V1.md", "role": "MATURITY_DECLARATION_REPORT_TEMPORAL"}
   ],
   "agent_wrappers": {
     "target": "AGENTS.md",
@@ -22,6 +23,7 @@
     "paths": ["CLAUDE.md", "CODEX.md", "CURSOR.md", "GEMINI.md", "WINDSURF.md"]
   },
   "historical": [
+    {"path": "docs/padroes/protocolo-autonomia-phase-b.md", "role": "EXPIRED_PHASE_B_ENVELOPE"},
     {"prefix": "docs/superpowers/plans/", "status_readme": "docs/superpowers/plans/README.md", "role": "ENGINEERING_PLANS"},
     {"prefix": "docs/reviews/", "role": "PAST_REVIEWS"},
     {"prefix": "docs/arquitetura/planos/", "role": "PAST_ARCHITECTURE_PLANS"},
@@ -32,7 +34,6 @@
     "artifacts/README.md": "STATUS: EVIDENCE / ASSURANCE / HISTORICAL OUTPUT"
   },
   "generated_evidence": [
-    {"path": "docs/PRODUCT_MATURITY_REPORT_V1.md", "role": "MATURITY_REPORT_DERIVED_FROM_CONFIG"},
     {"path": "artifacts/native-word-matrix-v1.json", "role": "PROTECTED_NATIVE_WORD_MATRIX"},
     {"path": "docs/stabilization/golden-forensic-corpus-v1-coverage.md", "role": "GENERATED_COVERAGE_MAP"}
   ],

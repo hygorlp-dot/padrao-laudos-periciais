@@ -131,8 +131,10 @@ candidate, execution on a real case.
 No commercial brand, name, sigla, logo or tagline is defined for the product.
 The interface uses only the neutral functional descriptor "Sistema Pericial".
 Visual identity configured by the expert in Configurações (logo, watermark,
-background, header, footer, cover) applies to that expert's Word reports; it is
-the expert's identity, not a product brand. Voice: concise, professional,
+background, header, footer, cover) applies to that expert's Word reports
+generated from the default template, taken from each case's snapshot; a custom
+Word template selected by the expert is the visual authority instead (ADR D8).
+It is the expert's identity, not a product brand. Voice: concise, professional,
 technical and action-oriented in Brazilian Portuguese; never a generic SaaS
 dashboard, CRM, AI product or marketing page.
 
