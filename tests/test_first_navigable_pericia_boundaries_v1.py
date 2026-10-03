@@ -78,6 +78,8 @@ def test_frontend_network_access_is_narrow_and_never_contains_local_api_token():
             "frontend/src/data/deliverySnapshot.ts",
             "frontend/src/data/fieldMobile.ts",
             "frontend/src/data/inspectionSession.ts",
+        # #270: configurações da instalação, mesmo contrato same-origin /app-api.
+        "frontend/src/data/installationSettings.ts",
         "frontend/src/data/materials.ts",
             "frontend/src/data/pericialPlanning.ts",
             "frontend/src/data/photoLibrary.ts",
@@ -112,6 +114,10 @@ def test_process_case_domain_fields_stay_out_of_bridge_and_in_exact_frontend_mod
         # Property UF and professional court labels are presentation text;
         # ProcessCase remains the only writer of the ten process fields.
         "frontend/src/data/propertyRecord.ts",
+        # Cadastros em tribunais e UF do contato profissional são texto do
+        # perfil da instalação (#270), não campos do ProcessCase.
+        "frontend/src/workspaces/SettingsView.tsx",
+        "frontend/src/workspaces/WorkspaceSettingsPanel.tsx",
         "frontend/src/workspaces/ExpertProfileSetup.tsx",
         "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",

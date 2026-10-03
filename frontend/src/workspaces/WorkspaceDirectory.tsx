@@ -95,6 +95,10 @@ export function WorkspaceDirectory() {
       if (request.signal.aborted) return;
       setFormError(errorMessage(error));
       setSubmitting(false);
+      if (error instanceof WorkspaceApiError && error.kind === "settings-not-captured") {
+        // A perícia existe: a lista mostra a verdade, sem esconder o problema.
+        listWorkspaces().then((workspaces) => setState({ kind: "ready", workspaces }), () => undefined);
+      }
     } finally {
       if (createRequestRef.current === request) {
         createRequestRef.current = null;
@@ -148,6 +152,10 @@ export function WorkspaceDirectory() {
                 <div>
                   <h2 id="workspace-directory-title">Nenhuma perícia cadastrada</h2>
                   <p>Crie uma perícia para iniciar um workspace técnico local.</p>
+                  <p>
+                    Antes da primeira perícia, preencha seu perfil e sua identidade visual em{" "}
+                    <a className="text-action" href="/configuracoes" onClick={navigate}>Configurações</a>: cada perícia nova já começa com eles.
+                  </p>
                   {/* Base vazia é exatamente o cenário da restauração: máquina
                       nova, disco trocado, banco perdido. Sem esta saída, o
                       backup guardado não teria como voltar. */}
@@ -182,6 +190,10 @@ export function WorkspaceDirectory() {
                     </li>
                   ))}
                 </ul>
+                <p>
+                  Os padrões das próximas perícias ficam em{" "}
+                  <a className="text-action" href="/configuracoes" onClick={navigate}>Configurações</a>.
+                </p>
                 <p>
                   Precisa recuperar trabalho interrompido?{" "}
                   <a className="text-action" href="/recuperacao" onClick={navigate}>

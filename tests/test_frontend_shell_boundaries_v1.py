@@ -53,6 +53,8 @@ def test_frontend_production_source_has_no_secret_or_unbounded_network_capabilit
             "frontend/src/data/deliverySnapshot.ts",
             "frontend/src/data/fieldMobile.ts",
             "frontend/src/data/inspectionSession.ts",
+        # #270: configurações da instalação, mesmo contrato same-origin /app-api.
+        "frontend/src/data/installationSettings.ts",
             "frontend/src/data/materials.ts",
             "frontend/src/data/pericialPlanning.ts",
             "frontend/src/data/photoLibrary.ts",

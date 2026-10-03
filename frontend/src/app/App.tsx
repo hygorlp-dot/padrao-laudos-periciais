@@ -4,6 +4,7 @@ import { resolveRoute, type ShellRoute } from "../routes/routeCatalog";
 import { AppShell } from "../ui/AppShell";
 import { PageHeader } from "../ui/PageHeader";
 import { WorkspaceDirectory } from "../workspaces/WorkspaceDirectory";
+import { SettingsView } from "../workspaces/SettingsView";
 import { WorkspaceRecoveryView } from "../workspaces/WorkspaceRecoveryView";
 import { WorkspaceView } from "../workspaces/WorkspaceView";
 import { navigate, useCurrentPath } from "./router";
@@ -33,6 +34,17 @@ export function App() {
         <article className="route-view" aria-labelledby="page-title">
           <PageHeader route={resolved.route} />
           <WorkspaceRecoveryView />
+        </article>
+      </AppShell>
+    );
+  }
+
+  if (resolved.kind === "settings") {
+    return (
+      <AppShell currentPath={resolved.pathname} currentRoute={resolved.route}>
+        <article className="route-view" aria-labelledby="page-title">
+          <PageHeader route={resolved.route} />
+          <SettingsView />
         </article>
       </AppShell>
     );

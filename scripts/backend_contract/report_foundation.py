@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from enum import StrEnum
+import hashlib
 import json
 import re
 from typing import Any, TypeVar
@@ -144,6 +145,83 @@ class ReportSourceSnapshot:
             raise ValueError("report pathology binding is invalid")
 
 
+_UF = re.compile(r"[A-Z]{2}")
+_EMAIL = re.compile(r"[^@\s]{1,64}@[^@\s]{1,190}\.[^@\s]{2,24}")
+_PROFILE_TEXT_LIMIT = 200
+
+
+def _optional_text(value: object, limit: int = _PROFILE_TEXT_LIMIT) -> bool:
+    return value is None or (_text(value) and value == value.strip() and len(value) <= limit)
+
+
+@dataclass(frozen=True, slots=True)
+class CourtRegistration:
+    """Um cadastro de perito num tribunal; um profissional atua em varios."""
+    court: str
+    registration: str
+    label: str
+    active: bool
+    # Entrada vinda do campo unico `court_registration` antigo: o tribunal nao
+    # foi informado separadamente e o texto e preservado exatamente.
+    legacy: bool = False
+
+    def __post_init__(self):
+        if not _optional_text(self.registration) or self.registration is None or not _optional_text(self.label):
+            raise ValueError("court registration is invalid")
+        if type(self.active) is not bool or type(self.legacy) is not bool:
+            raise ValueError("court registration flags are invalid")
+        if self.legacy:
+            if self.court != "":
+                raise ValueError("a legacy court registration has no separate court")
+        elif not _optional_text(self.court, 80) or self.court is None:
+            raise ValueError("court registration court is invalid")
+
+    @property
+    def line(self) -> str:
+        return self.registration if self.legacy else f"{self.court} — {self.registration}"
+
+
+@dataclass(frozen=True, slots=True)
+class ProfessionalContact:
+    email: str | None
+    phone: str | None
+    office_name: str | None
+    city: str | None
+    state: str | None
+
+    def __post_init__(self):
+        if not all(_optional_text(getattr(self, name)) for name in ("email", "phone", "office_name", "city", "state")):
+            raise ValueError("professional contact is invalid")
+        if self.email is not None and _EMAIL.fullmatch(self.email) is None:
+            raise ValueError("professional e-mail is invalid")
+        if self.state is not None and _UF.fullmatch(self.state) is None:
+            raise ValueError("professional contact state is invalid")
+
+    @property
+    def line(self) -> str:
+        place = "/".join(item for item in (self.city, self.state) if item)
+        return " · ".join(item for item in (self.email, self.phone, self.office_name, place) if item)
+
+
+@dataclass(frozen=True, slots=True)
+class ProfilePresentation:
+    """O que o documento mostra do perfil; coletar uma vez nao e expor sempre."""
+    show_registration_cover: bool
+    show_registration_signature: bool
+    show_registration_header: bool
+    show_court_registration_header: bool
+    show_phone_header: bool
+    show_email_header: bool
+    show_email_footer: bool
+
+    def __post_init__(self):
+        if any(type(getattr(self, item.name)) is not bool for item in fields(self)):
+            raise ValueError("profile presentation is invalid")
+
+
+DEFAULT_PROFILE_PRESENTATION = ProfilePresentation(True, True, True, False, False, False, False)
+
+
 @dataclass(frozen=True, slots=True)
 class ExpertMasterProfile:
     profile_id: str
@@ -153,11 +231,57 @@ class ExpertMasterProfile:
     registration: str
     court_registration: str
     contact_line: str
+    # Evolucao compativel (#270): ausente significa perfil anterior, gravado sem
+    # estes campos; o mapping omite a chave para preservar o digest antigo.
+    signature_name: str | None = None
+    professional_council: str | None = None
+    council_state: str | None = None
+    national_registration: str | None = None
+    court_registrations: tuple[CourtRegistration, ...] | None = None
+    contact: ProfessionalContact | None = None
+    presentation: ProfilePresentation | None = None
 
     def __post_init__(self):
         _all_text(self, ("profile_id", "full_name", "professional_title", "registration", "court_registration", "contact_line"))
         if type(self.revision) is not int or self.revision < 1:
             raise ValueError("expert profile revision is invalid")
+        if not all(_optional_text(getattr(self, name), 120) for name in ("signature_name", "professional_council", "national_registration")):
+            raise ValueError("expert profile identity is invalid")
+        if self.council_state is not None and (type(self.council_state) is not str or _UF.fullmatch(self.council_state) is None):
+            raise ValueError("expert profile council state is invalid")
+        if self.court_registrations is not None and (
+            type(self.court_registrations) is not tuple or not self.court_registrations or len(self.court_registrations) > 32
+            or any(type(item) is not CourtRegistration for item in self.court_registrations)
+        ):
+            raise ValueError("expert court registrations are invalid")
+        if self.contact is not None and type(self.contact) is not ProfessionalContact:
+            raise ValueError("expert contact is invalid")
+        if self.presentation is not None and type(self.presentation) is not ProfilePresentation:
+            raise ValueError("expert presentation is invalid")
+
+    @property
+    def display_signature_name(self) -> str:
+        return self.signature_name or self.full_name
+
+    @property
+    def effective_presentation(self) -> ProfilePresentation:
+        return self.presentation or DEFAULT_PROFILE_PRESENTATION
+
+    @property
+    def active_court_registrations(self) -> tuple[CourtRegistration, ...]:
+        if self.court_registrations is None:
+            return (CourtRegistration("", self.court_registration, "Cadastro informado", True, True),)
+        return tuple(item for item in self.court_registrations if item.active)
+
+
+def court_registration_line(entries: tuple[CourtRegistration, ...]) -> str:
+    """A linha de exibicao derivada da colecao: fonte unica, sem digitar duas vezes."""
+    return "; ".join(item.line for item in entries if item.active) or "; ".join(item.line for item in entries)
+
+
+def legacy_court_registrations(value: str) -> tuple[CourtRegistration, ...]:
+    """Migracao explicita: o texto antigo vira uma entrada legada, sem perda."""
+    return (CourtRegistration("", value.strip(), "Cadastro informado anteriormente", True, True),)
 
 
 EDITORIAL_PRESET_ID = "JUSTICA_PLURAL_CHAPTER_4"
@@ -201,6 +325,76 @@ class EditorialTypography:
 DEFAULT_EDITORIAL_TYPOGRAPHY = EditorialTypography(14, 12, 11, True, 12, 6, 6)
 
 
+class HeadingCase(StrEnum):
+    """Caixa do titulo como politica editorial por nivel, nunca hard-coded."""
+    PRESERVE = "PRESERVE"
+    UPPER = "UPPER"
+    TITLE_CASE = "TITLE_CASE"
+    SENTENCE_CASE = "SENTENCE_CASE"
+
+
+_LOWERCASE_TITLE_WORDS = frozenset({"a", "à", "ao", "aos", "as", "às", "com", "da", "das", "de", "do", "dos", "e", "em", "na", "nas", "no", "nos", "o", "os", "ou", "para", "por", "sem", "sob", "sobre"})
+
+
+def apply_heading_case(text: str, case: HeadingCase) -> str:
+    """Aplica a caixa sem mudar palavras; siglas em maiusculas sao preservadas."""
+    if case is HeadingCase.PRESERVE:
+        return text
+    if case is HeadingCase.UPPER:
+        return text.upper()
+    words = text.split(" ")
+    result = []
+    for index, word in enumerate(words):
+        if len(word) > 1 and word.isupper():
+            result.append(word)
+        elif case is HeadingCase.SENTENCE_CASE:
+            result.append(word[:1].upper() + word[1:].lower() if index == 0 else word.lower())
+        elif index > 0 and word.lower() in _LOWERCASE_TITLE_WORDS:
+            result.append(word.lower())
+        else:
+            result.append(word[:1].upper() + word[1:].lower())
+    return " ".join(result)
+
+
+@dataclass(frozen=True, slots=True)
+class EditorialLayout:
+    """Geometria de pagina, controle de paragrafo, caixa dos titulos e citacao longa.
+
+    Ausente no perfil significa comportamento anterior (`LEGACY_EDITORIAL_LAYOUT`):
+    cabecalho e rodape a 1,25 cm e titulo 1 em caixa-alta. Os valores padrao novos
+    seguem `padrao-visual-word.md` (cabecalho 1,25 cm, rodape 0,87 cm) e
+    `padrao-estrutura-laudo.md` (caixa-alta so no titulo de capitulo).
+    """
+    header_distance_cm: float
+    footer_distance_cm: float
+    paragraph_space_before_pt: int
+    keep_with_next: bool
+    widow_orphan_control: bool
+    heading1_case: HeadingCase
+    heading2_case: HeadingCase
+    heading3_case: HeadingCase
+    heading1_page_break_before: bool
+    long_quote_indent_cm: float
+    long_quote_font_pt_delta: int
+    long_quote_line_spacing: float
+
+    def __post_init__(self):
+        if not _within(self.header_distance_cm, 0.5, 3) or not _within(self.footer_distance_cm, 0.5, 3):
+            raise ValueError("editorial header and footer distances are invalid")
+        if type(self.paragraph_space_before_pt) is not int or not 0 <= self.paragraph_space_before_pt <= 24:
+            raise ValueError("editorial paragraph spacing is invalid")
+        if any(type(value) is not bool for value in (self.keep_with_next, self.widow_orphan_control, self.heading1_page_break_before)):
+            raise ValueError("editorial paragraph controls are invalid")
+        if any(type(value) is not HeadingCase for value in (self.heading1_case, self.heading2_case, self.heading3_case)):
+            raise ValueError("editorial heading case is invalid")
+        if not _within(self.long_quote_indent_cm, 0, 6) or type(self.long_quote_font_pt_delta) is not int or not 0 <= self.long_quote_font_pt_delta <= 3 or self.long_quote_line_spacing not in EDITORIAL_LINE_SPACINGS:
+            raise ValueError("editorial long quote is invalid")
+
+
+LEGACY_EDITORIAL_LAYOUT = EditorialLayout(1.25, 1.25, 0, True, True, HeadingCase.UPPER, HeadingCase.PRESERVE, HeadingCase.PRESERVE, False, 4.0, 1, 1.0)
+DEFAULT_EDITORIAL_LAYOUT = EditorialLayout(1.25, 0.87, 0, True, True, HeadingCase.UPPER, HeadingCase.PRESERVE, HeadingCase.PRESERVE, False, 4.0, 1, 1.0)
+
+
 @dataclass(frozen=True, slots=True)
 class EditorialProfile:
     profile_id: str
@@ -221,6 +415,7 @@ class EditorialProfile:
     # Written only when the expert configured it, so every profile persisted
     # before keeps its exact mapping and digest.
     typography: EditorialTypography | None = None
+    layout: EditorialLayout | None = None
 
     def __post_init__(self):
         _all_text(self, ("profile_id", "font_family", "alignment", "page_size"))
@@ -238,12 +433,15 @@ class EditorialProfile:
             raise ValueError("automatic hyphenation must be disabled")
         if self.typography is not None and type(self.typography) is not EditorialTypography:
             raise ValueError("editorial typography is invalid")
+        if self.layout is not None and type(self.layout) is not EditorialLayout:
+            raise ValueError("editorial layout is invalid")
         # The preset keeps its meaning: its identity names exactly its values.
         if self.profile_id == EDITORIAL_PRESET_ID and (
             (self.font_family, self.alignment, self.body_font_pt, self.table_font_pt, self.caption_font_pt) != ("Arial", "JUSTIFIED", 11, 10, 9)
             or (self.line_spacing, self.first_line_indent_cm) != (1.15, 1.25)
             or margins != (2, 2, 3, 2)
             or self.typography not in (None, DEFAULT_EDITORIAL_TYPOGRAPHY)
+            or self.layout not in (None, DEFAULT_EDITORIAL_LAYOUT)
         ):
             raise ValueError("editorial preset values cannot change")
         _texts(self.overrides)
@@ -251,6 +449,10 @@ class EditorialProfile:
     @property
     def effective_typography(self) -> EditorialTypography:
         return self.typography or DEFAULT_EDITORIAL_TYPOGRAPHY
+
+    @property
+    def effective_layout(self) -> EditorialLayout:
+        return self.layout or LEGACY_EDITORIAL_LAYOUT
 
 
 @dataclass(frozen=True, slots=True)
@@ -761,13 +963,26 @@ def editorial_profile_from_mapping(value: object) -> EditorialProfile:
         # An absent typography is written by omission; an explicit null would
         # give one profile two mappings and two digests.
         raise ValueError("EditorialProfile typography is invalid")
+    if "layout" not in editorial:
+        editorial["layout"] = None
+    elif type(editorial["layout"]) is dict:
+        layout = dict(editorial["layout"])
+        for name in ("heading1_case", "heading2_case", "heading3_case"):
+            layout[name] = HeadingCase(layout[name]) if type(layout.get(name)) is str else layout.get(name)
+        for name in ("header_distance_cm", "footer_distance_cm", "long_quote_indent_cm", "long_quote_line_spacing"):
+            if type(layout.get(name)) is int:
+                layout[name] = float(layout[name])
+        editorial["layout"] = _construct(EditorialLayout, layout)
+    else:
+        raise ValueError("EditorialProfile layout is invalid")
     return _construct(EditorialProfile, editorial, tuples={"overrides": None})
 
 
 def editorial_profile_to_mapping(value: EditorialProfile) -> dict[str, Any]:
     mapping = json.loads(json.dumps(asdict(value), ensure_ascii=False))
-    if mapping["typography"] is None:
-        del mapping["typography"]
+    for name in ("typography", "layout"):
+        if mapping[name] is None:
+            del mapping[name]
     return mapping
 
 
@@ -810,7 +1025,7 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     if data["findings_table"] is not None:
         data["findings_table"] = tuple(_construct(ReportFindingRow, item, nested={"provenance": ReportProvenance}) for item in data["findings_table"])
     data["source_snapshot"] = _construct(ReportSourceSnapshot, data["source_snapshot"])
-    data["expert_profile"] = _construct(ExpertMasterProfile, data["expert_profile"])
+    data["expert_profile"] = expert_profile_from_mapping(data["expert_profile"])
     data["editorial_profile"] = editorial_profile_from_mapping(data["editorial_profile"])
     context = []
     for item in data["context_matrix"]:
@@ -882,22 +1097,50 @@ def report_process_to_mapping(value: ReportProcess) -> dict[str, Any]:
     return mapping
 
 
+_PROFILE_OPTIONAL = ("signature_name", "professional_council", "council_state", "national_registration", "court_registrations", "contact", "presentation")
+
+
 def expert_profile_from_mapping(value: object) -> ExpertMasterProfile:
-    return _construct(ExpertMasterProfile, value)
+    if type(value) is not dict:
+        raise ValueError("ExpertMasterProfile mapping is invalid")
+    data = dict(value)
+    required = {item.name for item in fields(ExpertMasterProfile)} - set(_PROFILE_OPTIONAL)
+    if not required <= set(data) <= required | set(_PROFILE_OPTIONAL) or any(data.get(name, 0) is None for name in _PROFILE_OPTIONAL):
+        # Ausente e escrito por omissao; nulo seria um segundo mapping.
+        raise ValueError("ExpertMasterProfile fields are invalid")
+    if "court_registrations" in data:
+        if type(data["court_registrations"]) is not list:
+            raise ValueError("ExpertMasterProfile court registrations are invalid")
+        data["court_registrations"] = tuple(_construct(CourtRegistration, item) for item in data["court_registrations"])
+    if "contact" in data:
+        data["contact"] = _construct(ProfessionalContact, data["contact"])
+    if "presentation" in data:
+        data["presentation"] = _construct(ProfilePresentation, data["presentation"])
+    return ExpertMasterProfile(**data)
+
+
+def expert_profile_digest(profile: ExpertMasterProfile) -> str:
+    """Identidade exata do perfil que gerou um modelo com texto fixo de cabeçalho (#271)."""
+    canonical = json.dumps(expert_profile_to_mapping(profile), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def expert_profile_to_mapping(value: ExpertMasterProfile) -> dict[str, Any]:
     if type(value) is not ExpertMasterProfile:
         raise TypeError("expected ExpertMasterProfile")
-    return asdict(value)
+    mapping = json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    for name in _PROFILE_OPTIONAL:
+        if mapping[name] is None:
+            del mapping[name]
+    return mapping
 
 
 def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     if type(value) is not ReportSnapshot:
         raise TypeError("expected ReportSnapshot")
     mapping = json.loads(json.dumps(asdict(value), ensure_ascii=False))
-    if mapping["editorial_profile"]["typography"] is None:
-        del mapping["editorial_profile"]["typography"]
+    mapping["expert_profile"] = expert_profile_to_mapping(value.expert_profile)
+    mapping["editorial_profile"] = editorial_profile_to_mapping(value.editorial_profile)
     for answer in mapping["answers"]:
         if answer["question_text"] is None:
             del answer["question_text"]

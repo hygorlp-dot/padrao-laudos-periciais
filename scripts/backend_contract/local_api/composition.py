@@ -18,6 +18,9 @@ from ..application.photo_library import CuratePhotoLibrary, GetPhotoLibrary, Rea
 from ..application.site_location import ConfirmSiteLocation, GetSiteLocation, ProposeSiteLocation
 from ..application.property_record import GetPropertyRecord, GetPropertyProposals, SavePropertyRecord
 from ..application.case_document_texts import CaseDocumentTexts
+from ..application.legal_editorial_preflight import GetReportPreflight
+from ..application.installation_settings import CreateWorkspaceWithSettings, GenerateTestDocument, InstallationSettings, WorkspaceSettings, validate_installation_template
+from ..infrastructure.installation_store import SQLiteInstallationStore, installation_database_path
 from ..application.process_participants import DecideProcessParticipants, GetProcessParticipants, ParticipantProposals
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.workspace_recovery import (
@@ -223,6 +226,8 @@ class LocalApiRuntime:
     _recovery_sessions: object | None = field(default=None, repr=False)
     # #266: o executor das derivacoes pertence ao runtime, nao a conexao.
     _derivations: object | None = field(default=None, repr=False)
+    # #270: configurações da instalação, em arquivo próprio fora das perícias.
+    _installation_store: object | None = field(default=None, repr=False)
     _closed: bool = False
     _lifecycle_lock: object = field(
         default_factory=Lock,
@@ -254,6 +259,8 @@ class LocalApiRuntime:
                 try:
                     if self._private_store is not None:
                         self._private_store.close()
+                    if self._installation_store is not None:
+                        self._installation_store.close()
                 finally:
                     try:
                         self._store.close()
@@ -283,7 +290,11 @@ class LocalApiRuntime:
                         if self._private_store is not None:
                             self._private_store.close()
                     finally:
-                        self._store.close()
+                        try:
+                            if self._installation_store is not None:
+                                self._installation_store.close()
+                        finally:
+                            self._store.close()
 
     def __enter__(self) -> LocalApiRuntime:
         return self
@@ -335,6 +346,16 @@ def build_local_api(
     except BaseException:
         store.close()
         raise
+    try:
+        installation_store = SQLiteInstallationStore(installation_database_path(database_path))
+    except RepositoryError:
+        # Arquivo da instalação ilegível: a Central fica indisponível (503) e a
+        # criação de perícia é recusada, mas as perícias existentes abrem com o
+        # snapshot que cada uma capturou. Os dados do caso não dependem dele.
+        installation_store = None
+    except BaseException:
+        store.close()
+        raise
     private_store = None
     offline_registry = None
     if private_root is not None:
@@ -348,6 +369,7 @@ def build_local_api(
         except Exception:
             if private_store is not None:
                 private_store.close()
+            installation_store.close()
             store.close()
             raise
     import_case_document = None
@@ -430,6 +452,14 @@ def build_local_api(
     )
     append_artifact_revision = AppendArtifactRevision(store.revisions, local_clock, local_ids)
     get_latest_artifact = GetLatestArtifact(store.revisions)
+    installation_settings = InstallationSettings(installation_store, local_clock, local_ids, validate_installation_template) if installation_store is not None else None
+    workspace_settings = (
+        WorkspaceSettings(
+            installation_settings, store.revisions, get_latest_artifact, generic_store,
+            private_store.authority_guard if private_store is not None else nullcontext, local_clock, local_ids,
+        )
+        if generic_store is not None else None
+    )
     list_artifact_revisions = ListArtifactRevisions(store.revisions)
     get_case_analysis = GetCaseAnalysis(get_latest_artifact, case_analysis_documents)
     save_pericial_planning = SavePericialPlanning(
@@ -729,7 +759,11 @@ def build_local_api(
     discard_workspace_recovery = DiscardWorkspaceRecovery(recovery_sessions, store.workspaces)
     abandon_workspace_recovery = AbandonWorkspaceRecovery(discard_workspace_recovery)
     services = LocalApiServices(
-        create_workspace=CreateWorkspace(store.workspaces, local_clock, local_ids),
+        create_workspace=CreateWorkspaceWithSettings(CreateWorkspace(store.workspaces, local_clock, local_ids), workspace_settings),
+        installation_settings=installation_settings,
+        workspace_settings=workspace_settings,
+        generate_test_document=GenerateTestDocument(installation_settings) if installation_settings is not None else None,
+        get_report_preflight=GetReportPreflight(get_report_snapshot, workspace_settings),
         get_workspace=GetWorkspace(store.workspaces),
         list_workspaces=ListWorkspaces(store.workspaces),
         append_artifact_revision=append_artifact_revision,
@@ -837,6 +871,7 @@ def build_local_api(
             local_ids,
             get_construction_defect_analysis,
             get_property_record=get_property_record, get_process_record=get_report_process,
+            get_workspace_settings=workspace_settings,
         ),
         review_report_snapshot=ReviewReportSnapshot(get_report_snapshot, save_report_snapshot, local_clock, local_ids),
         start_report_version=StartReportVersion(
@@ -848,7 +883,7 @@ def build_local_api(
         list_report_sources=ListReportSources(get_case_analysis, get_inspection_session, get_technical_snapshot, get_construction_defect_analysis),
         export_report_audit_trail=ExportReportAuditTrail(get_report_snapshot),
         store_delivery_template=generic_store,
-        store_default_delivery_template=StoreDefaultDeliveryTemplate(get_report_snapshot, generic_store),
+        store_default_delivery_template=StoreDefaultDeliveryTemplate(get_report_snapshot, generic_store, workspace_settings, get_private_content),
         get_site_location=get_site_location,
         get_photo_library=get_photo_library,
         ai_assistant_status=AIAssistantStatus(),
@@ -928,4 +963,5 @@ def build_local_api(
         _private_store=private_store,
         _recovery_sessions=recovery_sessions,
         _derivations=derivation_queue,
+        _installation_store=installation_store,
     )

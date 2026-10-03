@@ -10,7 +10,9 @@ export type WorkspaceApiErrorKind =
   | "unavailable"
   | "local-failure"
   | "invalid-request"
-  | "invalid-response";
+  | "invalid-response"
+  // A perícia foi criada, mas a cópia das configurações padrão falhou (#270).
+  | "settings-not-captured";
 
 export class WorkspaceApiError extends Error {
   readonly kind: WorkspaceApiErrorKind;
@@ -140,12 +142,51 @@ export async function createWorkspace(name: string, signal?: AbortSignal): Promi
   if (typeof name !== "string" || !name.trim()) {
     throw new WorkspaceApiError("invalid-request", "Informe o nome da perícia");
   }
-  return parseWorkspace(
-    await requestJson(WORKSPACES_ENDPOINT, {
+  let response: Response;
+  try {
+    response = await fetch(WORKSPACES_ENDPOINT, {
+      credentials: "same-origin",
+      cache: "no-store",
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
       signal,
-    }),
-  );
+    });
+  } catch {
+    throw new WorkspaceApiError("unavailable", "Serviço local indisponível");
+  }
+  if (response.status === 500) {
+    // A perícia existe, mas sem a cópia das configurações: dizer isso, nunca
+    // apresentar como criação completa nem como falha total.
+    let body: unknown;
+    try { body = await response.json(); } catch { body = null; }
+    const value = body as { error?: { code?: string }; workspace?: unknown } | null;
+    if (value?.error?.code === "WORKSPACE_SETTINGS_CAPTURE_FAILED") {
+      throw new WorkspaceApiError(
+        "settings-not-captured",
+        "A perícia foi criada, mas as configurações padrão não foram copiadas para ela. Ela aparece na lista; abra-a e use “Atualizar a partir das configurações” antes de gerar o laudo.",
+      );
+    }
+    throw mappedError(500);
+  }
+  if (response.status === 503) {
+    const code = await response.json().then((value: { error?: { code?: string } } | null) => value?.error?.code ?? "", () => "");
+    if (code === "SETTINGS_UNAVAILABLE") {
+      // Recusada antes de criar: nenhuma perícia pela metade.
+      throw new WorkspaceApiError("unavailable", "As configurações da instalação não puderam ser abertas, então nenhuma perícia foi criada. As perícias existentes continuam disponíveis.");
+    }
+    throw mappedError(503);
+  }
+  if (!response.ok) {
+    throw mappedError(response.status);
+  }
+  if (!response.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
+    throw new WorkspaceApiError("invalid-response", "Resposta local inválida");
+  }
+  try {
+    return parseWorkspace(await response.json());
+  } catch (error) {
+    if (error instanceof WorkspaceApiError) throw error;
+    throw new WorkspaceApiError("invalid-response", "Resposta local inválida");
+  }
 }

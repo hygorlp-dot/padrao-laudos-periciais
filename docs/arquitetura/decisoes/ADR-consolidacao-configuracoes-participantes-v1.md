@@ -151,6 +151,11 @@ conteúdo privado do workspace).
   que fixou a revisão anterior fica `stale`.
 - O backup da perícia não leva as configurações globais. Elas não são exportadas
   junto do workspace.
+- Arquivo da instalação ilegível (schema, checksum ou sequência) falha fechado só para
+  as configurações: a Central e o documento de teste respondem 503
+  `SETTINGS_UNAVAILABLE`, e criar perícia é recusado **antes** de criar (nenhuma
+  perícia pela metade). As perícias existentes abrem e entregam com o snapshot que
+  cada uma capturou, porque nada do caso depende do arquivo da instalação.
 
 ### D4. Evolução compatível dos contratos
 
@@ -175,8 +180,10 @@ conteúdo privado do workspace).
 - Decisão: o preset `JUSTICA_PLURAL_CHAPTER_4` mantém os valores da #131 (sua
   identidade nomeia exatamente esses valores). A Central oferece "Aplicar geometria
   do modelo legado aprovado", que preenche um perfil `CUSTOM` com as medidas
-  observadas. As distâncias de cabeçalho/rodapé novas seguem o documento visual
-  (1,25/0,87). Perfil sem `layout` mantém 1,25/1,25, como antes.
+  observadas (2,54/3/2,54/2,54). As distâncias de cabeçalho/rodapé novas seguem o
+  documento visual (1,25/0,87). Perfil sem `layout` mantém 1,25/1,25, como antes.
+- Implementado: o botão chama-se "Aplicar geometria do laudo legado aprovado" e grava
+  o perfil `CUSTOM` que o servidor fornece (`legacy_geometry`), sem valores na tela.
 
 ### D6. Caixa dos títulos
 
@@ -200,6 +207,32 @@ Com modelo Word personalizado selecionado, logo, marca d'água, fundo, cabeçalh
 rodapé globais **não** são aplicados por cima. A UI informa: "Modelos Word
 personalizados preservam a identidade visual e a formatação existentes no arquivo."
 
+- O modelo padrão da perícia sai do snapshot dela (#270), nunca do padrão global do
+  dia: sem snapshot, V1 byte-idêntico; com snapshot, V2 (`PRODUCT-DEFAULT-REPORT-V2`)
+  com a identidade capturada; com modelo próprio selecionado, o arquivo capturado
+  volta como está.
+- A seleção `CUSTOM` cita o SHA-256 do modelo guardado, e nenhuma gravação desfaz
+  isso: com ela ativa, trocar, remover ou restaurar o modelo é recusado (409
+  `TEMPLATE_IN_USE`, "escolha o modelo padrão do produto antes"), e restaurar uma
+  seleção que cita outro arquivo também. A criação da perícia confere a seleção antes
+  de copiar qualquer byte.
+- O envio do modelo próprio faz uma vinculação de teste com o laudo fictício. Word
+  válido que não vincula como modelo enviado é recusado na hora (`TEMPLATE_FIELDS`),
+  e não na entrega.
+- O modelo próprio declara o seu `TEMPLATE_ID` e vincula os campos dos modelos
+  enviados (`EXPERT_FULL_NAME`, `EXPERT_REGISTRATION`, `REPORT_ID`). O identificador
+  de um modelo do produto é recusado, porque implica outro conjunto de campos.
+- O V2 tem conjunto fixo de campos (`PROCESS_NUMBER`, `COURT`,
+  `PARTICIPANTS_ACTIVE`, `PARTICIPANTS_PASSIVE` e os três do perito). A capa sempre
+  identifica processo, juízo e polos; as opções de capa escolhem logotipo, perito,
+  cidade e ano.
+- O texto fixo do cabeçalho vem do perfil profissional do laudo aprovado que gerou o
+  modelo. O modelo carrega `EXPERT_PROFILE_DIGEST`, e a vinculação recusa um laudo
+  com outro perfil: o cabeçalho nunca mostra outra identidade em silêncio.
+- O que da identidade aparece (registro, cadastros, telefone, e-mail) é decidido só
+  pelo `ProfilePresentation` do perfil profissional. As opções de cabeçalho e rodapé
+  da instalação tratam apenas de disposição: uma só autoridade de exposição.
+
 ### D9. Marca d'água, fundo e imagens no Word
 
 Marca d'água e fundo são desenhados como imagem ancorada atrás do texto na parte de
@@ -208,6 +241,43 @@ cabeçalho, para aparecer igual no Word e no PDF. A cor de fundo de página do W
 no corpo, centralizada, em baixa opacidade. Opacidade acima do limite seguro gera
 alerta.
 
+- Fundo, marca d'água e linha separadora formam **uma** imagem de página PNG, opaca e
+  pré-composta (a opacidade é aplicada na mistura com o fundo). O validador de
+  fidelidade recusa transparência, máscara e recorte; uma imagem opaca não precisa de
+  exceção.
+- A linha separadora entra nessa imagem, e não como borda de parágrafo, porque o
+  validador só aceita traços pintados vinculados a tabelas.
+- Mudança no validador (área protegida, `word-trust-rebind`): só a imagem ancorada
+  **atrás do texto** (`behindDoc="1"`) de cabeçalho/rodapé deixa de exigir a faixa
+  superior/inferior da página. Em troca, ela fica presa à posição exata em cada página
+  (±2 pt) e à **ordem de desenho**: tem de ser pintada antes de toda imagem e de todo
+  caminho pintado (sombreamento e bordas de tabela) que cruza.
+  O texto que ela cruza já é protegido pela checagem de oclusão por raster. A faixa
+  sozinha não dizia nada sobre sobreposição; a ordem de desenho diz. Âncora na frente
+  do texto e imagem em linha continuam presas à faixa. Testes provam:
+  - aceitos: fundo claro atrás do texto; âncora atrás desenhada antes da foto; âncora
+    que não cruza a foto;
+  - recusados: imagem opaca por cima do texto; fundo escuro atrás do texto; imagem
+    deslocada; âncora "atrás" pintada por cima de uma foto do corpo; âncora na frente
+    fora da faixa.
+- Marca d'água de texto é desenhada como imagem com fonte local; sem fonte TrueType
+  disponível, a geração falha fechada com mensagem.
+- Toda imagem tem descrição alternativa; a imagem de página é marcada como decorativa.
+- A prova em Word 16 real (paginação, PDF derivado fiel) é do Human RC (passo W16); os testes
+  nativos ficam pulados onde o Word não existe.
+
+### D11. Citação longa
+
+Parágrafo de afirmação que o perito inicia com "> " vira bloco `QUOTE`: estilo
+"Quote" quando o modelo o tem; senão, formatação direta com recuo, redução de fonte e
+entrelinha do `EditorialLayout`. O texto da afirmação não muda; só a apresentação.
+
+### D12. Documento de teste
+
+`GET /v1/installation/test-document` gera um Word com um laudo fictício
+(`sample_report`), pelo mesmo caminho do laudo real (modelo V2 ou o modelo próprio,
+vinculação e validação final). Nada é gravado; nada pertence a uma perícia.
+
 ### D10. Perfil jurídico-editorial
 
 `LEGAL_EDITORIAL_PROFILE_V1` (rótulo "Sistema Pericial — CNJ/TRF5") é política
@@ -215,7 +285,20 @@ complementar ao `EditorialProfile` e ao `padrao-redacao.md`, não um segundo sis
 texto. O preflight só **avisa** (sigla sem forma extensa na primeira ocorrência,
 latinismo, estrangeirismo, expressão rebuscada, período e parágrafo longos) e nunca
 reescreve texto técnico. Marcadores `[INFORMAÇÃO NECESSÁRIA` e `[VALIDAÇÃO DO PERITO`
-bloqueiam a emissão final. Invariantes (`AI_PROPOSAL != PROFESSIONAL_DECISION`,
+bloqueiam a emissão final em qualquer texto que o Word apresentaria:
+- afirmações e respostas;
+- os demais textos do corpo (participantes, imóvel, referências, legendas, quesitos);
+- os campos de capa e cabeçalho do modelo (juízo, polos, identidade do perito);
+- o perfil profissional.
+
+Cada pendência diz onde está. Na emissão, uma última barreira varre o Word já
+vinculado (corpo, cabeçalhos e rodapés). O XML é lido pelo namespace, com qualquer
+prefixo; o texto é juntado por parágrafo, com tabulação e quebra como espaço, e as
+caixas de texto entram como parágrafos próprios. Ela cobre o texto fixo de um modelo
+personalizado.
+
+A captura das configurações na perícia, a atualização e o documento de teste leem a
+instalação num único retrato: seleção do modelo, perfil e ativos do mesmo estado. Invariantes (`AI_PROPOSAL != PROFESSIONAL_DECISION`,
 `ALLEGATION != FACT`, `DOCUMENTED_FACT != PERICIAL_FINDING`, proveniência, Word
 autoritativo, PDF derivado, egress privado negado) **não** são preferências e não
 aparecem como opção.
@@ -241,5 +324,6 @@ obrigatória CNJ".
   apenas por atualização.
 - A configuração global é auditável (histórico append-only) e nunca reescreve uma
   perícia existente.
-- O schema SQLite passa à versão 2. Bancos versão 1 migram ao abrir; um schema
-  desconhecido continua falhando fechado.
+- O banco das perícias não muda de schema. A instalação ganha um arquivo SQLite
+  próprio (schema 1), que falha fechado com schema desconhecido.
+- Pendência aberta no texto bloqueia a renderização do Word final em qualquer perfil.

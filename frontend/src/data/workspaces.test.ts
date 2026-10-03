@@ -57,6 +57,13 @@ describe("workspace data boundary", () => {
     expect(request.headers).toEqual({ "Content-Type": "application/json" });
   });
 
+  test("an unreadable installation refuses creation before anything exists and says why", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(503, { error: { code: "SETTINGS_UNAVAILABLE" } })));
+    const failure = await createWorkspace("Nova").catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WorkspaceApiError);
+    expect((failure as WorkspaceApiError).message).toMatch(/nenhuma perícia foi criada/);
+  });
+
   test("gets one workspace through a canonical URL segment", async () => {
     const fetchSpy = vi.fn().mockResolvedValue(jsonResponse(200, WORKSPACE));
     vi.stubGlobal("fetch", fetchSpy);

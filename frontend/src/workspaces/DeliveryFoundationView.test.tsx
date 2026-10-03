@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { DeliveryFoundationView } from "./DeliveryFoundationView";
+import { templateManifest } from "../data/deliverySnapshot";
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const snapshot = {
@@ -54,7 +55,7 @@ describe("delivery foundation workbench", () => {
     const calls: Array<{ url: string; body?: string }> = [];
     vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input); calls.push({ url, body: init?.body ? String(init.body) : undefined });
-      if (url.endsWith("/delivery-templates/default")) return Promise.resolve(response(201, { template: { workspace_id: ID, content_id: "55555555-5555-4555-8555-555555555555", original_filename: "modelo-padrao-laudo.docx", byte_size: 4000, checksum_sha256: "e".repeat(64), media_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }, manifest: { schema_version: "1.0.0", template_id: "PRODUCT-DEFAULT-REPORT-V1", output_kind: "DOCX", bindings: [] } }));
+      if (url.endsWith("/delivery-templates/default")) return Promise.resolve(response(201, { template: { workspace_id: ID, content_id: "55555555-5555-4555-8555-555555555555", original_filename: "modelo-padrao-laudo.docx", byte_size: 4000, checksum_sha256: "e".repeat(64), media_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }, manifest: templateManifest("PRODUCT-DEFAULT-REPORT-V1", "DOCX") }));
       if (url.endsWith("/delivery-snapshot") && init?.method === "POST") return Promise.resolve(response(201, { revision: 1, updated_at: "2026-08-31T12:00:00Z", snapshot: { ...snapshot, state: "DRAFT", artifacts: [], package: { manifest_version: "1.0.0", artifact_ids: [] } } }));
       return Promise.resolve(response(404, {}));
     }));
@@ -63,6 +64,23 @@ describe("delivery foundation workbench", () => {
     expect(await screen.findByRole("heading", { name: "Entrega do laudo" })).toBeInTheDocument();
     const start = calls.find((call) => call.url.endsWith("/delivery-snapshot") && call.body);
     expect(JSON.parse(start!.body!)).toMatchObject({ template_content_id: "55555555-5555-4555-8555-555555555555", manifest: { template_id: "PRODUCT-DEFAULT-REPORT-V1" } });
+  });
+
+  test("a case with captured branding starts with the branded default template and its cover bindings", async () => {
+    const calls: Array<{ url: string; body?: string }> = [];
+    vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input); calls.push({ url, body: init?.body ? String(init.body) : undefined });
+      if (url.endsWith("/delivery-templates/default")) return Promise.resolve(response(201, { template: { workspace_id: ID, content_id: "55555555-5555-4555-8555-555555555555", original_filename: "modelo-padrao-laudo.docx", byte_size: 4000, checksum_sha256: "e".repeat(64), media_type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" }, manifest: templateManifest("PRODUCT-DEFAULT-REPORT-V2", "DOCX") }));
+      if (url.endsWith("/delivery-snapshot") && init?.method === "POST") return Promise.resolve(response(201, { revision: 1, updated_at: "2026-08-31T12:00:00Z", snapshot: { ...snapshot, state: "DRAFT", artifacts: [], package: { manifest_version: "1.0.0", artifact_ids: [] } } }));
+      return Promise.resolve(response(404, {}));
+    }));
+    render(<DeliveryFoundationView workspaceId={ID} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Usar o modelo padrão do produto" }));
+    expect(await screen.findByRole("heading", { name: "Entrega do laudo" })).toBeInTheDocument();
+    const start = calls.find((call) => call.url.endsWith("/delivery-snapshot") && call.body);
+    const manifest = JSON.parse(start!.body!).manifest;
+    expect(manifest.template_id).toBe("PRODUCT-DEFAULT-REPORT-V2");
+    expect(manifest.bindings.map((item: { field: string }) => item.field)).toContain("PARTICIPANTS_ACTIVE");
   });
 
   const word = snapshot.artifacts[0];

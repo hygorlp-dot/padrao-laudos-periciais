@@ -19,6 +19,8 @@ export type ResolvedRoute =
   | { kind: "workspace"; pathname: string; workspaceId: string; route: ShellRoute }
   // A recuperação existe FORA de qualquer perícia: base vazia é o cenário dela.
   | { kind: "recovery"; pathname: "/recuperacao"; workspaceId?: undefined; route: ShellRoute }
+  // Configurações da instalação: padrões fora de qualquer perícia (#270).
+  | { kind: "settings"; pathname: "/configuracoes"; workspaceId?: undefined; route: ShellRoute }
   | { kind: "missing"; pathname: string };
 
 const CANONICAL_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -204,7 +206,19 @@ export const RECOVERY_ROUTE: ShellRoute = {
   kind: "home",
 };
 
+export const SETTINGS_ROUTE: ShellRoute = {
+  path: "/configuracoes",
+  index: "00",
+  label: "Configurações",
+  description:
+    "Padrões do seu trabalho para as próximas perícias: perfil profissional, identidade visual, documento Word e linguagem.",
+  kind: "home",
+};
+
 export function resolveRoute(pathname: string): ResolvedRoute {
+  if (pathname === "/configuracoes") {
+    return { kind: "settings", pathname: "/configuracoes", workspaceId: undefined, route: SETTINGS_ROUTE };
+  }
   if (pathname === "/recuperacao") {
     // Máquina nova, disco trocado, banco perdido: não há perícia de onde
     // partir. Amarrar a restauração a uma perícia existente a tornaria

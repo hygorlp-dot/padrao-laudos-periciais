@@ -1,7 +1,7 @@
 """Application authority for upstream-bound canonical report revisions."""
 
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, replace
+from dataclasses import dataclass, replace
 import hashlib
 import json
 from pathlib import Path
@@ -82,7 +82,10 @@ def report_upstream_digest(value: object) -> str:
     elif type(value) is ConstructionDefectAnalysisSnapshot:
         mapping = construction_defect_analysis_to_mapping(value)
     elif type(value) is ExpertMasterProfile:
-        mapping = asdict(value)
+        # O mapping canonico omite os campos opcionais vazios (#270): o digest
+        # e o mesmo checksum da revisao gravada e o mesmo de um perfil anterior
+        # a esses campos, entao laudos ja aprovados nao ficam desatualizados.
+        mapping = expert_profile_to_mapping(value)
     else:
         raise TypeError("unsupported Report Snapshot upstream authority")
     encoded = json.dumps(mapping, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -1158,6 +1161,15 @@ class StartReportSnapshot:
     get_construction_defect_analysis: object | None = None
     get_property_record: object | None = None
     get_process_record: object | None = None
+    # #270: o padrao editorial capturado pela pericia; sem snapshot, o preset.
+    get_workspace_settings: object | None = None
+
+    def _editorial_profile(self, workspace_id) -> EditorialProfile:
+        if self.get_workspace_settings is not None:
+            _, settings = self.get_workspace_settings.current(workspace_id)
+            if settings is not None:
+                return settings.editorial_profile
+        return EditorialProfile("JUSTICA_PLURAL_CHAPTER_4", "Arial", 11, 10, 9, "JUSTIFIED", 1.15, 1.25, "A4", 2, 2, 3, 2, False, ())
 
     def execute(self, workspace_id):
         current = _current(
@@ -1178,7 +1190,7 @@ class StartReportSnapshot:
         snapshot = ReportSnapshot(
             schema_version="1.0.0", report_id=f"REPORT-{str(self.ids.new_uuid()).upper()}", workspace_id=str(workspace_id),
             source_snapshot=current[-1], expert_profile=profile,
-            editorial_profile=EditorialProfile("JUSTICA_PLURAL_CHAPTER_4", "Arial", 11, 10, 9, "JUSTIFIED", 1.15, 1.25, "A4", 2, 2, 3, 2, False, ()),
+            editorial_profile=self._editorial_profile(workspace_id),
             context_matrix=context, sections=sections, claims=(), answers=(), review_decisions=(), state=ReportState.DRAFT,
             coverage=ReportCoverage(14, 0, 0, 0, 0, sum(item.required_by_cpc473 for item in sections), 0, 6, 0, False, ("Report draft has no material claims.",)),
             upstream_stale=False, upstream_stale_reasons=(), property_record=_capture_property(self.get_property_record, workspace_id), process_record=_capture_process(self.get_process_record, workspace_id),

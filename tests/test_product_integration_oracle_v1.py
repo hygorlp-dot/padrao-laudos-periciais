@@ -692,6 +692,17 @@ def test_longitudinal_oracle_starts_with_synthetic_pje_through_product_bridge(tm
             assert status == 200, report
         assert report["snapshot"]["state"] == "APPROVED"
         report_digest = _digest(report["snapshot"])
+        # LEGAL_EDITORIAL_PREFLIGHT (#272): laudo aprovado sem pendência aberta;
+        # a pré-verificação não grava nada e declara a natureza das fontes.
+        status, preflight = _bridge_http(runtime, "GET", f"{root}/report-snapshot/preflight")
+        assert status == 200 and preflight["blocking"] is False, preflight
+        assert preflight["profile_label"] == "Sistema Pericial — CNJ/TRF5"
+        assert {item["nature"] for item in preflight["sources"]} == {"RECOMMENDATORY", "MANDATORY", "INSTITUTIONAL"}
+        # BRANDING_WORD (#271): perícia nova tem snapshot de configurações e o
+        # modelo padrão dela é o V2, com a capa vinculada aos polos.
+        status, default_template = _bridge_http(runtime, "POST", f"{root}/delivery-templates/default", {})
+        assert status == 201 and default_template["manifest"]["template_id"] == "PRODUCT-DEFAULT-REPORT-V2", default_template
+        assert {item["field"] for item in default_template["manifest"]["bindings"]} >= {"PARTICIPANTS_ACTIVE", "PARTICIPANTS_PASSIVE"}
 
         manifest = _fixture("report-template-manifest-v1.json")
         template_bytes = _bound_template_docm(manifest["template_id"])

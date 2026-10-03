@@ -103,6 +103,23 @@ _FIELD_VALUES = {
     "PARTICIPANTS_PASSIVE": _participants_summary("PASSIVE"),
     "PARTICIPANTS_OTHER": _participants_summary("OTHER"),
 }
+
+
+def template_field_texts(report) -> dict[str, str]:
+    """O texto que cada campo de modelo levaria para a capa ou o cabeçalho.
+
+    Campo que a perícia não consegue preencher fica de fora: a vinculação já o
+    recusa quando um modelo o usa.
+    """
+    texts = {}
+    for field, value in _FIELD_VALUES.items():
+        try:
+            texts[field] = value(report)
+        except ValueError:
+            continue
+    return texts
+
+
 # Pagination a professional document cannot do without; the other protected
 # fields stay protected whenever a template carries them.
 _REQUIRED_FIELD_NAMES = {"TOC", "PAGE", "NUMPAGES"}
@@ -389,6 +406,14 @@ def bind_report_template(template_bytes: bytes, report: ReportSnapshot, manifest
     identity_values = [text.strip() for item in identity_properties for text in item.itertext() if text.strip()]
     if identity_values != [manifest.template_id]:
         raise ValueError("template identity does not match manifest")
+    # O modelo padrao com identidade visual traz texto fixo do perfil profissional
+    # no cabecalho; so vincula ao laudo cujo perfil e exatamente aquele.
+    profile_properties = [item for item in custom_root.iter() if item.attrib.get("name") == "EXPERT_PROFILE_DIGEST"]
+    if profile_properties:
+        from .report_foundation import expert_profile_digest
+        declared = [text.strip() for item in profile_properties for text in item.itertext() if text.strip()]
+        if declared != [expert_profile_digest(report.expert_profile)]:
+            raise ValueError("template identity belongs to another expert profile")
     before_mechanics = _mechanics(before)
     if not _REQUIRED_FIELD_NAMES <= set(before_mechanics[0]) <= _FIELD_NAMES:
         raise ValueError("protected Word fields are incomplete")

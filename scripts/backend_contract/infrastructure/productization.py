@@ -20,6 +20,7 @@ from ..photo_library import photo_library_from_mapping
 from ..site_location import site_location_from_mapping
 from ..property_record import property_record_from_mapping, property_proposals
 from ..process_participants import participants_register_from_mapping
+from ..installation_settings import workspace_settings_from_mapping
 from ..application.models import (
     ArtifactRevision,
     PericiaWorkspace,
@@ -333,6 +334,7 @@ _ARTIFACT_VALIDATORS = {
     "SITE_LOCATION_V1": site_location_from_mapping,
     "PROPERTY_RECORD_V1": property_record_from_mapping,
     "PROCESS_PARTICIPANTS_V1": participants_register_from_mapping,
+    "WORKSPACE_SETTINGS_SNAPSHOT_V1": workspace_settings_from_mapping,
     "TECHNICAL_SNAPSHOT_V1": technical_snapshot_from_mapping,
     "AI_RUN": lambda value: _validate_ai_envelope(value, "AI_RUN"),
     "AI_PROPOSAL": lambda value: _validate_ai_envelope(value, "AI_PROPOSAL"),
@@ -455,6 +457,7 @@ _CANONICAL_PRODUCT_ARTIFACT_IDS = {
     "SITE_LOCATION_V1": "SITE-LOCATION",
     "PROPERTY_RECORD_V1": "PROPERTY-RECORD",
     "PROCESS_PARTICIPANTS_V1": "PROCESS-PARTICIPANTS",
+    "WORKSPACE_SETTINGS_SNAPSHOT_V1": "WORKSPACE-SETTINGS",
     "TECHNICAL_SNAPSHOT_V1": "TECHNICAL-SNAPSHOT",
 }
 _DOMAIN_REVISION_FIELDS = {
@@ -1006,6 +1009,13 @@ class VerifyWorkspaceBackup:
                             for item in representative.provenance:
                                 if item.content_id == source.content_id and item.page == source.page and (item.source_start, item.source_end, representative.name) not in derived:
                                     raise RepositoryIntegrityError("backup participant source evidence diverges from document bytes")
+            elif record.artifact_kind == "WORKSPACE_SETTINGS_SNAPSHOT_V1":
+                # O snapshot cita a copia exata de cada ativo de marca dentro da
+                # pericia: sem os bytes no pacote, a pericia restaurada nao
+                # reabriria com a identidade visual que capturou.
+                settings = workspace_settings_from_mapping(thaw_payload(record.payload))
+                if settings.workspace_id != str(workspace_id) or any(private_authority.get(item.content_id) != item.sha256 for item in settings.assets):
+                    raise RepositoryIntegrityError("backup workspace settings asset authority is incomplete")
             elif record.artifact_kind == "PJE_INTAKE_V1":
                 # O inventario nomeia a fonte privada de que foi derivado. Sem
                 # este fecho, um backup podia ser certificado intacto e restaurar

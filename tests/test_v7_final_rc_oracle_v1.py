@@ -323,3 +323,114 @@ def test_realistic_document_ingestion_lifecycle_survives_a_real_kill_mid_process
     finally:
         product.kill()
 
+
+
+def test_round3_oracle_settings_branding_participants_and_property_through_the_real_process(tmp_path):
+    """Human RC Round 3: o que a rodada nova testa, pelo processo real do produto.
+
+    GLOBAL_SETTINGS, GLOBAL_ASSETS, WORKSPACE_SETTINGS_SNAPSHOT (padrão novo não
+    reescreve perícia antiga), BRANDING_WORD / WATERMARK_WORD / HEADER_FOOTER_WORD
+    pelo documento de teste, MULTI_PARTICIPANT_PROCESS / OTHER_PARTICIPANT /
+    REPRESENTATIVE_LINKS pela capa PJe, PROPERTY_CONTEXT_EXTRACTION sem endereço
+    de parte, RESTART e BACKUP com o snapshot da perícia.
+    """
+    from io import BytesIO
+    from zipfile import ZipFile
+    from PIL import Image
+    from tests.test_process_participants_v1 import _HEADER, _cover
+    from tests.test_property_record_v1 import _text_pdf
+
+    def png(color):
+        buffer = BytesIO()
+        Image.new("RGBA", (240, 80), color).save(buffer, "PNG")
+        return buffer.getvalue()
+
+    def upload(product, role, content, expected):
+        return product.call("POST", f"/v1/installation/assets/{role}", raw=content, headers={"Content-Type": "image/png", "X-Document-Filename": f"{role.lower()}.png", "X-Expected-Revision": expected})
+
+    product = _start(tmp_path, "round3")
+    try:
+        profile = {
+            "profile_id": "EXPERT-PROFILE-001", "revision": 1, "full_name": "Perita Sintética Round 3", "professional_title": "Engenheira civil",
+            "registration": "CREA-PE 000000", "court_registration": "TRF5 — 001", "contact_line": "perita@exemplo.invalid",
+            "court_registrations": [{"court": "TRF5", "registration": "001", "label": "Perita do juízo", "active": True, "legacy": False}],
+            "contact": {"email": "perita@exemplo.invalid", "phone": None, "office_name": None, "city": "Recife", "state": "PE"},
+        }
+        status, overview = product.call("PUT", "/v1/installation/settings/EXPERT_PROFILE_DEFAULT_V1", {"expected_revision": None, "payload": profile})
+        assert status == 200 and overview["readiness"]["expert_profile"] == "CONFIGURED"
+        assert upload(product, "PRIMARY_LOGO", png((31, 58, 77, 255)), "none")[0] == 201
+        assert upload(product, "WATERMARK", png((31, 58, 77, 255)), "none")[0] == 201
+        presentation = overview["settings"]["DOCUMENT_PRESENTATION_PROFILE_V1"]["payload"]
+        presentation["watermark"] = {**presentation["watermark"], "enabled": True, "kind": "IMAGE", "opacity": 0.08}
+        assert product.call("PUT", "/v1/installation/settings/DOCUMENT_PRESENTATION_PROFILE_V1", {"expected_revision": None, "payload": presentation})[0] == 200
+
+        # Documento de teste: Word real, com logotipo, imagem de página e "Página X de Y".
+        status, document = product.call("GET", "/v1/installation/test-document")
+        assert status == 200 and isinstance(document, bytes)
+        with ZipFile(BytesIO(document)) as package:
+            header = package.read("word/header1.xml").decode("utf-8")
+            footer = package.read("word/footer1.xml").decode("utf-8")
+            assert 'behindDoc="1"' in header and "Perita Sintética Round 3" in header
+            assert "Página " in footer and "NUMPAGES" in footer
+            assert sum(name.startswith("word/media/") for name in package.namelist()) >= 2
+
+        status, a = product.call("POST", "/v1/workspaces", {"name": "Round 3 A"})
+        assert status == 201
+        root = f"/v1/workspaces/{a['workspace_id']}"
+        status, settings_a = product.call("GET", root + "/settings-snapshot")
+        assert status == 200 and {item["role"] for item in settings_a["snapshot"]["assets"]} == {"PRIMARY_LOGO", "WATERMARK"}
+        # O padrão global muda depois: a perícia A continua com o que capturou.
+        assert upload(product, "PRIMARY_LOGO", png((150, 20, 20, 255)), "1")[0] == 201
+        status, again = product.call("GET", root + "/settings-snapshot")
+        assert again["snapshot"] == settings_a["snapshot"] and again["differences"]["settings_changes"] == ["ASSET:PRIMARY_LOGO"]
+
+        # Participantes: várias partes por polo, outro participante e procuradores vinculados.
+        cover = _cover([
+            _HEADER, "POLO ATIVO", "AUTORA SINTETICA UM (AUTORA) ADVOGADA SINTETICA (ADVOGADA)", "AUTOR SINTETICO DOIS (AUTOR)",
+            "POLO PASSIVO", "BANCO SINTETICO S.A. (REU) PROCURADOR SINTETICO (PROCURADOR)", "CONSTRUTORA SINTETICA LTDA (REU)",
+            "OUTROS PARTICIPANTES", "MUNICIPIO SINTETICO (TERCEIRO INTERESSADO)",
+        ])
+        assert product.call("POST", root + "/materials", raw=cover, headers={"Content-Type": "application/pdf", "X-Document-Filename": "capa.pdf"})[0] == 201
+        status, process = product.call("GET", root + "/process-case")
+        data = {**process["data"], "numero_processo": "0000000-00.2026.4.05.0000", "vara": "1ª Vara Federal Sintética"}
+        assert product.call("POST", root + "/process-case", {"expected_revision": process["revision"], "data": data})[0] in (200, 201)
+        status, view = product.call("GET", root + "/process-participants")
+        assert status == 200 and view["interrupted_pages"] == []
+        assert [(p["pole"], p["name"]) for p in view["proposals"]] == [
+            ("ACTIVE", "AUTORA SINTETICA UM"), ("ACTIVE", "AUTOR SINTETICO DOIS"),
+            ("PASSIVE", "BANCO SINTETICO S.A."), ("PASSIVE", "CONSTRUTORA SINTETICA LTDA"), ("OTHER", "MUNICIPIO SINTETICO"),
+        ]
+        assert [r["name"] for r in view["proposals"][0]["representatives"]] == ["ADVOGADA SINTETICA"]
+        assert view["proposals"][3]["representatives"] == []
+        revision = None
+        for proposal in view["proposals"]:
+            status, view = product.call("POST", root + "/process-participants/decisions", {"action": "CONFIRM", "expected_revision": revision, "payload": {"proposal_id": proposal["participant_id"]}})
+            assert status == 200, view
+            revision = view["revision"]
+        assert len([p for p in view["participants"] if p["review_state"] == "CONFIRMED"]) == 5
+
+        # Imóvel: o endereço do imóvel objeto é proposto; o da parte, nunca.
+        petition = _text_pdf([
+            "FULANA SINTETICA, residente e domiciliada na Av. Rua da Parte Sintetica, nº 45, Bairro Centro Sintetico.",
+            "A autora adquiriu o imóvel objeto da ação, situado na Rua do Imovel Sintetico, nº 120.",
+        ])
+        assert product.call("POST", root + "/materials", raw=petition, headers={"Content-Type": "application/pdf", "X-Document-Filename": "inicial.pdf"})[0] == 201
+        status, found = product.call("GET", root + "/property-record/proposals")
+        values = {(p["field"], p["value"]) for p in found["proposals"]}
+        assert ("street", "Rua do Imovel Sintetico") in values
+        assert not any("Parte" in value for field, value in values if field == "street")
+
+        before = {name: product.call("GET", f"{root}/{name}") for name in ("process-participants", "settings-snapshot")}
+        status, backup = product.call("POST", root + "/backup", raw=b"", headers={"Content-Type": "application/json"})
+        assert status == 200 and isinstance(backup, bytes) and backup
+    finally:
+        product.kill()
+
+    product = _start(tmp_path, "round3")
+    try:
+        after = {name: product.call("GET", f"{root}/{name}") for name in ("process-participants", "settings-snapshot")}
+        assert after == before
+        status, verified = product.call("POST", "/v1/recovery/verify", raw=backup, headers={"Content-Type": "application/octet-stream"})
+        assert status == 200 and verified["workspace_id"] == a["workspace_id"], verified
+    finally:
+        product.kill()

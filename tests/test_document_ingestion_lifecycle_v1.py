@@ -52,7 +52,16 @@ def _synthetic_pje(tmp_path, marker="ingestao-266"):
 
 
 def _workspace(runtime):
-    status, _, body = request(runtime, "POST", "/app-api/v1/workspaces", headers=browser_mutation_headers(runtime), body={"name": "Ingestão sintética"})
+    # Criar a pericia e preparacao, nao o que estes testes provam: vai direto a
+    # Local API, fora do prazo curto (1,5 s) da ponte que a importacao exercita.
+    # Sob coverage no runner Windows, a criacao atravessando esse prazo
+    # estourava sem relacao com a ingestao (#278).
+    from tests.test_local_api_v1 import http_request
+
+    status, _, body = http_request(
+        runtime._local_api.server, "POST", "/v1/workspaces",
+        value={"name": "Ingestão sintética"}, headers={"X-Local-API-Token": TOKEN},
+    )
     assert status == 201, body
     return json.loads(body)["workspace_id"]
 
