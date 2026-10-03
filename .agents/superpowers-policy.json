@@ -7,5 +7,6 @@
     "SUPERPOWERS_DISABLE_TELEMETRY": "true",
     "DISABLE_TELEMETRY": "true"
   },
-  "excluded_network_capabilities": ["brainstorming-server", "remote-brand-image"]
+  "excluded_network_capabilities": ["brainstorming-server", "remote-brand-image"],
+  "brainstorming_policy": "TEXTUAL_AND_LOCAL_ONLY"
 }
