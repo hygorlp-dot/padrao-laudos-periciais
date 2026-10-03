@@ -182,12 +182,19 @@ def test_a_footer_field_between_two_runs_keeps_them_two_expectations():
             for name in ("word/styles.xml", "word/footer1.xml", "word/settings.xml")
         }
     footer = [
-        expectation.text
+        (expectation.text, expectation.dynamic_field, expectation.font_size)
         for expectation in dr._word_text_expectations(
             roots, active_content_names={"word/footer1.xml"}
         )
     ]
-    assert footer == ["página", "de"]
+    # "Página {PAGE} de {NUMPAGES}": four runs on the page, the two field
+    # results bound to their page's value and to the field run's typography.
+    assert footer == [
+        ("página", None, 9.0),
+        ("0", "page", 9.0),
+        ("de", None, 9.0),
+        ("0", "numpages", 9.0),
+    ]
 
 
 # --- ADVERSARIAL: the real render against a DOCX it does not represent -----------------
@@ -635,3 +642,98 @@ def test_the_watermarked_background_painted_over_the_body_is_refused(page):
         return operations[:start] + operations[end:] + operations[start:end]
 
     _assert_refused(word, _pdf_with_page_operations(pdf, page, paint_background_last))
+
+
+@pytest.mark.parametrize("stem", ["word16-branded-v2", "word16-custom-template"])
+def test_a_page_number_in_another_size_is_refused(stem):
+    word, pdf = _pair(stem)
+    reader = PdfReader(BytesIO(pdf))
+    operations = ContentStream(reader.pages[1].get_contents(), reader).operations
+    # The PAGE result is the footer's second text object ("Página 2 de" or "2 de").
+    footer_x = sorted(
+        float(operands[4])
+        for operands, operator in operations
+        if operator == b"Tm" and float(operands[5]) < 60
+    )
+    page_number_x = footer_x[1] if stem == "word16-branded-v2" else footer_x[0]
+
+    def enlarge(operations: list) -> list:
+        enlarged = []
+        for index, (operands, operator) in enumerate(operations):
+            if operator == b"Tf" and any(
+                follow == b"Tm" and abs(float(args[4]) - page_number_x) < 0.05
+                for args, follow in operations[index + 1 : index + 3]
+            ):
+                operands = [operands[0], FloatObject(14)]
+            enlarged.append((operands, operator))
+        return enlarged
+
+    _assert_refused(word, _pdf_with_page_operations(pdf, 1, enlarge))
+
+
+def _flow_text(page: int, value: str, baseline: float) -> dr._PositionedText:
+    return dr._PositionedText(
+        page=page, text=value, x=85.0, y=baseline, font_size=11.0,
+        right=85.0 + 5.5 * len(value), bottom=baseline - 2.5, top=baseline + 8.5,
+        page_width=595.3, page_height=841.9, strict_text=value,
+    )
+
+
+@pytest.mark.parametrize(
+    ("picture_bottom", "keeps_with_next", "accepted"),
+    [
+        (400.0, False, False),  # room for the text below the picture: it would fit
+        (90.0, False, True),  # 18 pt above the 72 pt margin: it did not fit
+        (400.0, True, True),  # keepNext: it moves with what follows it
+    ],
+    ids=["would-fit", "did-not-fit", "keep-with-next"],
+)
+def test_text_after_a_picture_opens_the_next_page_only_when_it_does_not_fit(
+    picture_bottom, keeps_with_next, accepted
+):
+    source = dr._WordImageLayout(
+        170.0, 51.0, "inline", "center", None, None, "Texto anterior.", "Texto seguinte.", 0, 0,
+        following_keeps_with_next=keeps_with_next,
+    )
+    picture = dr._PdfImageLayout(
+        page=0, left=212.6, bottom=picture_bottom, right=382.6, top=picture_bottom + 51.0,
+        page_width=595.3, page_height=841.9,
+    )
+    text = [
+        _flow_text(0, "Texto anterior.", picture_bottom + 56.0),
+        _flow_text(1, "Texto seguinte.", 760.0),
+    ]
+    assert dr._ordered_image_layouts_match([source], [picture], text, 72.0) is accepted
+
+
+def test_room_on_a_page_is_measured_against_the_narrowest_section_margin():
+    source = dr._WordImageLayout(
+        170.0, 51.0, "inline", "center", None, None, "Texto anterior.", "Texto seguinte.", 0, 0,
+    )
+    picture = dr._PdfImageLayout(
+        page=1, left=212.6, bottom=705.0, right=382.6, top=756.0,
+        page_width=595.3, page_height=841.9,
+    )
+    text = [_flow_text(0, "Texto anterior.", 100.0), _flow_text(1, "Texto seguinte.", 690.0)]
+    # 25.5 pt above a 72 pt margin does not fit the 51 pt picture; 57.5 pt above
+    # the 40 pt margin of another section would, and the narrowest margin decides.
+    assert dr._ordered_image_layouts_match([source], [picture], text, (72.0, 72.0))
+    assert not dr._ordered_image_layouts_match([source], [picture], text, (40.0, 72.0))
+
+
+def test_mirrored_margins_with_page_number_restarts_are_not_verifiable():
+    from xml.etree import ElementTree
+
+    namespace = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    document = ElementTree.fromstring(
+        f"<w:document {namespace}><w:body><w:p><w:r><w:t>Texto.</w:t></w:r></w:p>"
+        '<w:sectPr><w:pgNumType w:start="2"/>'
+        '<w:pgMar w:top="1701" w:right="1134" w:bottom="1134" w:left="1701"/></w:sectPr>'
+        "</w:body></w:document>"
+    )
+    settings = ElementTree.fromstring(f"<w:settings {namespace}><w:mirrorMargins/></w:settings>")
+    with pytest.raises(ValueError, match="mirrored margins"):
+        dr._word_text_expectations(
+            {"word/document.xml": document, "word/settings.xml": settings},
+            active_content_names={"word/document.xml"},
+        )

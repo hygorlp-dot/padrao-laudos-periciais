@@ -176,9 +176,14 @@ def test_the_text_after_a_picture_may_open_the_next_page() -> None:
     """RED_THIS_REPAIR: the next figure's caption, moved with its picture, was refused."""
     fragment = lambda page, top, text: dr._PositionedText(page, text, 100.0, top - 10, 10.0, 100.0 + len(text) * 5, top - 10, top, page_width=595.0, page_height=842.0, strict_text=text)  # noqa: E731
     positioned = [fragment(0, 520.0, "Figura 1"), fragment(1, 790.0, "Figura 2")]
-    source = dr._WordImageLayout(300.0, 300.0, "inline", "center", None, None, "Figura 1", "Figura 2", 0, 0)
+    # The product writes every caption with w:keepNext (render_word_candidate),
+    # so Word keeps it with its own picture on the next page (#281: the move
+    # is allowed by that declaration or by a proven lack of room, never freely).
+    source = dr._WordImageLayout(300.0, 300.0, "inline", "center", None, None, "Figura 1", "Figura 2", 0, 0, following_keeps_with_next=True)
     picture = dr._PdfImageLayout(0, 147.5, 200.0, 447.5, 500.0, 595.0, 842.0)
     assert dr._ordered_image_layouts_match([source], [picture], positioned)
+    free = replace(source, following_keeps_with_next=False)
+    assert not dr._ordered_image_layouts_match([free], [picture], positioned, 72.0)
     elsewhere = [fragment(0, 520.0, "Figura 1"), fragment(1, 400.0, "Figura 2")]
     assert not dr._ordered_image_layouts_match([source], [picture], elsewhere)
     two_pages_on = [fragment(0, 520.0, "Figura 1"), fragment(2, 790.0, "Figura 2")]

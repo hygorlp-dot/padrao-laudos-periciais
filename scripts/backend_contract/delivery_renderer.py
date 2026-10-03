@@ -1525,6 +1525,9 @@ class _WordImageLayout:
     # wrapped lines are found where Word puts them.
     preceding_shape: tuple[float, str | None] = (0.0, None)
     following_shape: tuple[float, str | None] = (0.0, None)
+    # The following text's paragraph declares w:keepNext: Word moves it with
+    # whatever comes after it, so it may open the next page with room left.
+    following_keeps_with_next: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1588,6 +1591,7 @@ def _ordered_word_image_layouts(
     paragraph_spacing = _paragraph_spacing_resolver(styles_root)
     paragraph_offset = _first_line_offset_resolver(styles_root)
     paragraph_alignment = _paragraph_alignment_resolver(styles_root)
+    paragraph_layers = _paragraph_layers_resolver(styles_root)
     joined_spacing = _word_paragraph_spacing_combiner(settings_root)
 
     for name in sorted(xml_roots, key=_word_part_priority):
@@ -1704,6 +1708,16 @@ def _ordered_word_image_layouts(
                 paragraph_spacing(lower_paragraph)[0],
             )
 
+        def keeps_with_next(node_index: int | None) -> bool:
+            if node_index is None:
+                return False
+            keep = False
+            for layer in paragraph_layers(flow_paragraphs[node_index]):
+                node = _current_named(layer, "keepNext")
+                if node is not None:
+                    keep = _on_off(node)
+            return keep
+
         def text_shape(node_index: int | None) -> tuple[float, str | None]:
             if node_index is None:
                 return (0.0, None)
@@ -1764,6 +1778,7 @@ def _ordered_word_image_layouts(
                         following_gap=declared_gap(index, following_index),
                         preceding_shape=text_shape(preceding_index),
                         following_shape=text_shape(following_index),
+                        following_keeps_with_next=keeps_with_next(following_index),
                     )
                     if layout is not None
                     else None
@@ -1810,8 +1825,14 @@ def _ordered_image_layouts_match(
     sources: list[_WordImageLayout | None],
     candidates: list[_PdfImageLayout],
     positioned_text: list[_PositionedText],
-    bottom_margin: float | None = None,
+    bottom_margin: float | tuple[float, float] | None = None,
 ) -> bool:
+    # (narrowest, widest) bottom margin of the sections: room left on a page is
+    # measured against the narrowest, crossing the margin against the widest,
+    # so both bounds stay strict across sections.
+    if isinstance(bottom_margin, (int, float)):
+        bottom_margin = (float(bottom_margin), float(bottom_margin))
+
     def matching_regions(
         expected: str | None,
         shape: tuple[float, str | None] = (0.0, None),
@@ -1938,7 +1959,7 @@ def _ordered_image_layouts_match(
 
             # A picture stays in the body area: kept on a page it does not fit,
             # it would cross the bottom margin.
-            if bottom_margin is not None and candidate.bottom < bottom_margin - 2.0:
+            if bottom_margin is not None and candidate.bottom < bottom_margin[1] - 2.0:
                 return False
             # A picture that does not fit below its text opens the next page
             # (reproduced with Word 16, #281).  That is proven, not assumed: the
@@ -1955,7 +1976,7 @@ def _ordered_image_layouts_match(
                 or (
                     page == candidate.page - 1
                     and bottom_margin is not None
-                    and bottom - bottom_margin < observed_height + source.preceding_gap
+                    and bottom - bottom_margin[0] < observed_height + source.preceding_gap
                     and not body_text_below(page, bottom)
                     and not body_text_above(candidate.page, candidate.top)
                 )
@@ -1979,8 +2000,21 @@ def _ordered_image_layouts_match(
                     # The text opens its page and the picture closes its own.
                     and not body_text_above(page, top)
                     and not body_text_below(candidate.page, candidate.bottom)
+                    # ... because it did not fit: below the picture there was
+                    # less room than its spacing and the two lines widow and
+                    # orphan control keeps together, or the paragraph keeps
+                    # with what follows it (a caption with its own picture).
+                    and (
+                        source.following_keeps_with_next
+                        or (
+                            bottom_margin is not None
+                            and candidate.bottom - bottom_margin[0]
+                            < source.following_gap
+                            + 2 * 1.2 * positioned_text[start].font_size
+                        )
+                    )
                 )
-                for page, _bottom, top, _start, _end in following_regions
+                for page, _bottom, top, start, _end in following_regions
             ):
                 return False
             previous_inline = candidate
@@ -2004,7 +2038,7 @@ def _repeatable_word_images_match(
     footer_signatures_by_page: list[list[tuple]] | None = None,
     footer_layouts_by_page: list[list[_WordImageLayout | None]] | None = None,
     painted_paths: list[_PaintedPath] | tuple[_PaintedPath, ...] = (),
-    bottom_margin: float | None = None,
+    bottom_margin: tuple[float, float] | None = None,
 ) -> bool:
     if (
         len(candidate_signatures) != len(candidate_layouts)
@@ -2930,6 +2964,9 @@ class _WordTextExpectation:
     # run still shares a first line that starts left of the paragraph edge.
     paragraph_hanging: float = 0.0
     even_left_margin: float | None = None
+    # A header/footer PAGE or NUMPAGES result: its text is the value for the
+    # page the expectation is bound to, and its typography is the field run's.
+    dynamic_field: str | None = None
 
 
 def _twips_attribute(node: ElementTree.Element | None, name: str) -> float | None:
@@ -3132,11 +3169,11 @@ def _declared_wrap_alignment(
 
 def _section_margin(
     document: ElementTree.Element | None, side: str
-) -> float | None:
-    """The widest w:pgMar value of one side across the sections, in points.
+) -> tuple[float, float] | None:
+    """(narrowest, widest) w:pgMar value of one side across the sections, in points.
 
-    None when no section declares it, which keeps the checks that use it at
-    their former, margin-free behaviour.
+    None when no section declares it: the checks that need it then fail closed
+    (a picture opening the next page) or do not apply (crossing the margin).
     """
     values = [
         value
@@ -3145,7 +3182,7 @@ def _section_margin(
         and math.isfinite(value)
         and value >= 0
     ]
-    return max(values) if values else None
+    return (min(values), max(values)) if values else None
 
 
 def _word_paragraph_spacing_combiner(
@@ -4042,6 +4079,15 @@ def _word_text_expectations(
             and margin >= 0
         ]
         even_text_left_margin = min(right_margins, default=0.0)
+        sections = list(_current_iter(document, "sectPr")) if document is not None else []
+        if len(sections) > 1 or any(
+            (number_type := _current_named(section, "pgNumType")) is not None
+            and _attribute_named(number_type, "start") is not None
+            for section in sections
+        ):
+            # Which side is "even" then depends on page numbers this oracle
+            # does not lay out; the wrong parity would loosen the indent bound.
+            raise ValueError("unsupported Word mirrored margins with page numbering restarts")
 
     expectations: list[_WordTextExpectation] = []
     content_names = [
@@ -4209,7 +4255,7 @@ def _word_text_expectations(
                 ]
             ] = []
             dynamic_result_runs = {
-                id(run)
+                id(run): (id(field), (_attribute_named(field, "instr") or "").strip().casefold())
                 for field in _current_iter(paragraph, "fldSimple")
                 for run in _current_iter(field, "r")
             }
@@ -4218,28 +4264,56 @@ def _word_text_expectations(
             # so "Página {PAGE} de" is two runs of text on the page, never the
             # contiguous "Página de" a merged segment demands (#281).
             field_result_skipped = False
+            field_instruction: list[str] | None = None
+            complex_field_code = ""
+            emitted_fields: set[int] = set()
+            complex_field_emitted = False
+            segment_fields: dict[int, str] = {}
             for run in _own_runs(paragraph):
                 field_markers = [
                     (_attribute_named(marker, "fldCharType") or "").casefold()
                     for marker in _current_iter(run, "fldChar")
                 ]
+                if "begin" in field_markers:
+                    field_instruction = []
+                if field_instruction is not None and not in_complex_field_result:
+                    field_instruction.extend(
+                        node.text or "" for node in _current_iter(run, "instrText")
+                    )
                 if "separate" in field_markers:
                     in_complex_field_result = True
+                    complex_field_code = "".join(field_instruction or []).strip().casefold()
+                    complex_field_emitted = False
+                    field_instruction = None
                     continue
                 if "end" in field_markers:
                     in_complex_field_result = False
+                    field_instruction = None
                     continue
+                dynamic_field: str | None = None
                 if (id(run) in dynamic_result_runs or in_complex_field_result) and (
                     name != "word/document.xml"
                 ):
-                    # Header and footer field results are page-dependent and are
-                    # modelled by _dynamic_paragraph_text instead.  In the body
-                    # the cached result is already required verbatim by the token
-                    # multiset, so its typography must be checked too -- otherwise
-                    # a cross-reference could be rendered in any font, size, colour
-                    # or weight and still read as faithful.
+                    # Header and footer field results are page-dependent: their
+                    # text is modelled by _dynamic_paragraph_text.  PAGE and
+                    # NUMPAGES still carry the field run's typography, bound
+                    # per page below -- a page number in another size, colour
+                    # or weight is not the footer Word drew (#281 review).
+                    simple_field = dynamic_result_runs.get(id(run))
+                    code = simple_field[1] if simple_field else complex_field_code
                     field_result_skipped = True
-                    continue
+                    if code not in {"page", "numpages"} or not _own_text(run).strip():
+                        continue
+                    # One expectation per field: Word paints its value once.
+                    if simple_field:
+                        if simple_field[0] in emitted_fields:
+                            continue
+                        emitted_fields.add(simple_field[0])
+                    else:
+                        if complex_field_emitted:
+                            continue
+                        complex_field_emitted = True
+                    dynamic_field = code
                 if is_hidden_run(run, paragraph_style):
                     # Word does not render hidden runs, so they carry no visible
                     # authority and must not become a fidelity expectation.
@@ -4303,8 +4377,26 @@ def _word_text_expectations(
                 # style check off whenever no authority happened to be declared
                 # left colour, weight and slant unenforced inside table cells.
                 enforce_visible_run_style = True
-                raw_text = _own_text(run)
-                if raw_text and not raw_text.strip() and segments:
+                raw_text = "0" if dynamic_field else _own_text(run)
+                if dynamic_field:
+                    segment_fields[len(segments)] = dynamic_field
+                    segments.append(
+                        (
+                            raw_text,
+                            size,
+                            color,
+                            bold,
+                            italic,
+                            underline,
+                            font_family,
+                            enforce_visible_run_style,
+                        )
+                    )
+                    field_result_skipped = True
+                    continue
+                if raw_text and not raw_text.strip() and segments and (
+                    len(segments) - 1 not in segment_fields
+                ):
                     previous = segments[-1]
                     segments[-1] = (previous[0] + raw_text, *previous[1:])
                     continue
@@ -4313,6 +4405,7 @@ def _word_text_expectations(
                 if (
                     segments
                     and not field_result_skipped
+                    and len(segments) - 1 not in segment_fields
                     and abs(segments[-1][1] - size) <= 0.01
                     and segments[-1][2] == color
                     and segments[-1][3:] == (
@@ -4413,6 +4506,7 @@ def _word_text_expectations(
                         None,
                         min(0.0, first_line_offset(paragraph)),
                         even_text_left_margin,
+                        segment_fields.get(segment_index),
                     )
                 )
             if name == "word/document.xml":
@@ -7069,6 +7163,13 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                         expectation,
                         expected_page=page,
                         band="header" if content_name.startswith("word/header") else "footer",
+                        text=(
+                            str(page + 1)
+                            if expectation.dynamic_field == "page"
+                            else str(page_count)
+                            if expectation.dynamic_field == "numpages"
+                            else expectation.text
+                        ),
                     )
                     for expectation in _word_text_expectations(
                         xml_roots, active_content_names={content_name}
