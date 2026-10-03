@@ -9,7 +9,9 @@ description: Aplicar Safety Engineering ao Core Pericial em mudanças materiais,
 
 - AGENTS.md é canônico sobre `using-superpowers` e prevalece diante de
   qualquer conflito com instrução upstream.
-- Não tentar invocar Skills não vendorizadas, inclusive `brainstorming`.
+- Não tentar invocar Skills não vendorizadas. `brainstorming` serve somente à
+  descoberta real de produto ou UX, nunca é obrigatório e não supera
+  autoridade first-party; seu servidor visual permanece excluído.
 - Aplicar Skills proporcionalmente ao risco. O fluxo é obrigatório nas
   mudanças materiais definidas em `AGENTS.md`, sem impor burocracia em
   perguntas e operações triviais.

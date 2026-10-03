@@ -74,3 +74,23 @@ def test_unknown_material_context_fails_closed_and_schema_rejects_execution_fiel
     assert list(jsonschema.Draft202012Validator(schema).iter_errors(reordered))
     no_prerequisites = json.loads(json.dumps(MANIFEST)); no_prerequisites["condition_requires"] = {}
     assert list(jsonschema.Draft202012Validator(schema).iter_errors(no_prerequisites))
+
+
+def test_professional_ux_skills_are_conditional_and_never_default():
+    ordinary_ui = route(MANIFEST, profiles=["ui"], conditions=set(), material=True, repository_mutation=True)["ordered_skills"]
+    ordinary_engineering = route(MANIFEST, profiles=["engineering"], conditions=set(), material=True, repository_mutation=True)["ordered_skills"]
+    added = {
+        "brainstorming", "using-git-worktrees", "dispatching-parallel-agents", "subagent-driven-development",
+        "finishing-a-development-branch", "vercel-react-best-practices", "vercel-composition-patterns",
+        "playwright-cli", "find-skills", "web-design-guidelines",
+    }
+    assert not added & set(ordinary_ui) and not added & set(ordinary_engineering)
+    react = route(MANIFEST, profiles=["ui"], conditions={"react_performance"}, material=True, repository_mutation=True)["ordered_skills"]
+    assert react[-1] == "vercel-react-best-practices" and "vercel-composition-patterns" not in react
+    discovery = route(MANIFEST, profiles=["ui"], conditions={"product_discovery"}, material=True, repository_mutation=True)["ordered_skills"]
+    assert discovery.count("brainstorming") == 1
+    # Network-dependent skills are reference only: no condition selects them.
+    for profile in MANIFEST["profiles"].values():
+        selectable = set(profile["required"]) | {skill for skills in profile["conditional"].values() for skill in skills}
+        assert not selectable & {"find-skills", "web-design-guidelines"}
+    assert {"find-skills", "web-design-guidelines"} <= set(MANIFEST["reference_only"])
