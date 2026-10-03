@@ -55,7 +55,12 @@
   os comandos pinados do repositório (`npm ci`, `pip install --require-hashes`)
   ou nenhum. A integridade das Skills de terceiros é fixada por blob em
   `docs/terceiros/superpowers-manifest.json` e
-  `docs/terceiros/professional-ux-v1-blobs.json`.
+  `docs/terceiros/professional-ux-v1-blobs.json`. As regras "brainstorm first"
+  de `using-superpowers` não se aplicam: `brainstorming` só entra pela condição
+  `product_discovery`. De `finishing-a-development-branch` valem somente as
+  opções de manter a branch ou abrir Pull Request; nunca merge local em
+  `main`. Ajuste de `.gitignore` sugerido por `using-git-worktrees` só entra
+  pela branch de uma Issue.
 - Aplicar `SKILL_ROUTING_V3` por `.agents/skill-router.json`: selecionar o
   conjunto mínimo aplicável, sem transformar roteamento em execução, instalação
   ou autoridade. Contexto material não mapeado falha fechado.

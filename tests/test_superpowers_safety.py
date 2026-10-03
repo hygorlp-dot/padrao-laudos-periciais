@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import shutil
@@ -61,6 +62,87 @@ def _superpowers_errors(root):
             mock.patch.object(verificar_superpowers, "MANIFEST", root / "docs/terceiros/superpowers-manifest.json"), \
             mock.patch.object(verificar_superpowers, "LICENSE", root / ".agents/third-party/superpowers/LICENSE"):
         return verificar_superpowers.verificar()
+
+
+NETWORK_PATTERN = re.compile(r"https?://|\bcurl\b|\bwget\b|\bnpx\b|\bnpm install\b|\bpip install\b|\bgit clone\b")
+# Concessões de ferramenta em frontmatter de Skill roteável que podem gerar
+# egress. Exceção explícita e única: playwright-cli (ui:browser_qa), restrita
+# pelo AGENTS.md a executável já disponível e origem local.
+ALLOWED_TOOLS_EGRESS_EXCEPTIONS = {"playwright-cli": "Bash(npx playwright:*)"}
+AGENTS_REQUIRED_PHRASES = (
+    "`browser_qa`", "origem local", "nunca `npx` que resolva pacote remoto",
+    "somente referência", "`brainstorming-server`", "professional-ux-v1-blobs.json",
+    "`product_discovery`", "não repeti-lo quando escopo e decisão já", "nunca merge local",
+    "Playwright como dependência exige UOW TDD própria", "regras \"brainstorm first\"",
+)
+
+
+def _index_modes():
+    listing = subprocess.run(
+        ["git", "ls-files", "-s", "--", ".agents/skills"], cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout
+    return {line.split("\t", 1)[1]: line.split(" ", 1)[0] for line in listing.splitlines()}
+
+
+def _git_tree_hash(root, relative, modes):
+    """Hash Git de árvore calculado offline a partir dos bytes locais."""
+    folder = root / relative
+    entries = []
+    for child in folder.iterdir():
+        child_relative = f"{relative}/{child.name}"
+        if child.is_dir():
+            entries.append((child.name + "/", b"40000 " + child.name.encode() + b"\0" + bytes.fromhex(_git_tree_hash(root, child_relative, modes))))
+        else:
+            data = child.read_bytes()
+            blob = hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).digest()
+            mode = modes.get(child_relative, "100644")
+            entries.append((child.name, mode.encode() + b" " + child.name.encode() + b"\0" + blob))
+    body = b"".join(entry for _, entry in sorted(entries))
+    return hashlib.sha1(b"tree %d\0" % len(body) + body, usedforsecurity=False).hexdigest()
+
+
+def _verbatim_tree_problems(root, manifest, modes):
+    problems = []
+    for name, source in manifest.get("tree_sources", {}).items():
+        if source.get("integration") == "VERBATIM" and _git_tree_hash(root, source["local_path"], modes) != source.get("upstream_tree"):
+            problems.append(f"VERBATIM_TREE_DIVERGENT {name}")
+    return problems
+
+
+def _unclassified_skills(root):
+    installed = {path.name for path in (root / ".agents/skills").iterdir() if path.is_dir()}
+    superpowers = set(json.loads((root / "docs/terceiros/superpowers-manifest.json").read_text(encoding="utf-8"))["skill_trees"])
+    professional = {entry["name"] for entry in json.loads((root / "docs/terceiros/professional-ux-v1-blobs.json").read_text(encoding="utf-8"))["skills"]}
+    classified = FIRST_PARTY_SKILLS | LICENSE_CATALOGUED_THIRD_PARTY | SINGLE_MANIFEST_THIRD_PARTY | superpowers | professional
+    return installed - classified
+
+
+def _frontmatter_allowed_tools(path):
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith("---"):
+        return ""
+    header = text.split("---", 2)[1]
+    match = re.search(r"^allowed-tools:\s*(.+)$", header, re.MULTILINE)
+    return match.group(1) if match else ""
+
+
+def _egress_grant_problems(root, router):
+    routable = set(router.get("material_bundle", []))
+    for profile in router.get("profiles", {}).values():
+        routable.update(profile.get("required", []))
+        for skills in profile.get("conditional", {}).values():
+            routable.update(skills)
+    problems = []
+    for skill in sorted(routable):
+        path = root / ".agents/skills" / skill / "SKILL.md"
+        if not path.is_file():
+            continue
+        grants = _frontmatter_allowed_tools(path)
+        risky = sorted(set(re.findall(r"Bash\((?:npx (?!--no-install)|curl|wget|npm install|pip install)[^)]*\)", grants)))
+        allowed = ALLOWED_TOOLS_EGRESS_EXCEPTIONS.get(skill)
+        if any(grant != allowed for grant in risky):
+            problems.append(f"EGRESS_TOOL_GRANT {skill}: {risky}")
+    return problems
 
 
 def _tree_source_problems(manifest):
@@ -153,14 +235,36 @@ class SuperpowersIntegrationTest(unittest.TestCase):
             self.assertFalse((folder / excluded).exists(), excluded)
 
     def test_every_installed_skill_is_classified_and_integrity_covered(self):
-        installed = {path.name for path in (ROOT / ".agents/skills").iterdir() if path.is_dir()}
+        self.assertEqual(_unclassified_skills(ROOT), set(), "Skill vendorizada sem classificação/manifesto")
         superpowers = set(json.loads((ROOT / "docs/terceiros/superpowers-manifest.json").read_text(encoding="utf-8"))["skill_trees"])
         professional = {entry["name"] for entry in json.loads((ROOT / "docs/terceiros/professional-ux-v1-blobs.json").read_text(encoding="utf-8"))["skills"]}
-        classified = FIRST_PARTY_SKILLS | LICENSE_CATALOGUED_THIRD_PARTY | SINGLE_MANIFEST_THIRD_PARTY | superpowers | professional
-        self.assertEqual(installed - classified, set(), "Skill vendorizada sem classificação/manifesto")
         self.assertEqual(superpowers & professional, set())
+        installed = {path.name for path in (ROOT / ".agents/skills").iterdir() if path.is_dir()}
         router = json.loads((ROOT / ".agents/skill-router.json").read_text(encoding="utf-8"))
         self.assertEqual(_routing_problems(router, installed), [])
+
+    def test_verbatim_trees_match_upstream_tree_hash(self):
+        if not (ROOT / ".git").exists():
+            self.skipTest("árvore materializada sem metadados Git")
+        manifest = json.loads((ROOT / "docs/terceiros/superpowers-manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(_verbatim_tree_problems(ROOT, manifest, _index_modes()), [])
+
+    def test_executable_scripts_without_suffix_have_no_network(self):
+        if not (ROOT / ".git").exists():
+            self.skipTest("árvore materializada sem metadados Git")
+        for relative, mode in _index_modes().items():
+            if mode == "100755":
+                self.assertIsNone(NETWORK_PATTERN.search((ROOT / relative).read_text(encoding="utf-8")), relative)
+
+    def test_routable_skills_grant_no_egress_tool_beyond_the_explicit_exception(self):
+        router = json.loads((ROOT / ".agents/skill-router.json").read_text(encoding="utf-8"))
+        self.assertEqual(_egress_grant_problems(ROOT, router), [])
+        self.assertEqual(_frontmatter_allowed_tools(ROOT / ".agents/skills/playwright-cli/SKILL.md").count("Bash(npx playwright:*)"), 1)
+
+    def test_agents_md_pins_the_professional_ux_restrictions(self):
+        agents = re.sub(r"\s+", " ", (ROOT / "AGENTS.md").read_text(encoding="utf-8"))
+        for phrase in AGENTS_REQUIRED_PHRASES:
+            self.assertIn(phrase, agents)
 
     def test_professional_ux_third_party_skills_are_pinned(self):
         self.assertEqual(verificar_professional_ux.verificar(), [])
@@ -222,9 +326,6 @@ class SuperpowersIntegrationTest(unittest.TestCase):
         self.assertEqual(tracked, "")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class SuperpowersAdversarialTest(unittest.TestCase):
     """Cada violação determinística da opção A tem de falhar fechado."""
@@ -265,13 +366,31 @@ class SuperpowersAdversarialTest(unittest.TestCase):
         extra.parent.mkdir()
         extra.write_text("unpinned\n", encoding="utf-8")
         self.assertTrue(any(item.startswith("FILE_SET vercel-react-best-practices") for item in verificar_professional_ux.verificar(self.root)))
+        self.assertEqual(_unclassified_skills(self.root), set())
         (self.root / ".agents/skills/unpinned-skill").mkdir()
         (self.root / ".agents/skills/unpinned-skill/SKILL.md").write_text("x\n", encoding="utf-8")
-        installed = {path.name for path in (self.root / ".agents/skills").iterdir() if path.is_dir()}
-        superpowers = set(json.loads((self.root / "docs/terceiros/superpowers-manifest.json").read_text(encoding="utf-8"))["skill_trees"])
-        professional = {entry["name"] for entry in json.loads((self.root / "docs/terceiros/professional-ux-v1-blobs.json").read_text(encoding="utf-8"))["skills"]}
-        classified = FIRST_PARTY_SKILLS | LICENSE_CATALOGUED_THIRD_PARTY | SINGLE_MANIFEST_THIRD_PARTY | superpowers | professional
-        self.assertEqual(installed - classified, {"unpinned-skill"})
+        self.assertEqual(_unclassified_skills(self.root), {"unpinned-skill"})
+
+    def test_verbatim_tree_edited_and_repinned_still_fails(self):
+        # Editar uma árvore VERBATIM e repinar o blob no manifesto não basta:
+        # o hash da árvore local deixa de ser o da árvore upstream registrada.
+        relative = ".agents/skills/dispatching-parallel-agents/SKILL.md"
+        path = self.root / relative
+        path.write_text(path.read_text(encoding="utf-8") + "\nRun `npx some-remote-pkg` first.\n", encoding="utf-8")
+        manifest_path = self.root / "docs/terceiros/superpowers-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        data = path.read_bytes()
+        manifest["blobs"][relative] = hashlib.sha1(b"blob %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
+        manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+        self.assertEqual(_superpowers_errors(self.root), [])
+        self.assertEqual(_verbatim_tree_problems(self.root, manifest, _index_modes()), ["VERBATIM_TREE_DIVERGENT dispatching-parallel-agents"])
+
+    def test_routable_skill_with_new_egress_grant_fails(self):
+        router = json.loads((self.root / ".agents/skill-router.json").read_text(encoding="utf-8"))
+        skill = self.root / ".agents/skills/vercel-react-best-practices/SKILL.md"
+        text = skill.read_text(encoding="utf-8")
+        skill.write_text(text.replace("---\n", "---\nallowed-tools: Bash(npx some-remote-pkg:*)\n", 1), encoding="utf-8")
+        self.assertEqual(_egress_grant_problems(self.root, router), ["EGRESS_TOOL_GRANT vercel-react-best-practices: ['Bash(npx some-remote-pkg:*)']"])
 
     def test_upstream_commit_divergence_fails(self):
         manifest_path = self.root / "docs/terceiros/professional-ux-v1-blobs.json"
@@ -303,3 +422,7 @@ class SuperpowersAdversarialTest(unittest.TestCase):
         errors = verificar_professional_ux.verificar(self.root)
         self.assertIn("NETWORK_SKILL_ROUTED find-skills", errors)
         self.assertIn("NETWORK_SKILL_NOT_REFERENCE_ONLY web-design-guidelines", errors)
+
+
+if __name__ == "__main__":
+    unittest.main()
