@@ -1,0 +1,199 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://padrao-laudos-periciais.local/schemas/repository-hygiene-v1.schema.json",
+  "title": "REPOSITORY_HYGIENE_V1 report",
+  "description": "Saida do auditor read-only scripts/quality/repository_hygiene.py (#279). Classifica; nunca apaga.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["report", "schema_version", "basis", "observed_head", "auto_delete", "summary", "inventory", "python", "frontend", "schemas", "skills", "duplicates", "files", "findings", "invariant_violations"],
+  "properties": {
+    "report": {"const": "REPOSITORY_HYGIENE_V1"},
+    "schema_version": {"const": "1.0.0"},
+    "basis": {"const": "WORKTREE_BYTES_OF_GIT_INDEX_PATHS"},
+    "observed_head": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "auto_delete": {"const": false},
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files", "current_authority", "historical", "runtime", "assurance", "test_only", "legacy_but_live", "reference", "configuration", "generated_evidence", "manual_tool", "unclassified", "unreachable_candidates", "schema_candidates", "fixture_findings", "skill_unrouted", "asset_candidates", "stale_documents", "duplicate_groups", "generated_files_tracked", "invariant_violations"],
+      "properties": {
+        "files": {"$ref": "#/$defs/count"},
+        "current_authority": {"$ref": "#/$defs/count"},
+        "historical": {"$ref": "#/$defs/count"},
+        "runtime": {"$ref": "#/$defs/count"},
+        "assurance": {"$ref": "#/$defs/count"},
+        "test_only": {"$ref": "#/$defs/count"},
+        "legacy_but_live": {"$ref": "#/$defs/count"},
+        "reference": {"$ref": "#/$defs/count"},
+        "configuration": {"$ref": "#/$defs/count"},
+        "generated_evidence": {"$ref": "#/$defs/count"},
+        "manual_tool": {"$ref": "#/$defs/count"},
+        "unclassified": {"$ref": "#/$defs/count"},
+        "unreachable_candidates": {"$ref": "#/$defs/count"},
+        "schema_candidates": {"$ref": "#/$defs/count"},
+        "fixture_findings": {"$ref": "#/$defs/count"},
+        "skill_unrouted": {"$ref": "#/$defs/count"},
+        "asset_candidates": {"$ref": "#/$defs/count"},
+        "stale_documents": {"type": "array", "items": {"type": "string"}},
+        "duplicate_groups": {"$ref": "#/$defs/count"},
+        "generated_files_tracked": {"$ref": "#/$defs/count"},
+        "invariant_violations": {"$ref": "#/$defs/count"}
+      }
+    },
+    "inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by_top_level", "by_extension", "by_class", "large_files"],
+      "properties": {
+        "by_top_level": {"$ref": "#/$defs/counts"},
+        "by_extension": {"$ref": "#/$defs/counts"},
+        "by_class": {
+          "type": "object",
+          "propertyNames": {"$ref": "#/$defs/fileClass"},
+          "additionalProperties": {"$ref": "#/$defs/count"}
+        },
+        "large_files": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "bytes"],
+            "properties": {"path": {"type": "string"}, "bytes": {"$ref": "#/$defs/count"}}
+          }
+        }
+      }
+    },
+    "python": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by_status", "modules"],
+      "properties": {
+        "by_status": {"$ref": "#/$defs/counts"},
+        "modules": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["module", "status", "reached_by", "has_main", "consumers"],
+            "properties": {
+              "module": {"type": ["string", "null"]},
+              "status": {"enum": ["PRODUCTION_REACHABLE", "GATE_ONLY", "SKILL_ONLY", "TEST_ONLY", "TEST_SUPPORT", "LEGACY_BUT_LIVE", "MANUAL_ENTRYPOINT", "TEST_MODULE", "UNREACHABLE_CANDIDATE"]},
+              "reached_by": {"type": "array", "items": {"enum": ["RUNTIME", "GATE", "SKILL", "TEST", "DOCUMENTED"]}},
+              "has_main": {"type": "boolean"},
+              "consumers": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+    "frontend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["by_status", "modules"],
+      "properties": {
+        "by_status": {"$ref": "#/$defs/counts"},
+        "modules": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["status", "consumers"],
+            "properties": {
+              "status": {"enum": ["RUNTIME", "TEST", "TEST_ONLY", "STORY_DEMO_ONLY", "BUILD_CONFIG", "UNREACHABLE_CANDIDATE"]},
+              "consumers": {"type": "array", "items": {"type": "string"}}
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["consumer_kinds", "consumers", "status"],
+        "properties": {
+          "consumer_kinds": {"type": "array", "items": {"$ref": "#/$defs/schemaConsumer"}},
+          "consumers": {
+            "type": "object",
+            "propertyNames": {"$ref": "#/$defs/schemaConsumer"},
+            "additionalProperties": {"type": "array", "items": {"type": "string"}}
+          },
+          "status": {"enum": ["LIVE", "SCHEMA_ORPHAN_CANDIDATE"]}
+        }
+      }
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["skill", "installed", "routed", "routes", "referenced", "referenced_by", "status"],
+        "properties": {
+          "skill": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+          "installed": {"const": true},
+          "routed": {"type": "boolean"},
+          "routes": {"type": "array", "items": {"type": "string"}},
+          "referenced": {"type": "boolean"},
+          "referenced_by": {"type": "array", "items": {"type": "string"}},
+          "status": {"enum": ["SKILL_REQUIRED", "SKILL_CONDITIONAL", "SKILL_REFERENCE_ONLY", "SKILL_UNROUTED"]}
+        }
+      }
+    },
+    "duplicates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "classification", "paths"],
+        "properties": {
+          "kind": {"enum": ["EXACT_SHA256", "NORMALIZED_TEXT"]},
+          "classification": {"enum": ["DUPLICATE_CONTENT", "INTENTIONAL_WRAPPER_DUPLICATION"]},
+          "paths": {"type": "array", "minItems": 2, "items": {"type": "string"}}
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "additionalProperties": {"$ref": "#/$defs/fileClass"}
+    },
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "invariant_violations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["code", "path", "detail"],
+        "properties": {
+          "code": {"enum": ["PYTHON_UNREADABLE", "PYTHON_UNPARSEABLE", "RUNTIME_ROOT_MISSING", "FRONTEND_ENTRYPOINT_MISSING", "SCHEMA_UNREADABLE", "FIXTURE_REGISTRY_UNREADABLE", "SKILL_ROUTER_UNREADABLE", "ROUTER_SKILL_MISSING", "AUTHORITY_MISSING", "HISTORICAL_STATUS_MISSING", "AGENT_WRAPPER_DRIFT", "AUTHORITY_STALE_MARKER", "DURABLE_DOCUMENT_TEMPORAL_COUPLING"]},
+          "path": {"type": "string"},
+          "detail": {"type": "string"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "count": {"type": "integer", "minimum": 0},
+    "counts": {"type": "object", "additionalProperties": {"$ref": "#/$defs/count"}},
+    "fileClass": {"enum": ["CURRENT_AUTHORITY", "HISTORICAL", "RUNTIME", "ASSURANCE", "TEST_ONLY", "LEGACY_BUT_LIVE", "REFERENCE", "CONFIGURATION", "GENERATED_EVIDENCE", "MANUAL_TOOL", "UNREACHABLE_CANDIDATE", "UNCLASSIFIED"]},
+    "schemaConsumer": {"enum": ["FIXTURE_REGISTRY", "SCHEMA_VERSIONS", "CORE_BOUNDARY", "SCHEMA_REF", "GATE", "RUNTIME_VALIDATOR", "FIXTURE", "TEST", "SKILL", "FRONTEND", "DOCUMENTATION"]},
+    "finding": {
+      "type": "object",
+      "required": ["path", "classification", "evidence", "known_consumers", "unknown_consumers", "risk", "recommended_action", "confidence"],
+      "properties": {
+        "path": {"type": "string"},
+        "classification": {"enum": ["PRODUCTION_UNREACHABLE", "TEST_ONLY", "DEAD_CODE_CANDIDATE", "SCHEMA_ORPHAN_CANDIDATE", "FIXTURE_ORPHAN", "FIXTURE_REGISTRY_STALE", "FIXTURE_NOT_EXERCISED", "FIXTURE_SCHEMA_STALE", "FIXTURE_REGISTRY_INVALID", "FIXTURE_PROVENANCE_NOT_SYNTHETIC", "SKILL_UNROUTED", "ASSET_UNREFERENCED", "DOCUMENTATION_STALE", "DUPLICATE_CONTENT", "GENERATED_FILE_TRACKED", "SYMLINK_TRACKED"]},
+        "evidence": {"type": "string"},
+        "known_consumers": {"type": "array", "items": {"type": "string"}},
+        "unknown_consumers": {"type": "array", "items": {"type": "string"}},
+        "risk": {"enum": ["LOW", "MEDIUM", "HIGH"]},
+        "recommended_action": {"type": "string", "not": {"enum": ["DELETE", "DELETE_NOW", "AUTO_DELETE"]}},
+        "confidence": {"enum": ["PROVEN", "STRONG_CANDIDATE", "NEEDS_REVIEW"]},
+        "reachability": {"type": "string"},
+        "registry_code": {"type": "string"},
+        "group": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    }
+  }
+}

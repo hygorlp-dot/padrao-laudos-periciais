@@ -1,0 +1,123 @@
+{
+  "schema_version": "1.0.0",
+  "report_id": "REPOSITORY_HYGIENE_V1",
+  "description": "Mapa declarativo de autoridade do repositorio (#279). Classifica, nunca apaga: UNREFERENCED != SAFE_TO_DELETE. Lido por scripts/quality/repository_hygiene.py.",
+  "current_authority": [
+    {"path": "AGENTS.md", "role": "HOW_TO_WORK"},
+    {"path": "PRODUCT.md", "role": "WHAT_THE_PRODUCT_IS_NOW"},
+    {"path": "DESIGN.md", "role": "HOW_THE_PRODUCT_LOOKS_AND_BEHAVES"},
+    {"path": ".impeccable/design.json", "role": "DESIGN_SIDECAR"},
+    {"path": "README.md", "role": "REPOSITORY_ENTRYPOINT"},
+    {"prefix": "docs/padroes/", "role": "DOMAIN_PROFESSIONAL_AND_GOVERNANCE_RULES"},
+    {"prefix": "docs/arquitetura/decisoes/", "role": "WHY_ARCHITECTURE_IS_THIS_WAY"},
+    {"path": "docs/manual-operacional.md", "role": "OPERATING_MANUAL"},
+    {"path": "docs/HUMAN_RC_WINDOWS_V2.md", "role": "HUMAN_RC_SCRIPT"},
+    {"path": "schemas/README.md", "role": "SCHEMA_FAMILIES"},
+    {"prefix": "checklists/", "role": "HUMAN_CONTROLS"},
+    {"path": "config/repository-authority-v1.json", "role": "AUTHORITY_MAP"}
+  ],
+  "agent_wrappers": {
+    "target": "AGENTS.md",
+    "max_bytes": 2048,
+    "paths": ["CLAUDE.md", "CODEX.md", "CURSOR.md", "GEMINI.md", "WINDSURF.md"]
+  },
+  "historical": [
+    {"prefix": "docs/superpowers/plans/", "status_readme": "docs/superpowers/plans/README.md", "role": "ENGINEERING_PLANS"},
+    {"prefix": "docs/reviews/", "role": "PAST_REVIEWS"},
+    {"prefix": "docs/arquitetura/planos/", "role": "PAST_ARCHITECTURE_PLANS"},
+    {"prefix": "artifacts/issue-187/", "status_readme": "artifacts/README.md", "role": "ISSUE_187_EVIDENCE"}
+  ],
+  "status_markers": {
+    "docs/superpowers/plans/README.md": "STATUS: HISTORICAL ENGINEERING RECORDS",
+    "artifacts/README.md": "STATUS: EVIDENCE / ASSURANCE / HISTORICAL OUTPUT"
+  },
+  "generated_evidence": [
+    {"path": "docs/PRODUCT_MATURITY_REPORT_V1.md", "role": "MATURITY_REPORT_DERIVED_FROM_CONFIG"},
+    {"path": "artifacts/native-word-matrix-v1.json", "role": "PROTECTED_NATIVE_WORD_MATRIX"},
+    {"path": "docs/stabilization/golden-forensic-corpus-v1-coverage.md", "role": "GENERATED_COVERAGE_MAP"}
+  ],
+  "file_classes": [
+    {"prefix": "tests/", "class": "ASSURANCE"},
+    {"prefix": "evals/", "class": "ASSURANCE"},
+    {"prefix": ".github/", "class": "ASSURANCE"},
+    {"prefix": "contracts/", "class": "ASSURANCE"},
+    {"prefix": "docs/stabilization/", "class": "ASSURANCE"},
+    {"prefix": "artifacts/", "class": "ASSURANCE"},
+    {"prefix": "config/", "class": "CONFIGURATION"},
+    {"prefix": ".agents/", "class": "REFERENCE"},
+    {"prefix": "docs/terceiros/", "class": "REFERENCE"},
+    {"prefix": "docs/arquitetura/", "class": "REFERENCE"},
+    {"prefix": "referencias/", "class": "REFERENCE"},
+    {"prefix": ".vscode/", "class": "CONFIGURATION"},
+    {"path": "pyproject.toml", "class": "CONFIGURATION"},
+    {"path": "uv.lock", "class": "CONFIGURATION"},
+    {"path": "requirements.txt", "class": "CONFIGURATION"},
+    {"path": "requirements-dev.txt", "class": "CONFIGURATION"},
+    {"path": "setup.cfg", "class": "CONFIGURATION"},
+    {"path": ".ruff.toml", "class": "CONFIGURATION"},
+    {"path": ".markdownlint.json", "class": "CONFIGURATION"},
+    {"path": ".gitignore", "class": "CONFIGURATION"},
+    {"path": ".gitattributes", "class": "CONFIGURATION"},
+    {"path": ".editorconfig", "class": "CONFIGURATION"},
+    {"path": ".gitleaks.toml", "class": "CONFIGURATION"}
+  ],
+  "durable_documents": ["README.md", "PRODUCT.md", "DESIGN.md", "docs/manual-operacional.md", "schemas/README.md"],
+  "stale_markers": [
+    {"paths": ["PRODUCT.md"], "pattern": "provides only the application shell", "reason": "FRONTEND_SHELL_V1 scope presented as current"},
+    {"paths": ["PRODUCT.md"], "pattern": "does not start a navigable forensic case", "reason": "FRONTEND_SHELL_V1 scope presented as current"},
+    {"paths": ["schemas/README.md"], "pattern": "Não há OCR", "reason": "product limitation that no longer holds"},
+    {"paths": ["schemas/README.md"], "pattern": "Não há orçamento final", "reason": "product limitation that no longer holds"},
+    {"paths": ["config/product-maturity-v1.json"], "pattern": "\"current_main_sha\"", "reason": "tracked file cannot carry the live HEAD"}
+  ],
+  "durable_document_forbidden": [
+    {"pattern": "`[0-9a-f]{12,40}`", "reason": "hard-coded commit SHA in a durable document; temporal state belongs to the roadmap issue or the maturity declaration"}
+  ],
+  "python": {
+    "runtime_roots": ["scripts.planejamento_pericial.app_composition"],
+    "legacy_core_prefixes": [
+      "scripts/extracao_pje/",
+      "scripts/triagem_pericial/",
+      "scripts/planejamento_pericial/",
+      "scripts/vistoria_estruturada/",
+      "scripts/motor_vicios/",
+      "scripts/redacao_pericial/",
+      "scripts/auditoria_pericial/",
+      "scripts/conhecimento_privado/"
+    ],
+    "product_layer_prefixes": ["scripts/backend_contract/"],
+    "gate_text_prefixes": [".github/", "config/", "scripts/quality/", "scripts/agentic/"],
+    "gate_text_paths": ["pyproject.toml", "setup.cfg"],
+    "skill_text_prefixes": [".agents/"],
+    "test_text_prefixes": ["tests/"],
+    "documentation_text_prefixes": ["docs/", "README.md", "PRODUCT.md", "AGENTS.md", "referencias/", "checklists/"]
+  },
+  "frontend": {
+    "root": "frontend/",
+    "entrypoints": ["frontend/src/main.tsx"],
+    "build_files": [
+      "frontend/index.html",
+      "frontend/package.json",
+      "frontend/package-lock.json",
+      "frontend/vite.config.ts",
+      "frontend/eslint.config.js",
+      "frontend/tsconfig.json",
+      "frontend/tsconfig.app.json",
+      "frontend/tsconfig.node.json"
+    ],
+    "test_support_prefixes": ["frontend/src/test/"]
+  },
+  "generated_patterns": [
+    "(^|/)__pycache__/",
+    "\\.py[cod]$",
+    "(^|/)node_modules/",
+    "^frontend/dist/",
+    "(^|/)\\.pytest_cache/",
+    "(^|/)\\.coverage$",
+    "(^|/)coverage\\.xml$",
+    "\\.log$",
+    "\\.tsbuildinfo$",
+    "(^|/)\\.DS_Store$",
+    "(^|/)Thumbs\\.db$"
+  ],
+  "large_file_bytes": 1048576
+}
