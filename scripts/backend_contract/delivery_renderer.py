@@ -1528,6 +1528,8 @@ class _WordImageLayout:
     # The following text's paragraph declares w:keepNext: Word moves it with
     # whatever comes after it, so it may open the next page with room left.
     following_keeps_with_next: bool = False
+    # The following text's paragraph declares w:pageBreakBefore.
+    following_breaks_page: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1708,15 +1710,15 @@ def _ordered_word_image_layouts(
                 paragraph_spacing(lower_paragraph)[0],
             )
 
-        def keeps_with_next(node_index: int | None) -> bool:
+        def declares(node_index: int | None, name: str) -> bool:
             if node_index is None:
                 return False
-            keep = False
+            value = False
             for layer in paragraph_layers(flow_paragraphs[node_index]):
-                node = _current_named(layer, "keepNext")
+                node = _current_named(layer, name)
                 if node is not None:
-                    keep = _on_off(node)
-            return keep
+                    value = _on_off(node)
+            return value
 
         def text_shape(node_index: int | None) -> tuple[float, str | None]:
             if node_index is None:
@@ -1778,7 +1780,8 @@ def _ordered_word_image_layouts(
                         following_gap=declared_gap(index, following_index),
                         preceding_shape=text_shape(preceding_index),
                         following_shape=text_shape(following_index),
-                        following_keeps_with_next=keeps_with_next(following_index),
+                        following_keeps_with_next=declares(following_index, "keepNext"),
+                        following_breaks_page=declares(following_index, "pageBreakBefore"),
                     )
                     if layout is not None
                     else None
@@ -1872,7 +1875,7 @@ def _ordered_image_layouts_match(
     if len(sources) != len(candidates) or any(source is None for source in sources):
         return False
     previous_inline: _PdfImageLayout | None = None
-    for source, candidate in zip(sources, candidates):
+    for source_index, (source, candidate) in enumerate(zip(sources, candidates)):
         if source is None:
             return False
         observed_width = candidate.right - candidate.left
@@ -1957,6 +1960,23 @@ def _ordered_image_layouts_match(
                     for fragment in positioned_text
                 )
 
+            following_source = (
+                sources[source_index + 1] if source_index + 1 < len(sources) else None
+            )
+            keeps_its_picture = (
+                source.following_keeps_with_next
+                and following_source is not None
+                and following_source.kind == "inline"
+                and bool(source.following_text)
+                and bool(following_source.preceding_text)
+                and _normalized_visible_text(following_source.preceding_text or "")
+                == _normalized_visible_text(source.following_text or "")
+            )
+            kept_picture_height = (
+                following_source.height + following_source.preceding_gap
+                if keeps_its_picture and following_source is not None
+                else 0.0
+            )
             # A picture stays in the body area: kept on a page it does not fit,
             # it would cross the bottom margin.
             if bottom_margin is not None and candidate.bottom < bottom_margin[1] - 2.0:
@@ -2002,15 +2022,26 @@ def _ordered_image_layouts_match(
                     and not body_text_below(candidate.page, candidate.bottom)
                     # ... because it did not fit: below the picture there was
                     # less room than its spacing and the two lines widow and
-                    # orphan control keeps together, or the paragraph keeps
-                    # with what follows it (a caption with its own picture).
+                    # orphan control keeps together -- plus, for a paragraph
+                    # that keeps with the next one (a caption with its own
+                    # picture), that next picture: the kept chain moves whole.
                     and (
-                        source.following_keeps_with_next
+                        # The document itself breaks the page there.
+                        source.following_breaks_page
                         or (
                             bottom_margin is not None
                             and candidate.bottom - bottom_margin[0]
                             < source.following_gap
                             + 2 * 1.2 * positioned_text[start].font_size
+                            + kept_picture_height
+                            # A heading keeps with the first lines of the
+                            # paragraph after it.
+                            + (
+                                2 * 1.2 * positioned_text[start].font_size
+                                if source.following_keeps_with_next
+                                and not keeps_its_picture
+                                else 0.0
+                            )
                         )
                     )
                 )

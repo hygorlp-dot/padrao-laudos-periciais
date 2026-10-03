@@ -680,16 +680,18 @@ def _flow_text(page: int, value: str, baseline: float) -> dr._PositionedText:
 
 
 @pytest.mark.parametrize(
-    ("picture_bottom", "keeps_with_next", "accepted"),
+    ("picture_bottom", "keeps_with_next", "kept_height", "accepted"),
     [
-        (400.0, False, False),  # room for the text below the picture: it would fit
-        (90.0, False, True),  # 18 pt above the 72 pt margin: it did not fit
-        (400.0, True, True),  # keepNext: it moves with what follows it
+        (400.0, False, None, False),  # room for the text below the picture: it would fit
+        (90.0, False, None, True),  # 18 pt above the 72 pt margin: it did not fit
+        (400.0, True, None, False),  # keepNext, but nothing it keeps with: it would fit
+        (400.0, True, 120.0, False),  # keepNext with a 120 pt picture: the chain fitted
+        (400.0, True, 400.0, True),  # keepNext with a 400 pt picture: the chain did not fit
     ],
-    ids=["would-fit", "did-not-fit", "keep-with-next"],
+    ids=["would-fit", "did-not-fit", "keep-alone-fits", "chain-fits", "chain-did-not-fit"],
 )
 def test_text_after_a_picture_opens_the_next_page_only_when_it_does_not_fit(
-    picture_bottom, keeps_with_next, accepted
+    picture_bottom, keeps_with_next, kept_height, accepted
 ):
     source = dr._WordImageLayout(
         170.0, 51.0, "inline", "center", None, None, "Texto anterior.", "Texto seguinte.", 0, 0,
@@ -703,7 +705,20 @@ def test_text_after_a_picture_opens_the_next_page_only_when_it_does_not_fit(
         _flow_text(0, "Texto anterior.", picture_bottom + 56.0),
         _flow_text(1, "Texto seguinte.", 760.0),
     ]
-    assert dr._ordered_image_layouts_match([source], [picture], text, 72.0) is accepted
+    sources, pictures = [source], [picture]
+    if kept_height is not None:
+        sources.append(
+            dr._WordImageLayout(
+                170.0, kept_height, "inline", "center", None, None, "Texto seguinte.", None, 0, None,
+            )
+        )
+        pictures.append(
+            dr._PdfImageLayout(
+                page=1, left=212.6, bottom=753.0 - kept_height, right=382.6, top=753.0,
+                page_width=595.3, page_height=841.9,
+            )
+        )
+    assert dr._ordered_image_layouts_match(sources, pictures, text, 72.0) is accepted
 
 
 def test_room_on_a_page_is_measured_against_the_narrowest_section_margin():
@@ -737,3 +752,34 @@ def test_mirrored_margins_with_page_number_restarts_are_not_verifiable():
             {"word/document.xml": document, "word/settings.xml": settings},
             active_content_names={"word/document.xml"},
         )
+
+
+@pytest.mark.parametrize(
+    ("picture_bottom", "keeps_with_next", "breaks_page", "accepted"),
+    [
+        # A heading after a picture keeps with its paragraph's first lines:
+        # 48 pt left does not fit heading + two lines (52.8 pt) ...
+        (120.0, True, False, True),
+        # ... but would fit the same text without keepNext (26.4 pt).
+        (120.0, False, False, False),
+        # A declared page break moves it whatever the room.
+        (400.0, False, True, True),
+    ],
+    ids=["heading-chain-did-not-fit", "plain-text-fits", "declared-page-break"],
+)
+def test_text_after_a_picture_follows_its_declared_keep_and_break(
+    picture_bottom, keeps_with_next, breaks_page, accepted
+):
+    source = dr._WordImageLayout(
+        170.0, 51.0, "inline", "center", None, None, "Texto anterior.", "Texto seguinte.", 0, 0,
+        following_keeps_with_next=keeps_with_next, following_breaks_page=breaks_page,
+    )
+    picture = dr._PdfImageLayout(
+        page=0, left=212.6, bottom=picture_bottom, right=382.6, top=picture_bottom + 51.0,
+        page_width=595.3, page_height=841.9,
+    )
+    text = [
+        _flow_text(0, "Texto anterior.", picture_bottom + 56.0),
+        _flow_text(1, "Texto seguinte.", 760.0),
+    ]
+    assert dr._ordered_image_layouts_match([source], [picture], text, 72.0) is accepted
