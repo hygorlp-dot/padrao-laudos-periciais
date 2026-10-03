@@ -1517,6 +1517,14 @@ class _WordImageLayout:
     # An anchor with behindDoc="1": painted behind the text and behind every
     # picture the page body draws over it.
     behind: bool = False
+    # Points of paragraph spacing the Word document itself puts between the
+    # picture's paragraph and the adjacent text's paragraph.
+    preceding_gap: float = 0.0
+    following_gap: float = 0.0
+    # (first-line offset, alignment) of the adjacent text's paragraph, so its
+    # wrapped lines are found where Word puts them.
+    preceding_shape: tuple[float, str | None] = (0.0, None)
+    following_shape: tuple[float, str | None] = (0.0, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1572,8 +1580,15 @@ class _WordTableExpectation:
 
 def _ordered_word_image_layouts(
     xml_roots: dict[str, ElementTree.Element],
+    *,
+    styles_root: ElementTree.Element | None = None,
+    settings_root: ElementTree.Element | None = None,
 ) -> list[_WordImageLayout | None]:
     ordered: list[_WordImageLayout | None] = []
+    paragraph_spacing = _paragraph_spacing_resolver(styles_root)
+    paragraph_offset = _first_line_offset_resolver(styles_root)
+    paragraph_alignment = _paragraph_alignment_resolver(styles_root)
+    joined_spacing = _word_paragraph_spacing_combiner(settings_root)
 
     for name in sorted(xml_roots, key=_word_part_priority):
         root = xml_roots[name]
@@ -1656,6 +1671,7 @@ def _ordered_word_image_layouts(
                 for image_node in _current_iter(drawing, "blip"):
                     layouts_by_image[id(image_node)] = layout
         flow: list[tuple[str, str | ElementTree.Element]] = []
+        flow_paragraphs: list[ElementTree.Element] = []
         for paragraph in _current_iter(root, "p"):
             text_buffer: list[str] = []
             for item in _current_nodes(paragraph):
@@ -1666,11 +1682,37 @@ def _ordered_word_image_layouts(
                     text = "".join(text_buffer)
                     if text.strip():
                         flow.append(("text", text))
+                        flow_paragraphs.append(paragraph)
                     text_buffer = []
                     flow.append(("image", item))
+                    flow_paragraphs.append(paragraph)
             text = "".join(text_buffer)
             if text.strip():
                 flow.append(("text", text))
+                flow_paragraphs.append(paragraph)
+
+        def declared_gap(upper: int | None, lower: int | None) -> float:
+            """Spacing Word puts between two flow entries' paragraphs."""
+            if upper is None or lower is None:
+                return 0.0
+            upper_paragraph = flow_paragraphs[upper]
+            lower_paragraph = flow_paragraphs[lower]
+            if upper_paragraph is lower_paragraph:
+                return 0.0
+            return joined_spacing(
+                paragraph_spacing(upper_paragraph)[1],
+                paragraph_spacing(lower_paragraph)[0],
+            )
+
+        def text_shape(node_index: int | None) -> tuple[float, str | None]:
+            if node_index is None:
+                return (0.0, None)
+            paragraph = flow_paragraphs[node_index]
+            alignment = paragraph_alignment(paragraph)
+            return (
+                paragraph_offset(paragraph),
+                alignment if alignment in {"left", "both", "center", "right"} else None,
+            )
 
         for index, (kind, value) in enumerate(flow):
             if kind != "image" or not isinstance(value, ElementTree.Element):
@@ -1718,6 +1760,10 @@ def _ordered_word_image_layouts(
                         following_text=following,
                         preceding_occurrence=occurrence(preceding_index),
                         following_occurrence=occurrence(following_index),
+                        preceding_gap=declared_gap(preceding_index, index),
+                        following_gap=declared_gap(index, following_index),
+                        preceding_shape=text_shape(preceding_index),
+                        following_shape=text_shape(following_index),
                     )
                     if layout is not None
                     else None
@@ -1767,12 +1813,25 @@ def _ordered_image_layouts_match(
 ) -> bool:
     def matching_regions(
         expected: str | None,
+        shape: tuple[float, str | None] = (0.0, None),
     ) -> list[tuple[int, float, float, int, int]]:
         if not expected:
             return []
         regions: list[tuple[int, float, float, int, int]] = []
+        first_line_offset, alignment = shape
         for start in range(len(positioned_text)):
-            end = _fragment_sequence_end(expected, positioned_text, start, [])
+            # The neighbouring paragraph wraps like any other: an answer of
+            # two lines with a first-line indent could never be found as a
+            # single line, so no picture after it could be placed (#281).
+            end = _fragment_sequence_end(
+                expected,
+                positioned_text,
+                start,
+                [],
+                allow_line_wrap=True,
+                alignment=alignment,
+                first_line_offset=first_line_offset,
+            )
             if end is None:
                 continue
             fragments = positioned_text[start:end]
@@ -1834,8 +1893,12 @@ def _ordered_image_layouts_match(
                 )
             ):
                 return False
-            preceding_regions = matching_regions(source.preceding_text)
-            following_regions = matching_regions(source.following_text)
+            preceding_regions = matching_regions(
+                source.preceding_text, source.preceding_shape
+            )
+            following_regions = matching_regions(
+                source.following_text, source.following_shape
+            )
             if source.preceding_occurrence is not None:
                 preceding_regions = preceding_regions[
                     source.preceding_occurrence : source.preceding_occurrence + 1
@@ -1850,10 +1913,22 @@ def _ordered_image_layouts_match(
                 return False
             if not source.preceding_text and not source.following_text:
                 return False
+            # The spacing the document declares between the two paragraphs is
+            # part of where the picture belongs; the 72 points remain the slack
+            # for line metrics.  A picture that does not fit below its text
+            # opens the next page (reproduced with Word 16, #281), the mirror of
+            # the following-text case below.
             if preceding_regions and not any(
-                page == candidate.page
-                and candidate.top <= bottom + 2.0
-                and bottom - candidate.top <= 72.0
+                (
+                    page == candidate.page
+                    and candidate.top <= bottom + 2.0
+                    and bottom - candidate.top <= 72.0 + source.preceding_gap
+                )
+                or (
+                    page == candidate.page - 1
+                    and bottom <= candidate.page_height * 0.30
+                    and candidate.top >= candidate.page_height * 0.70
+                )
                 for page, bottom, _top, _start, _end in preceding_regions
             ):
                 return False
@@ -1866,7 +1941,7 @@ def _ordered_image_layouts_match(
                 (
                     page == candidate.page
                     and candidate.bottom >= top - 2.0
-                    and candidate.bottom - top <= 72.0
+                    and candidate.bottom - top <= 72.0 + source.following_gap
                 )
                 or (page == candidate.page + 1 and top >= candidate.page_height * 0.70)
                 for page, _bottom, top, _start, _end in following_regions
@@ -2201,7 +2276,7 @@ def _repeatable_text_matches(
     page_heights: list[float],
     consumed: set[int] | None = None,
 ) -> bool:
-    """Whether every repeatable fragment appears exactly once in its band.
+    """Whether every repeatable fragment appears, in order, in its band.
 
     When ``consumed`` is given it collects the identity of the fragments that
     actually matched, so callers can subtract exactly the header and footer
@@ -2228,7 +2303,7 @@ def _repeatable_text_matches(
         for expected in expected_fragments:
             matches = [
                 (start, end)
-                for start in range(len(region))
+                for start in range(cursor, len(region))
                 if (
                     end := _fragment_sequence_end(
                         expected, region, start, [], strict_identity=True
@@ -2236,13 +2311,19 @@ def _repeatable_text_matches(
                 )
                 is not None
             ]
-            if len(matches) != 1 or matches[0][0] < cursor:
+            if not matches:
                 return False
+            # Body text may legitimately sit in the band too: a signature
+            # block opening a page repeats the header's name (Word 16, #281).
+            # The running header is the copy nearest the top edge and the
+            # footer the copy nearest the bottom; the exact token multiset
+            # still rejects a header or footer that is doubled or missing.
+            selected = matches[0] if header else matches[-1]
             if consumed is not None:
                 consumed.update(
-                    id(item) for item in region[matches[0][0] : matches[0][1]]
+                    id(item) for item in region[selected[0] : selected[1]]
                 )
-            cursor = matches[0][1]
+            cursor = selected[1]
         return True
 
     return (
@@ -2784,6 +2865,10 @@ class _WordTextExpectation:
     # (negative for a hanging indent).  Word wraps the continuation lines back
     # to the paragraph edge, so they begin left of an indented first line.
     first_line_offset: float = 0.0
+    # Points the paragraph edge sits right of the text margin (w:ind left).
+    left_indent: float = 0.0
+    # Narrowest left page margin of the document's sections, in points.
+    left_margin: float = 0.0
 
 
 def _twips_attribute(node: ElementTree.Element | None, name: str) -> float | None:
@@ -2798,14 +2883,15 @@ def _twips_attribute(node: ElementTree.Element | None, name: str) -> float | Non
         return None
 
 
-def _first_line_offset_resolver(
+def _paragraph_layers_resolver(
     styles_root: ElementTree.Element | None,
-) -> Callable[[ElementTree.Element], float]:
-    """Resolve w:ind firstLine/hanging through docDefaults, the style chain and pPr.
+) -> Callable[[ElementTree.Element], list[ElementTree.Element]]:
+    """The w:pPr layers that apply to a paragraph, weakest first.
 
-    Only the offset between the first line and the continuation lines is
-    modelled; a character-based indent the oracle cannot convert contributes
-    nothing, which keeps the former behaviour (and its refusals) for it.
+    docDefaults, then the style chain from its root base to the paragraph's own
+    style (the default paragraph style when none is named), then the
+    paragraph's direct pPr.  A later layer overrides an earlier one per
+    attribute, which is how Word resolves paragraph properties.
     """
     default_layer = None
     styles: dict[str, ElementTree.Element] = {}
@@ -2834,13 +2920,29 @@ def _first_line_offset_resolver(
             style_id = _attribute_named(based_on, "val") if based_on is not None else None
         return list(reversed(layers))
 
-    def resolve(paragraph: ElementTree.Element) -> float:
+    def resolve(paragraph: ElementTree.Element) -> list[ElementTree.Element]:
         properties = next(_children_named(paragraph, "pPr"), None)
         style_node = _current_named(properties, "pStyle") if properties is not None else None
         style_id = _attribute_named(style_node, "val") if style_node is not None else default_style
-        layers = ([default_layer] if default_layer is not None else []) + chain(style_id) + ([properties] if properties is not None else [])
+        return ([default_layer] if default_layer is not None else []) + chain(style_id) + ([properties] if properties is not None else [])
+
+    return resolve
+
+
+def _first_line_offset_resolver(
+    styles_root: ElementTree.Element | None,
+) -> Callable[[ElementTree.Element], float]:
+    """Resolve w:ind firstLine/hanging through docDefaults, the style chain and pPr.
+
+    Only the offset between the first line and the continuation lines is
+    modelled; a character-based indent the oracle cannot convert contributes
+    nothing, which keeps the former behaviour (and its refusals) for it.
+    """
+    layers_of = _paragraph_layers_resolver(styles_root)
+
+    def resolve(paragraph: ElementTree.Element) -> float:
         offset = 0.0
-        for layer in layers:
+        for layer in layers_of(paragraph):
             indent = _current_named(layer, "ind")
             hanging = _twips_attribute(indent, "hanging")
             first_line = _twips_attribute(indent, "firstLine")
@@ -2851,6 +2953,103 @@ def _first_line_offset_resolver(
         return offset
 
     return resolve
+
+
+def _left_indent_resolver(
+    styles_root: ElementTree.Element | None,
+) -> Callable[[ElementTree.Element], float]:
+    """Points of w:ind left (or start) through docDefaults, the style chain and pPr.
+
+    Numbering indents are not modelled and contribute nothing, which keeps the
+    former alignment bound for numbered paragraphs.
+    """
+    layers_of = _paragraph_layers_resolver(styles_root)
+
+    def resolve(paragraph: ElementTree.Element) -> float:
+        indent_value = 0.0
+        for layer in layers_of(paragraph):
+            indent = _current_named(layer, "ind")
+            value = _twips_attribute(indent, "left")
+            if value is None:
+                value = _twips_attribute(indent, "start")
+            if value is not None and math.isfinite(value):
+                indent_value = value
+        return indent_value
+
+    return resolve
+
+
+def _paragraph_alignment_resolver(
+    styles_root: ElementTree.Element | None,
+) -> Callable[[ElementTree.Element], str]:
+    """The w:jc a paragraph renders with, through docDefaults, styles and pPr."""
+    layers_of = _paragraph_layers_resolver(styles_root)
+
+    def resolve(paragraph: ElementTree.Element) -> str:
+        alignment = "left"
+        for layer in layers_of(paragraph):
+            node = _current_named(layer, "jc")
+            value = _attribute_named(node, "val") if node is not None else None
+            if value:
+                alignment = value.casefold()
+        return alignment
+
+    return resolve
+
+
+def _paragraph_spacing_resolver(
+    styles_root: ElementTree.Element | None,
+) -> Callable[[ElementTree.Element], tuple[float, float]]:
+    """Points of w:spacing before and after a paragraph, resolved per attribute."""
+    layers_of = _paragraph_layers_resolver(styles_root)
+
+    def resolve(paragraph: ElementTree.Element) -> tuple[float, float]:
+        before = after = 0.0
+        for layer in layers_of(paragraph):
+            spacing = _current_named(layer, "spacing")
+            layer_before = _twips_attribute(spacing, "before")
+            layer_after = _twips_attribute(spacing, "after")
+            if layer_before is not None and math.isfinite(layer_before) and layer_before >= 0:
+                before = layer_before
+            if layer_after is not None and math.isfinite(layer_after) and layer_after >= 0:
+                after = layer_after
+        return before, after
+
+    return resolve
+
+
+def _declared_wrap_alignment(
+    resolve_alignment: Callable[[ElementTree.Element], str],
+    paragraph: ElementTree.Element,
+) -> str | None:
+    """A centred or right-aligned paragraph's alignment, else None.
+
+    Without it the order checks infer alignment from where the first line
+    starts, and a centred paragraph whose first line fills the measure starts
+    at the left margin: its centred second line then read as a misaligned wrap
+    (Word 16, cover parties line, #281).  Left and justified text keeps the
+    inference, which already anchors it at the paragraph edge.
+    """
+    alignment = resolve_alignment(paragraph)
+    return alignment if alignment in {"center", "right"} else None
+
+
+def _word_paragraph_spacing_combiner(
+    settings_root: ElementTree.Element | None,
+) -> Callable[[float, float], float]:
+    """How Word joins one paragraph's space after to the next one's space before.
+
+    Unless the document sets the compatibility option
+    w:doNotUseHTMLParagraphAutoSpacing, Word applies "HTML paragraph auto
+    spacing": the larger of the two is used, not their sum.  Reproduced with
+    Word 16.0.20430 (#281): every heading after body text, and the cover
+    paragraphs with 6/60 pt and 12/60 pt, sat at the larger value; summing them
+    rejected a faithful PDF.
+    """
+    compat = _current_first(settings_root, "compat") if settings_root is not None else None
+    if _on_off(_current_named(compat, "doNotUseHTMLParagraphAutoSpacing")):
+        return lambda after, before: after + before
+    return max
 
 
 def _word_page_geometry(
@@ -3169,6 +3368,8 @@ def _word_text_expectations(
     styles_root = xml_roots.get("word/styles.xml")
     is_hidden_run = _hidden_run_resolver(styles_root)
     first_line_offset = _first_line_offset_resolver(styles_root)
+    left_indent = _left_indent_resolver(styles_root)
+    joined_spacing = _word_paragraph_spacing_combiner(xml_roots.get("word/settings.xml"))
     theme_parts = [
         root
         for name, root in xml_roots.items()
@@ -3701,6 +3902,18 @@ def _word_text_expectations(
                 if not math.isfinite(anchor_top_margin) or anchor_top_margin < 0:
                     raise ValueError("invalid Word page margin")
 
+    left_margins = [
+        margin
+        for section in (
+            _current_iter(document, "sectPr") if document is not None else ()
+        )
+        if (margin := _twips_attribute(_current_named(section, "pgMar"), "left"))
+        is not None
+        and math.isfinite(margin)
+        and margin >= 0
+    ]
+    text_left_margin = min(left_margins, default=0.0)
+
     expectations: list[_WordTextExpectation] = []
     content_names = [
         name
@@ -3872,6 +4085,10 @@ def _word_text_expectations(
                 for run in _current_iter(field, "r")
             }
             in_complex_field_result = False
+            # A skipped field result is still rendered between its neighbours,
+            # so "Página {PAGE} de" is two runs of text on the page, never the
+            # contiguous "Página de" a merged segment demands (#281).
+            field_result_skipped = False
             for run in _own_runs(paragraph):
                 field_markers = [
                     (_attribute_named(marker, "fldCharType") or "").casefold()
@@ -3892,6 +4109,7 @@ def _word_text_expectations(
                     # multiset, so its typography must be checked too -- otherwise
                     # a cross-reference could be rendered in any font, size, colour
                     # or weight and still read as faithful.
+                    field_result_skipped = True
                     continue
                 if is_hidden_run(run, paragraph_style):
                     # Word does not render hidden runs, so they carry no visible
@@ -3965,6 +4183,7 @@ def _word_text_expectations(
                     continue
                 if (
                     segments
+                    and not field_result_skipped
                     and abs(segments[-1][1] - size) <= 0.01
                     and segments[-1][2] == color
                     and segments[-1][3:] == (
@@ -3999,6 +4218,7 @@ def _word_text_expectations(
                             enforce_visible_run_style,
                         )
                     )
+                field_result_skipped = False
             paragraph_line_height = resolved_line_height(
                 paragraph_line_spacing,
                 max((segment[1] for segment in segments), default=paragraph_size),
@@ -4034,9 +4254,8 @@ def _word_text_expectations(
                 )
                 expected_previous_top_gap = (
                     previous_body_line_height
-                    + previous_body_after
                     + pending_blank_height
-                    + paragraph_spacing_before
+                    + joined_spacing(previous_body_after, paragraph_spacing_before)
                     if body_flow_anchor and previous_body_line_height is not None
                     else None
                 )
@@ -4060,6 +4279,8 @@ def _word_text_expectations(
                         segment_index > 0,
                         paragraph_page_break_before and segment_index == 0,
                         first_line_offset(paragraph) if segment_index == 0 else 0.0,
+                        left_indent(paragraph),
+                        text_left_margin,
                     )
                 )
             if name == "word/document.xml":
@@ -4072,11 +4293,14 @@ def _word_text_expectations(
                     previous_body_after = paragraph_spacing_after
                     pending_blank_height = 0.0
                 else:
+                    # Each paragraph boundary joins its two spacings the way
+                    # Word does; summing the blank's three heights double
+                    # counted the boundary Word collapses.
                     pending_blank_height += (
-                        paragraph_spacing_before
+                        joined_spacing(previous_body_after, paragraph_spacing_before)
                         + paragraph_line_height
-                        + paragraph_spacing_after
                     )
+                    previous_body_after = paragraph_spacing_after
     return expectations
 
 
@@ -4154,25 +4378,33 @@ def _text_sizes_match(
                 for fragment in matched_fragments
             )
             page = matched_fragments[0].page
-            line_tolerance = max(
-                3.0,
-                0.35 * max(fragment.font_size for fragment in matched_fragments),
-            )
 
             def fragment_line_matches(anchor: _PositionedText) -> bool:
+                # Fragments of one line share their vertical extent.  The gap
+                # test this replaced merged a running header ending 4 points
+                # above a centred title into the title's line, and the header's
+                # left edge decentred it (Word 16, #281) -- the same defect
+                # _shares_rendered_line removed from reading order.
                 line = [
                     fragment
                     for fragment in positioned
                     if fragment.page == anchor.page
-                    and max(fragment.bottom, anchor.bottom)
-                    - min(fragment.top, anchor.top)
-                    <= line_tolerance
+                    and _shares_rendered_line([anchor], fragment)
                 ]
                 line_left = min(fragment.x for fragment in line)
                 line_right = max(fragment.right for fragment in line)
                 page_width = anchor.page_width
                 if expectation.alignment in {"left", "both"}:
-                    return line_left <= page_width * 0.25
+                    # A declared left indent moves the paragraph edge right
+                    # (a long quote's 4 cm, Word 16, #281) and binds it: an
+                    # indented line cannot start left of the page margin plus
+                    # its indent.
+                    indent = expectation.left_indent
+                    if indent > 0 and line_left < expectation.left_margin + indent + min(
+                        0.0, expectation.first_line_offset
+                    ) - 2.0:
+                        return False
+                    return line_left <= page_width * 0.25 + max(0.0, indent)
                 if expectation.alignment == "right":
                     return line_right >= page_width * 0.75
                 return abs((line_left + line_right) / 2 - page_width / 2) <= max(
@@ -5054,12 +5286,14 @@ def _ordered_text_blocks_match(
     positioned: list[_PositionedText],
     barriers: list[_VerticalBarrier],
     offsets: list[float] | None = None,
+    alignments: list[str | None] | None = None,
 ) -> bool:
     if not blocks:
         return True
     cursor = 0
     for block_index, block in enumerate(blocks):
         offset = offsets[block_index] if offsets is not None else 0.0
+        alignment = alignments[block_index] if alignments is not None else None
         match = next(
             (
                 (start, end)
@@ -5071,6 +5305,7 @@ def _ordered_text_blocks_match(
                         start,
                         barriers,
                         allow_line_wrap=True,
+                        alignment=alignment,
                         strict_identity=True,
                         first_line_offset=offset,
                     )
@@ -5405,7 +5640,10 @@ def _body_block_order_matches(
                 return False
             previous_position = selected[0]
             continue
-        if isinstance(value, tuple):
+        alignment: str | None = None
+        if isinstance(value, tuple) and len(value) == 3:
+            text, offset, alignment = value
+        elif isinstance(value, tuple):
             text, offset = value
         else:
             text, offset = value, 0.0
@@ -5422,6 +5660,7 @@ def _body_block_order_matches(
                     start,
                     barriers,
                     allow_line_wrap=True,
+                    alignment=alignment,
                     strict_identity=True,
                     first_line_offset=offset,
                 )
@@ -6026,6 +6265,8 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             body_fragments: list[str] = []
             document_fragments: list[str] = []
             document_offsets: list[float] = []
+            document_alignments: list[str | None] = []
+            paragraph_alignment = _paragraph_alignment_resolver(styles_root)
             paragraph_offset = _first_line_offset_resolver(styles_root)
             header_fragments: list[str] = []
             footer_fragments: list[str] = []
@@ -6085,6 +6326,11 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                     )
                     document_offsets.extend(
                         paragraph_offset(paragraph)
+                        for paragraph, fragment in paragraph_fragments
+                        if id(paragraph) not in table_paragraph_ids
+                    )
+                    document_alignments.extend(
+                        _declared_wrap_alignment(paragraph_alignment, paragraph)
                         for paragraph, fragment in paragraph_fragments
                         if id(paragraph) not in table_paragraph_ids
                     )
@@ -6458,8 +6704,16 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
                         visible = _visible_paragraph_text(child, is_hidden_run)
                         if visible.strip():
                             offset = paragraph_offset(child)
-                            # An unindented paragraph keeps its plain shape.
-                            body_blocks.append(("text", (visible, offset) if offset else visible))
+                            alignment = _declared_wrap_alignment(paragraph_alignment, child)
+                            # An unindented, left-flowing paragraph keeps its plain shape.
+                            body_blocks.append(
+                                (
+                                    "text",
+                                    (visible, offset, alignment)
+                                    if alignment
+                                    else (visible, offset) if offset else visible,
+                                )
+                            )
                     else:
                         body_blocks.extend(
                             ("row", row) for row in rows_by_table.get(id(child), [])
@@ -6467,7 +6721,11 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
 
             header_footer_profile = _header_footer_profile(package, xml_roots)
             document_images = _ordered_word_image_signatures(package, document_roots)
-            document_image_layouts = _ordered_word_image_layouts(document_roots)
+            document_image_layouts = _ordered_word_image_layouts(
+                document_roots,
+                styles_root=styles_root,
+                settings_root=xml_roots.get("word/settings.xml"),
+            )
             header_images = _ordered_word_image_signatures(package, header_roots)
             header_image_layouts = _ordered_word_image_layouts(header_roots)
             footer_images = _ordered_word_image_signatures(package, footer_roots)
@@ -6674,7 +6932,11 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         Counter(_strict_tokens(" ".join(body_fragments))) + strict_repeatable
     )
     document_order_matches = _ordered_text_blocks_match(
-        document_fragments, reading_positioned, barriers, document_offsets
+        document_fragments,
+        reading_positioned,
+        barriers,
+        document_offsets,
+        document_alignments,
     )
     # A bookmark target is body content, but the PDF-side occurrence enumeration
     # sees every visible fragment, and reading order puts the running header
@@ -6708,7 +6970,11 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         footer_layouts=footer_image_layouts,
         candidate_signatures=pdf_images,
         candidate_layouts=pdf_image_layouts,
-        positioned_text=reading_positioned,
+        # A picture's neighbouring text is addressed by its ordinal among the
+        # BODY's occurrences, so the header and footer copies are not counted:
+        # a running header repeating the signature name made the signature's
+        # "next text" resolve to the header of another page (#281).
+        positioned_text=body_positioned,
         page_count=len(reader.pages),
         header_signatures_by_page=header_image_signatures_by_page,
         header_layouts_by_page=header_image_layouts_by_page,

@@ -639,6 +639,60 @@
                          "finalidade":  "PDF derivado do render Word 16 com o identificador hifenizado reordenado; o oráculo de fidelidade deve recusar",
                          "expected":  "INVALID",
                          "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-branded-simple.docx",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_word16_branded_fidelity_v1.py::test_real_word_16_renders_of_the_product_templates_are_faithful",
+                         "finalidade":  "DOCX sintético do modelo com identidade visual (capa com logotipo, fundo, cabeçalho/rodapé com PAGE/NUMPAGES, assinatura e selo) exatamente como entregue ao Word 16 (#281)",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-branded-simple.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_word16_branded_fidelity_v1.py::test_real_word_16_renders_of_the_product_templates_are_faithful",
+                         "finalidade":  "PDF exportado pelo Microsoft Word 16.0.20430 a partir do DOCX sintético com identidade visual; o oráculo de fidelidade deve aceitá-lo e recusar suas mutações (#281)",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-branded-v2.docx",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_word16_branded_fidelity_v1.py::test_real_word_16_renders_of_the_product_templates_are_faithful",
+                         "finalidade":  "DOCX sintético do modelo padrão V2 (marca d'água, fundo, citação longa recuada, assinatura em nova página) exatamente como entregue ao Word 16 (#281)",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-branded-v2.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_word16_branded_fidelity_v1.py::test_real_word_16_renders_of_the_product_templates_are_faithful",
+                         "finalidade":  "PDF exportado pelo Microsoft Word 16.0.20430 a partir do DOCX V2 sintético; o oráculo de fidelidade deve aceitá-lo e recusar suas mutações (#281)",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-custom-template.docx",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_word16_branded_fidelity_v1.py::test_real_word_16_renders_of_the_product_templates_are_faithful",
+                         "finalidade":  "DOCX sintético do modelo personalizado ESCRITORIO-SINTETICO-V1, controle positivo da captura Word 16 (#281)",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
+                     },
+                     {
+                         "arquivo":  "tests/fixtures/word16-custom-template.pdf",
+                         "dominio":  "WORD16_PDF_FIDELITY_V1",
+                         "schema":  null,
+                         "consumer":  "tests/test_word16_branded_fidelity_v1.py::test_real_word_16_renders_of_the_product_templates_are_faithful",
+                         "finalidade":  "PDF exportado pelo Microsoft Word 16.0.20430 a partir do modelo personalizado sintético; controle positivo aceito antes e depois do reparo (#281)",
+                         "expected":  "VALID",
+                         "provenance":  "SYNTHETIC"
                      }
                  ]
 }
