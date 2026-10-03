@@ -783,3 +783,40 @@ def test_text_after_a_picture_follows_its_declared_keep_and_break(
         _flow_text(1, "Texto seguinte.", 760.0),
     ]
     assert dr._ordered_image_layouts_match([source], [picture], text, 72.0) is accepted
+
+
+def test_a_kept_chain_is_the_adjacent_picture_not_a_repeated_caption():
+    """A caption repeated two pages on cannot excuse moving this one."""
+    source = dr._WordImageLayout(
+        170.0, 51.0, "inline", "center", None, None, "Texto anterior.", "Legenda 2.", 0, 0,
+        following_keeps_with_next=True,
+    )
+    picture = dr._PdfImageLayout(
+        page=0, left=212.6, bottom=400.0, right=382.6, top=451.0,
+        page_width=595.3, page_height=841.9,
+    )
+    text = [
+        _flow_text(0, "Texto anterior.", 456.0),
+        _flow_text(1, "Legenda 2.", 760.0),
+        _flow_text(3, "Legenda 2.", 760.0),
+    ]
+
+    def kept(occurrence: int, page: int) -> tuple[dr._WordImageLayout, dr._PdfImageLayout]:
+        return (
+            dr._WordImageLayout(
+                170.0, 600.0, "inline", "center", None, None, "Legenda 2.", None, occurrence, None,
+            ),
+            dr._PdfImageLayout(
+                page=page, left=212.6, bottom=153.0, right=382.6, top=753.0,
+                page_width=595.3, page_height=841.9,
+            ),
+        )
+
+    adjacent, adjacent_picture = kept(0, 1)
+    assert dr._ordered_image_layouts_match(
+        [source, adjacent], [picture, adjacent_picture], text, 72.0
+    )
+    elsewhere, elsewhere_picture = kept(1, 3)
+    assert not dr._ordered_image_layouts_match(
+        [source, elsewhere], [picture, elsewhere_picture], text, 72.0
+    )

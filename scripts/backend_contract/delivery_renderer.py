@@ -1971,6 +1971,8 @@ def _ordered_image_layouts_match(
                 and bool(following_source.preceding_text)
                 and _normalized_visible_text(following_source.preceding_text or "")
                 == _normalized_visible_text(source.following_text or "")
+                # The same paragraph, not a repetition of its text elsewhere.
+                and following_source.preceding_occurrence == source.following_occurrence
             )
             kept_picture_height = (
                 following_source.height + following_source.preceding_gap
