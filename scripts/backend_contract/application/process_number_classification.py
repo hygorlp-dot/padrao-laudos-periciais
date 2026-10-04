@@ -144,7 +144,8 @@ _PIECE_TITLE = re.compile(
 # da classe com o número. A primeira linha de outra forma (prosa, transcrição,
 # "Cito o julgado:") encerra a zona: dali em diante nada é cabeçalho primário.
 _INSTITUTIONAL_START = re.compile(
-    r"^\s*(?:PODER\s+JUDICIARIO|JUSTICA\b|TRIBUNAL\b|SECAO\s+JUDICIARIA|SUBSECAO\b|COMARCA\b|JUIZO\b|JUIZADO\b|"
+    r"^\s*(?:PODER\s+JUDICIARIO|JUSTICA\s+(?:FEDERAL|ESTADUAL|DO\s+TRABALHO|ELEITORAL|MILITAR|COMUM)\b|TRIBUNAL\b|"
+    r"SECAO\b|SUBSECAO\b|COMARCA\b|JUIZO\b|JUIZADO\b|FORUM\b|JUIZA?\s+(?:FEDERAL|DE\s+DIREITO)\b|"
     r"GABINETE\b|ESTADO\s+D[EOA]\b|REPUBLICA\b|PJE\b|PROCESSO\s+JUDICIAL\s+ELETRONICO|"
     r"\d{1,3}\s*A?\s+(?:VARA|TURMA|CAMARA|JUIZADO|SECAO)\b|(?:VARA|TURMA|CAMARA)\b)"
 )
@@ -162,6 +163,25 @@ _CASE_CLASS_LINE = re.compile(
     r"^\s*(?:PROCEDIMENTO|ACAO|CUMPRIMENTO|EXECUCAO|APELACAO|AGRAVO|RECURSO|EMBARGOS|MANDADO|PROCESSO|AUTOS|"
     r"RECLAMACAO|INCIDENTE|TUTELA|PRODUCAO|CAUTELAR)\b"
 )
+
+
+_PARTY_LABELS = frozenset({
+    "AUTOR", "AUTORA", "AUTORES", "REU", "REUS", "RE", "REQUERENTE", "REQUERENTES", "REQUERIDO", "REQUERIDA",
+    "REQUERIDOS", "EXEQUENTE", "EXECUTADO", "EXECUTADA", "APELANTE", "APELANTES", "APELADO", "APELADA", "APELADOS",
+    "AGRAVANTE", "AGRAVADO", "AGRAVADA", "RECORRENTE", "RECORRIDO", "RECORRIDA", "IMPETRANTE", "IMPETRADO",
+    "EMBARGANTE", "EMBARGADO", "POLO", "ADVOGADO", "ADVOGADA", "ADVOGADOS", "PROCURADOR", "PROCURADORA",
+    "INTERESSADO", "INTERESSADA", "TERCEIRO", "PARTES",
+})
+# Assinatura, paginação e endereço eletrônico do PJe: nem abrem nem fecham.
+_PAGE_FURNITURE = re.compile(
+    r"^\s*(?:ASSINADO\s+ELETRONICAMENTE|DOCUMENTO\s+ASSINADO|NUM\.\s*\d+\s*-\s*PAG|HTTPS?://|"
+    r"ESTE\s+DOCUMENTO\s+FOI\s+GERADO|IMPRESSO\s+POR)"
+)
+
+
+def _party_line(line: str) -> bool:
+    label = re.match(r"^\s*([A-Z]+)[A-Z0-9()/ .-]{0,40}?:", line)
+    return label is not None and label.group(1) in _PARTY_LABELS
 
 
 def _header_shaped(line: str) -> bool:
@@ -231,15 +251,25 @@ class _PageView:
         self.judicial = _is_judicial_piece(self.normalized)
         self.header_end = len(self.normalized)
         self.cited_from: int | None = None
+        # Só o PRIMEIRO número rotulado do cabeçalho é candidato a principal.
+        self.first_header: int | None = None
+        parties_seen = False
         for number, line_start in enumerate(self.line_starts):
             line = self._line(number)
             if self.cited_from is None and _CITED_SECTION.match(line):
                 self.cited_from = line_start
-            if self.header_end == len(self.normalized) and (
+            if self.header_end != len(self.normalized) or _PAGE_FURNITURE.match(line):
+                continue
+            party = _party_line(line)
+            if (
                 number >= _HEADER_ZONE_LINES or _PIECE_TITLE.match(line)
                 or not _header_shaped(line)
+                # O bloco de partes encerra o cabeçalho: a primeira linha
+                # depois dele que não é parte nem advogado já é corpo.
+                or (parties_seen and not party and line.strip())
             ):
                 self.header_end = line_start
+            parties_seen = parties_seen or party
 
     def _line(self, number: int) -> str:
         start = self.line_starts[number]
@@ -322,7 +352,11 @@ def _context(view: _PageView, start: int, end: int) -> OccurrenceContext:
         # cabeçalho: é julgado citado com rótulo, nunca o número dos autos.
         if _DECISIVE.search(following) or _DECISIVE.search(previous_line):
             return OccurrenceContext.CITATION
-        return OccurrenceContext.JUDICIAL_HEADER
+        if view.first_header is None:
+            view.first_header = begin
+        if view.first_header == begin:
+            return OccurrenceContext.JUDICIAL_HEADER
+        return OccurrenceContext.UNQUALIFIED
     if _CITATION.search(line) or _CITATION.search(following):
         # Rótulo com só a classe na linha ("PROCESSO: X - APELAÇÃO CÍVEL") e
         # nada de citação depois: não se sabe de quem é; não vira precedente.

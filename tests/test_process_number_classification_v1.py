@@ -344,3 +344,34 @@ def test_real_header_layouts_keep_the_case_number_primary(top):
     text = top + f"PROCESSO Nº: {MAIN} - APELAÇÃO CÍVEL\nAPELANTE: x\nAPELADO: y\nRELATOR: DESEMBARGADOR FEDERAL Z\nDATA DE JULGAMENTO: 01/01/2024\nACÓRDÃO\n"
     result = _classify(_doc(_page(text)))
     assert result.primary_value == MAIN, top
+
+
+# --- Terceira revisão delta (#286): fim do bloco de partes, primeiro rótulo.
+
+@pytest.mark.parametrize("tail", [
+    "PROCEDIMENTO COMUM CÍVEL Nº {a}\nAUTOR: x\nRÉU: y\nProcesso: {b}\nClasse: APELAÇÃO CÍVEL\nRelator: Des. Z\nÓrgão julgador: 4ª Turma\nJulgado em 01/01/2020\n",
+    "AUTOR: x\nRÉU: y\nProcesso: {b}\nClasse: APELAÇÃO CÍVEL\nRelator: Des. Z\n",
+    "AUTOR: x\nRÉU: y\nProcesso {b}, Apelação Cível, 4ª Turma, TRF5.\n",
+    "AUTOR: x\nRÉU: y\nJustiça gratuita deferida.\nProcesso nº {b} - Apelação Cível - TRF5\n",
+    "AUTOR: x\nRÉU: y\nTribunal Regional Federal da 5ª Região, no\nPROCESSO: {b}, APELAÇÃO CÍVEL, 4ª TURMA\n",
+])
+def test_a_labelled_number_after_the_party_block_is_never_primary(tail):
+    result = _classify(_doc(_page(_JUDICIAL_TOP + tail.format(a=MAIN, b=OTHER))))
+    assert result.primary_value != OTHER
+
+
+def test_only_the_first_labelled_number_of_the_header_counts():
+    text = _JUDICIAL_TOP + f"PROCESSO: {MAIN}\nPROCESSO: {OTHER}\nAUTOR: x\nRÉU: y\nSENTENÇA\n"
+    result = _classify(_doc(_page(text)))
+    assert result.primary_value == MAIN and _classes(result)[OTHER] is ProcessNumberClass.UNKNOWN
+
+
+@pytest.mark.parametrize("top", [
+    "Seção A da 12ª Vara Cível da Capital\n",
+    "Fórum Desembargador Rodolfo Aureliano\n",
+    "Juiz Federal Fulano de Tal\n",
+    "Assinado eletronicamente por: FULANO - 01/01/2024\nNum. 123456 - Pág. 1\n",
+])
+def test_more_real_header_lines_keep_the_case_number(top):
+    text = "PODER JUDICIÁRIO\n" + top + f"PROCESSO: {MAIN}\nAUTOR: x\nRÉU: y\nSENTENÇA\n"
+    assert _classify(_doc(_page(text))).primary_value == MAIN, top
