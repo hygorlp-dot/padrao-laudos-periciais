@@ -46,6 +46,7 @@ function view(overrides: Partial<ParticipantsView> = {}): ParticipantsView {
     proposals: [],
     pending_documents: [],
     interrupted_pages: [],
+    unread_pages: [],
     stale_participant_ids: [],
     legacy_blocked_poles: [],
     duplicates: [],
@@ -68,6 +69,36 @@ describe("participants panel (#268)", () => {
     expect(await screen.findByRole("heading", { name: /Polo ativo/ })).toBeInTheDocument();
     expect(screen.getAllByText("Nenhum participante confirmado neste polo.")).toHaveLength(3);
     expect(screen.queryByRole("textbox", { name: "Parte requerente" })).not.toBeInTheDocument();
+  });
+
+  test("says when the documents read produced no proposal, and never while reading failed or is pending (#285)", async () => {
+    const none = "Nenhuma proposta encontrada nos documentos lidos.";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, view())));
+    const { unmount } = render(<ParticipantsPanel workspaceId={ID} />);
+    expect(await screen.findByText(new RegExp(none))).toBeInTheDocument();
+    unmount();
+    for (const overrides of [
+      { interrupted_pages: [{ filename: "capa.pdf", page: 1 }] },
+      { unread_pages: [{ filename: "capa.pdf", page: 1 }] },
+      { legacy_blocked_poles: ["ACTIVE" as const] },
+      { pending_documents: ["capa.pdf"] },
+      { proposals_unavailable: true },
+      { participants: [participant({})] },
+    ]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, view(overrides))));
+      const rendered = render(<ParticipantsPanel workspaceId={ID} />);
+      expect(await screen.findByRole("heading", { name: /Polo ativo/ })).toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(none))).not.toBeInTheDocument();
+      if ("unread_pages" in overrides) expect(screen.getByText(/Sem texto legível em capa.pdf, p. 1/)).toBeInTheDocument();
+      rendered.unmount();
+    }
+  });
+
+  test("a long list of unreadable pages is grouped by file and capped (#285)", async () => {
+    const unread = Array.from({ length: 30 }, (_, index) => ({ filename: "autos.pdf", page: index + 1 }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, view({ unread_pages: [...unread, { filename: "capa.pdf", page: 2 }] }))));
+    render(<ParticipantsPanel workspaceId={ID} />);
+    expect(await screen.findByText(/Sem texto legível em autos\.pdf, p\. 1, 2, 3, 4, 5, 6, 7, 8 e mais 22 páginas; capa\.pdf, p\. 2\./)).toBeInTheDocument();
   });
 
   test("a proposal stays a proposal until the expert confirms it, with the source on demand", async () => {
