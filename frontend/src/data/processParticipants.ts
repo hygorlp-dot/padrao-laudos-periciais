@@ -47,6 +47,7 @@ export type ParticipantsView = {
   proposals: Participant[];
   pending_documents: string[];
   interrupted_pages: { filename: string; page: number }[];
+  unread_pages: { filename: string; page: number }[];
   stale_participant_ids: string[];
   legacy_blocked_poles: ParticipantPole[];
   duplicates: { proposal_id: string; matches_id: string; matches_name: string }[];
@@ -144,6 +145,7 @@ async function read(response: Response): Promise<ParticipantsView> {
     ...value,
     legacy_blocked_poles: Array.isArray(value.legacy_blocked_poles) ? value.legacy_blocked_poles : [],
     duplicates: Array.isArray(value.duplicates) ? value.duplicates : [],
+    unread_pages: Array.isArray(value.unread_pages) ? value.unread_pages : [],
     proposals_unavailable: value.proposals_unavailable === true,
     process_record_saved: value.process_record_saved !== false,
   } as ParticipantsView;

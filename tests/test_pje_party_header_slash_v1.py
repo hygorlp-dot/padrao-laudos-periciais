@@ -96,6 +96,7 @@ def test_structural_header_variants_open_the_table(header):
         "Partes e Procuradores",
         "Partes Procurador//Terceiro vinculado",
         "Partes Procurador/Terceiro vincul",
+        "Partes\nProcurador|Terceiro vinculado",
     ],
 )
 def test_header_like_lines_are_never_read_as_a_table_but_are_said(header):
@@ -115,6 +116,12 @@ def test_header_like_lines_are_never_read_as_a_table_but_are_said(header):
         "As partes, por seus procuradores, requerem o que segue.",
         "Procurador/Terceiro vinculado",
         "Terceiro vinculado",
+        # Prosa jurídica com quebra de linha começando em "partes".
+        "Pedido de intimacao das\npartes por meio de seus procuradores constituidos.",
+        "partes vinculadas ao contrato",
+        "Partes intimadas na pessoa de seus procuradores.",
+        "PARTES: PROCURADORIA GERAL DO ESTADO",
+        "Partes\nAUTOR SINTETICO requer a juntada",
     ],
 )
 def test_vague_lines_neither_open_the_table_nor_raise_a_false_warning(line):
@@ -122,6 +129,34 @@ def test_vague_lines_neither_open_the_table_nor_raise_a_false_warning(line):
     parsed = parse_pje_participant_rows(text)
     assert parsed.rows == () and parsed.unrecognized_header is False
     assert _proposal_set(_text_page(text)).interrupted_pages == ()
+
+
+def test_header_split_over_two_lines_opens_the_table():
+    for head, tail in (("Partes", "Procurador/Terceiro vinculado"), ("PARTES", "Procuradores / Terceiros vinculados")):
+        text = "\n".join([head, tail, "FULANO DE TAL (AUTOR) ADV (ADVOGADO)", "CICLANO SA (REU)"])
+        result = _proposal_set(_text_page(text))
+        assert _summary(result) == [("ACTIVE", "FULANO DE TAL", ["ADV"]), ("PASSIVE", "CICLANO SA", [])]
+        assert result.interrupted_pages == ()
+        assert [row.name for row in parse_pje_party_table(text).rows] == ["FULANO DE TAL"]
+    # A segunda linha só vale logo depois de "Partes"; separadas, nada abre.
+    apart = _proposal_set(_text_page("Partes\nOutro texto\nProcurador/Terceiro vinculado\nFULANO (AUTOR)\n"))
+    assert apart.proposals == ()
+
+
+def test_pages_without_legible_text_are_said_never_counted_as_nothing_found():
+    from types import SimpleNamespace
+    from scripts.backend_contract.application.process_metadata import PageExtractionMode, PageProcessingStatus, PdfTextPage
+    pages = (
+        PdfTextPage(1, "", PageExtractionMode.OCR, processing_status=PageProcessingStatus.OCR_FAILED),
+        PdfTextPage(2, "", processing_status=PageProcessingStatus.NOT_PROCESSED),
+        PdfTextPage(3, "Despacho sintético.\n"),
+    )
+    from tests.test_process_participants_v1 import _document
+    document = _document(*pages)
+    from scripts.backend_contract.application.process_participants import ParticipantProposals
+    result = ParticipantProposals(SimpleNamespace(execute=lambda _w: (document,))).execute("w")
+    assert result.proposals == () and result.interrupted_pages == ()
+    assert result.unread_pages == (("autos.pdf", 1), ("autos.pdf", 2))
 
 
 def _slash_page(*lines):
@@ -219,7 +254,7 @@ def test_product_flow_reads_the_real_slash_cover_over_http(tmp_path):
             ("PASSIVE", "EMPRESA SINTÉTICA", []),
         ]
         assert all(p["review_state"] == "PROPOSED" for p in view["proposals"])
-        assert view["participants"] == [] and view["interrupted_pages"] == []
+        assert view["participants"] == [] and view["interrupted_pages"] == [] and view["unread_pages"] == []
         source = view["proposals"][0]["provenance"][0]
         assert source["filename"] == "capa-barra.pdf" and source["page"] == 1
         assert source["excerpt"].startswith("AUTORA SINTÉTICA (AUTOR)")

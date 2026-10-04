@@ -326,7 +326,12 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
         </p>
       ) : null}
 
-      {!view.proposals.length && !view.participants.length && !view.proposals_unavailable && !view.pending_documents.length && !view.interrupted_pages.length ? (
+      {view.unread_pages.length ? (
+        <p className="participants-notice participants-notice--warning" role="status">
+          Sem texto legível em {view.unread_pages.map((item) => `${item.filename}, p. ${item.page}`).join("; ")}. Participantes nessas páginas não podem ser propostos: confira os autos.
+        </p>
+      ) : null}
+      {!view.proposals.length && !view.participants.length && !view.proposals_unavailable && !view.pending_documents.length && !view.interrupted_pages.length && !view.unread_pages.length && !view.legacy_blocked_poles.length ? (
         <p className="participants-notice" role="status">
           Nenhuma proposta encontrada nos documentos lidos. Se a capa do processo ainda não foi importada, importe-a em Materiais; se já foi, confira os autos e adicione os participantes manualmente.
         </p>

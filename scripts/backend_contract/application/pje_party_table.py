@@ -53,13 +53,48 @@ _HEADER = re.compile(
     r"(?:(?:\s*/\s*|\s+)TERCEIROS?\s+VINCULADOS?)?\s*$",
     re.IGNORECASE,
 )
-# Linha que tem a forma de um cabeçalho de partes ("PARTES ... PROCURADOR..."
-# ou "PARTES ... VINCULADO", inclusive com palavra partida pelo OCR) mas não é
-# o cabeçalho aceito: a tabela pode estar ali e não foi lida, o que é dito ao
-# perito em vez de virar "nenhum participante" (#285). Só sinaliza; nunca lê.
-_HEADER_LIKE = re.compile(
-    r"^\s*PARTES\b.*(?:\bPROCURADOR|VINCULAD)", re.IGNORECASE
+# O PJe pode quebrar o cabeçalho em duas colunas/linhas: "Partes" sozinho e,
+# na linha seguinte, "Procurador/Terceiro vinculado". As duas linhas juntas
+# são o mesmo cabeçalho (#285); a segunda sozinha não abre nada.
+_HEADER_HEAD = re.compile(r"^\s*PARTES\s*$", re.IGNORECASE)
+_HEADER_TAIL = re.compile(
+    r"^\s*PROCURADOR(?:ES)?"
+    r"(?:(?:\s*/\s*|\s+)TERCEIROS?\s+VINCULADOS?)?\s*$",
+    re.IGNORECASE,
 )
+# Linha (ou par "Partes" + linha seguinte) feita só do vocabulário do
+# cabeçalho, mas que não é o cabeçalho aceito -- separador trocado, palavra
+# partida ou truncada pelo OCR. A tabela pode estar ali e não foi lida: isso é
+# dito ao perito em vez de virar "nenhum participante" (#285). Só sinaliza,
+# nunca lê; prosa ("partes, por seus procuradores, ...") não tem esta forma.
+_HEADER_WORDS = ("PROCURADORES", "TERCEIROS", "VINCULADOS")
+_HEADER_FILLERS = frozenset({"E", "OUTROS"})
+_HEADER_SEPARATORS = re.compile(r"[\s/|\\]+")
+_HEADER_MAX_TOKENS = 8
+
+
+def _header_vocabulary_only(normalized: str) -> bool:
+    tokens = [token for token in _HEADER_SEPARATORS.split(normalized) if token]
+    if not tokens or len(tokens) > _HEADER_MAX_TOKENS:
+        return False
+    fragments = 0
+    for token in tokens:
+        if token in _HEADER_FILLERS:
+            continue
+        if len(token) >= 3 and any(token in word for word in _HEADER_WORDS):
+            fragments += 1
+            continue
+        return False
+    return fragments > 0
+
+
+def _is_header_like(normalized: str, *, after_bare_head: bool) -> bool:
+    if after_bare_head:
+        return _header_vocabulary_only(normalized)
+    head = re.match(r"^\s*PARTES\b", normalized)
+    return head is not None and _header_vocabulary_only(normalized[head.end():])
+
+
 _EXPLICIT_POLES = (
     ("POLO ATIVO", PjePartyPole.ACTIVE),
     ("POLO PASSIVO", PjePartyPole.PASSIVE),
@@ -246,14 +281,18 @@ def parse_pje_party_table(page_text: str) -> PjePartyTableParseResult:
     rows: list[PjePartyTableRow] = []
     line_start = 0
 
+    after_bare_head = False
     for raw_line in page_text.splitlines(keepends=True):
         line = raw_line.rstrip("\r\n")
         normalized, source_indices = _ascii_upper_with_source_indices(line)
+        bare_head, after_bare_head = after_bare_head, False
 
-        if _HEADER.fullmatch(normalized):
+        if _HEADER.fullmatch(normalized) or (bare_head and _HEADER_TAIL.fullmatch(normalized)):
             state = PjePartyTableState.HEADER_SEEN
             line_start += len(raw_line)
             continue
+        if _HEADER_HEAD.fullmatch(normalized):
+            after_bare_head = True
 
         if state is PjePartyTableState.TERMINATED:
             line_start += len(raw_line)
@@ -443,6 +482,7 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
     interrupted = False
     header_rows: int | None = None
     unrecognized_header = False
+    after_bare_head = False
     section: PjeParticipantPole | None = None
     # Indice da parte que pode receber procurador em linha de continuacao; zera
     # a cada cabecalho ou secao, para nunca ligar o advogado de um polo a parte
@@ -454,11 +494,14 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
         offset = line_start
         line_start += len(raw_line)
         normalized, source_indices = _ascii_upper_with_source_indices(line)
-        if _HEADER.fullmatch(normalized):
+        bare_head, after_bare_head = after_bare_head, False
+        if _HEADER.fullmatch(normalized) or (bare_head and _HEADER_TAIL.fullmatch(normalized)):
             inside, terminated, section, opened, continuation_target = True, False, None, True, None
             header_rows = 0
             continue
-        if _HEADER_LIKE.match(normalized):
+        if _HEADER_HEAD.fullmatch(normalized):
+            after_bare_head = True
+        elif _is_header_like(normalized, after_bare_head=bare_head):
             unrecognized_header = True
         section_match = _SECTION_LINE.fullmatch(normalized)
         if section_match:

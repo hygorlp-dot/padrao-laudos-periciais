@@ -52,6 +52,9 @@ class ParticipantProposalSet:
     # continua de outra pagina sem cabecalho); o restante pode conter
     # participantes que nao foram propostos.
     interrupted_pages: tuple[tuple[str, int], ...]
+    # Paginas sem texto legivel (OCR falhou, nao processada, texto truncado):
+    # nao se sabe o que ha nelas, entao nunca contam como "nada encontrado".
+    unread_pages: tuple[tuple[str, int], ...] = ()
 
 
 class ProcessRecordRequired(ValueError):
@@ -90,6 +93,9 @@ def _row_participant(workspace_id, document, page, mode, logical_id, row) -> Cas
     )
 
 
+_UNREAD_STATUSES = frozenset({"OCR_FAILED", "NOT_PROCESSED", "TRUNCATED"})
+
+
 @dataclass(frozen=True, slots=True)
 class ParticipantProposals:
     """Propostas a partir da tabela de partes de cada fonte, sem decidir nada."""
@@ -102,6 +108,7 @@ class ParticipantProposals:
         proposals: dict[str, CaseParticipant] = {}
         pending: list[str] = []
         interrupted: list[tuple[str, int]] = []
+        unread: list[tuple[str, int]] = []
         for document in documents:
             if document.reading_pending:
                 pending.append(document.filename)
@@ -109,11 +116,13 @@ class ParticipantProposals:
             previous_open = False
             for page in document.pages:
                 mode = page.extraction_mode.value
-                if mode not in ("NATIVE_TEXT", "OCR") or not page.text:
-                    previous_open = False
-                    continue
                 # Peca excluida pelo perito nao sustenta proposta nova.
                 if document.excluded(page.number):
+                    previous_open = False
+                    continue
+                if page.processing_status.value in _UNREAD_STATUSES:
+                    unread.append((document.filename, page.number))
+                if mode not in ("NATIVE_TEXT", "OCR") or not page.text:
                     previous_open = False
                     continue
                 parsed = parse_pje_participant_rows(page.text)
@@ -137,7 +146,7 @@ class ParticipantProposals:
                     proposals[proposal.participant_id] = proposal
                 if broken:
                     interrupted.append((document.filename, page.number))
-        return ParticipantProposalSet(tuple(proposals.values()), tuple(pending), tuple(interrupted))
+        return ParticipantProposalSet(tuple(proposals.values()), tuple(pending), tuple(interrupted), tuple(unread))
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +176,7 @@ class ProcessParticipantsView:
     proposals_unavailable: bool = False
     # Sem dados do processo gravados nao ha captura para o laudo.
     process_record_saved: bool = True
+    unread_pages: tuple[tuple[str, int], ...] = ()
 
 
 def _source_is_current(participant: CaseParticipant, by_content) -> bool:
@@ -277,7 +287,7 @@ class GetProcessParticipants:
             proposal_set.pending_documents, proposal_set.interrupted_pages,
             () if unavailable else _stale_ids(register, texts),
             blocked, _duplicates(register, open_proposals), unavailable,
-            snapshot.revision is not None,
+            snapshot.revision is not None, proposal_set.unread_pages,
         )
 
 

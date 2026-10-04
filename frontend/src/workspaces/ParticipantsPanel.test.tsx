@@ -46,6 +46,7 @@ function view(overrides: Partial<ParticipantsView> = {}): ParticipantsView {
     proposals: [],
     pending_documents: [],
     interrupted_pages: [],
+    unread_pages: [],
     stale_participant_ids: [],
     legacy_blocked_poles: [],
     duplicates: [],
@@ -78,6 +79,8 @@ describe("participants panel (#268)", () => {
     unmount();
     for (const overrides of [
       { interrupted_pages: [{ filename: "capa.pdf", page: 1 }] },
+      { unread_pages: [{ filename: "capa.pdf", page: 1 }] },
+      { legacy_blocked_poles: ["ACTIVE" as const] },
       { pending_documents: ["capa.pdf"] },
       { proposals_unavailable: true },
       { participants: [participant({})] },
@@ -86,6 +89,7 @@ describe("participants panel (#268)", () => {
       const rendered = render(<ParticipantsPanel workspaceId={ID} />);
       expect(await screen.findByRole("heading", { name: /Polo ativo/ })).toBeInTheDocument();
       expect(screen.queryByText(new RegExp(none))).not.toBeInTheDocument();
+      if ("unread_pages" in overrides) expect(screen.getByText(/Sem texto legível em capa.pdf, p. 1/)).toBeInTheDocument();
       rendered.unmount();
     }
   });

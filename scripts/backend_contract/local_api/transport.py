@@ -331,6 +331,7 @@ def _participants_dto(view) -> dict:
         "proposals": [item_dto(item) for item in view.proposals],
         "pending_documents": list(view.pending_documents),
         "interrupted_pages": [{"filename": filename, "page": page} for filename, page in view.interrupted_pages],
+        "unread_pages": [{"filename": filename, "page": page} for filename, page in view.unread_pages],
         "stale_participant_ids": list(view.stale_participant_ids),
         "legacy_blocked_poles": [pole.value for pole in view.legacy_blocked_poles],
         "duplicates": [{"proposal_id": item.proposal_id, "matches_id": item.matches_id, "matches_name": item.matches_name} for item in view.duplicates],
