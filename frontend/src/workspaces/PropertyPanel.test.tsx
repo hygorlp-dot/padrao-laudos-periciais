@@ -81,3 +81,60 @@ it("labels a weak contextual match as a possible information, never as a fact", 
   expect(await screen.findByText("Possível informação encontrada — confira a fonte")).toBeInTheDocument();
   expect(savePropertyRecord).not.toHaveBeenCalled();
 });
+const WS = "11111111-1111-4111-8111-111111111111";
+function proposal(id: string, value: string, filename: string, rank: string) {
+  return { proposal_id: id, workspace_id: WS, field: "owner", value, state: "PROPOSED" as const, strength: "STRONG" as const, source_rank: rank, piece_id: null,
+    evidence: { document_id: filename, document_sha256: "a".repeat(64), filename, page: 1, excerpt: `Proprietário: ${value}`, method: "LABEL_NATIVE_TEXT_V1", confidence: null, source_value: value } };
+}
+function cluster(id: string, items: ReturnType<typeof proposal>[], overrides: object = {}) {
+  return { cluster_id: id, field: "owner", canonical_value: items[0].value, display_value: items[0].value, normalized_value: items[0].value.toLowerCase(),
+    confidence: "HIGH" as const, strength: "STRONG" as const, best_rank: items[0].source_rank, source_count: items.length, document_count: items.length,
+    evidences: items, conflicting_cluster_ids: [] as string[], ...overrides };
+}
+it("groups repeated values into one proposal with counts and saves the best evidence (#288)", async () => {
+  const items = [proposal("p-contrato", "Fulana Sintética", "contrato.pdf", "B"), proposal("p-inicial", "FULANA SINTÉTICA", "inicial.pdf", "E")];
+  vi.mocked(getPropertyProposals).mockResolvedValue({ proposals: items, clusters: [cluster("PVC-1", items)], pendingDocuments: [] });
+  vi.mocked(savePropertyRecord).mockResolvedValue(record);
+  render(<PropertyPanel workspaceId={WS} />);
+  fireEvent.click(screen.getByText("Imóvel"));
+  await screen.findByLabelText("Proprietário do imóvel");
+  fireEvent.click(screen.getByRole("button", { name: "Buscar informações nos documentos" }));
+  expect(await screen.findByText("2 ocorrências · 2 peças")).toBeInTheDocument();
+  expect(screen.getByText(/Consistência documental: alta · melhor fonte: contrato/)).toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Usar esta proposta" })).toHaveLength(1);
+  expect(screen.queryByText(/Valores divergentes/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Usar esta proposta" }));
+  fireEvent.click(screen.getByRole("button", { name: "Confirmar dados do imóvel" }));
+  await waitFor(() => expect(savePropertyRecord).toHaveBeenCalledWith(WS, 1, [{ field: "owner", value: "Fulana Sintética", proposal_id: "p-contrato" }]));
+});
+it("shows divergent values side by side and never picks one as the main proposal (#288)", async () => {
+  const left = [proposal("p-a", "Fulana Sintética", "contrato.pdf", "B")];
+  const right = [proposal("p-b", "Beltrana Sintética", "matricula.pdf", "A")];
+  vi.mocked(getPropertyProposals).mockResolvedValue({ proposals: [...left, ...right], clusters: [
+    cluster("PVC-B", right, { confidence: "MEDIUM", conflicting_cluster_ids: ["PVC-A"] }),
+    cluster("PVC-A", left, { confidence: "MEDIUM", conflicting_cluster_ids: ["PVC-B"] }),
+  ], pendingDocuments: [] });
+  render(<PropertyPanel workspaceId={WS} />);
+  fireEvent.click(screen.getByText("Imóvel"));
+  await screen.findByLabelText("Proprietário do imóvel");
+  fireEvent.click(screen.getByRole("button", { name: "Buscar informações nos documentos" }));
+  const group = await screen.findByRole("group", { name: "Valores divergentes encontrados" });
+  expect(group).toHaveTextContent("Fulana Sintética");
+  expect(group).toHaveTextContent("Beltrana Sintética");
+  expect(screen.queryByRole("button", { name: "Usar esta proposta" })).not.toBeInTheDocument();
+  expect(screen.getAllByRole("button", { name: "Usar este valor" })).toHaveLength(2);
+});
+it("a possible-only value is never shown with high confidence and other values stay listed (#288)", async () => {
+  const strong = [proposal("p-s", "Fulana Sintética", "contrato.pdf", "B")];
+  const weak = [{ ...proposal("p-w", "Outra Pessoa", "despacho.pdf", "H"), strength: "POSSIBLE" as const }];
+  vi.mocked(getPropertyProposals).mockResolvedValue({ proposals: [...strong, ...weak], clusters: [
+    cluster("PVC-S", strong),
+    cluster("PVC-W", weak, { confidence: "LOW", strength: "POSSIBLE" }),
+  ], pendingDocuments: [] });
+  render(<PropertyPanel workspaceId={WS} />);
+  fireEvent.click(screen.getByText("Imóvel"));
+  await screen.findByLabelText("Proprietário do imóvel");
+  fireEvent.click(screen.getByRole("button", { name: "Buscar informações nos documentos" }));
+  expect(await screen.findByText("Outros valores encontrados (1)")).toBeInTheDocument();
+  expect(screen.getByText(/Consistência documental: baixa · melhor fonte: contexto possível/)).toBeInTheDocument();
+});

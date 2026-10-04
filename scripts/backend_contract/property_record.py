@@ -176,6 +176,13 @@ class PropertyProposal:
     # STRONG: o contexto liga o dado ao imovel objeto. POSSIBLE: a peca e
     # pertinente, mas o trecho nao diz de qual imovel fala -- confira a fonte.
     strength: str = "STRONG"
+    # Hierarquia documental da peca de origem (#288), so para ordenar e
+    # destacar: A matricula/registro, B contrato, C termo de entrega, D laudo
+    # ou parecer, E peticao inicial ligada ao imovel objeto, F contestacao,
+    # G outras pecas, H contexto apenas possivel. Nunca torna nada efetivo.
+    source_rank: str = "G"
+    # Peca logica do export PJe (ou None): "M pecas" conta pecas, nao paginas.
+    piece_id: str | None = None
 
 
 def _normalized(value):
@@ -211,6 +218,34 @@ _PERTINENT_DOCUMENTS = (
     "contrato de mutuo", "matricula", "registro de imoveis", "termo de entrega", "termo de recebimento",
     "laudo", "parecer tecnico", "vistoria",
 )
+# Tipo de peca para o ranking (#288). Vence o marcador que aparece primeiro
+# no inicio da pagina: o titulo da peca vem antes das referencias a outras
+# ("contrato ... registrado sob a matricula ...").
+_RANK_MARKERS = (
+    ("matricula n", "A"), ("matricula do imovel", "A"), ("registro de imoveis", "A"), ("certidao de inteiro teor", "A"),
+    ("contrato de compra e venda", "B"), ("contrato por instrumento particular", "B"), ("contrato de financiamento", "B"),
+    ("contrato de mutuo", "B"), ("instrumento particular de compra e venda", "B"),
+    ("termo de entrega", "C"), ("termo de recebimento", "C"),
+    ("laudo", "D"), ("parecer tecnico", "D"),
+    ("peticao inicial", "E"),
+    ("contestacao", "F"),
+)
+
+
+def _rank_kind(folded_head):
+    found = [(folded_head.find(marker), rank) for marker, rank in _RANK_MARKERS if marker in folded_head]
+    return min(found)[1] if found else ""
+
+
+def _source_rank(kind, method, strength):
+    if strength != "STRONG":
+        return "H"
+    if kind == "E":
+        # A inicial so pesa quando o trecho fala do imovel objeto (ou rotula o dado).
+        return "E" if method.startswith(("CONTEXT_BOUND_", "LABEL_")) else "G"
+    return kind or "G"
+
+
 _INTRINSIC_FIELDS = {"development", "private_area_m2", "constructed_area_m2", "program", "habite_se_date", "contract_number", "contractual_value"}
 _SENTENCE_BREAK = re.compile(r"(?:\.\s|;\s|\n\s*\n)")
 # "Av. ", "Dr. ", "Rel. ", "nº. " nao terminam a frase.
@@ -249,6 +284,10 @@ def _original(text, indices, start, end):
     return text[indices[start]:indices[end - 1] + 1].strip(" ,.;:-")
 
 
+_UF_CODES = ("ac", "al", "ap", "am", "ba", "ce", "df", "es", "go", "ma", "mt", "ms", "mg", "pa", "pb", "pr", "pe", "pi", "rj", "rn", "rs", "ro", "rr", "sc", "sp", "se", "to")
+_CITY_UF = re.compile(
+    r"(?:,|\bem|\bde)[ \t]+([a-z][a-z' ]{1,40}?[a-z])[ \t]*(?:-|/)[ \t]*(" + "|".join(_UF_CODES) + r")\b(?![-/])"
+)
 _STREET = re.compile(r"\b(?:rua|avenida|av\.|travessa|estrada|rodovia|alameda|praca|largo)\s+[^,;\n]{2,80}?(?=\s*(?:,|;|\n|$|\s" + _NUMBER_MARK + r"|\s-\s))")
 _PATTERNS = (
     ("street", _STREET, 0),
@@ -265,6 +304,10 @@ _PATTERNS = (
     ("contractual_value", re.compile(r"\bvalor\s+(?:de\s+|da\s+|do\s+)?(?:compra\s+e\s+venda|aquisicao|operacao|imovel)\s*(?:de|e de|:)?\s*r\$\s*(\d{1,3}(?:\.\d{3})*,\d{2})"), 1),
     ("program", re.compile(r"\b(programa minha casa,? minha vida|programa casa verde e amarela|fundo de arrendamento residencial)\b"), 1),
     ("habite_se_date", re.compile(r"\bhabite-?se\b[^\n]{0,80}?\b(\d{2}/\d{2}/\d{4})\b"), 1),
+    # "..., Caruaru - PE" / "em Caruaru/PE" no endereco (#288): municipio e UF
+    # do mesmo trecho; a UF tem de estar em maiusculas na fonte.
+    ("city", _CITY_UF, 1),
+    ("state", _CITY_UF, 2),
 )
 
 
@@ -323,6 +366,10 @@ def _context_proposals(page, document_kind, folded, indices, label_spans=()):
             value = _original(text, indices, match.start(group), match.end(group))
             if not value:
                 continue
+            if field == "state" and not (len(value) == 2 and value.isupper()):
+                continue
+            if field == "city" and not value[:1].isupper():
+                continue
             # "residencial" adjetivo ("uso residencial") nao e nome de empreendimento.
             if field == "development" and not _proper_name_follows(value):
                 continue
@@ -360,7 +407,7 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
     proposals = []
     seen = set()
 
-    def add(field, value, excerpt, method, strength, page):
+    def add(field, value, excerpt, method, strength, page, rank_kind="", piece=None):
         if _DEFINITIONS[field][1] == "decimal":
             value = re.sub(r"\s*m[²2]\s*$", "", value).removeprefix("R$").strip()
         try:
@@ -369,12 +416,16 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
             return
         evidence = PropertyEvidence(str(document_id), checksum, filename, page.number, excerpt, method, page.confidence, value)
         identity = json.dumps([str(workspace_id), field, asdict(evidence)], ensure_ascii=False, sort_keys=True)
-        proposal = PropertyProposal(sha256(identity.encode()).hexdigest(), str(workspace_id), field, value, evidence, strength)
+        proposal = PropertyProposal(
+            sha256(identity.encode()).hexdigest(), str(workspace_id), field, value, evidence, strength,
+            _source_rank(rank_kind, method, strength), piece,
+        )
         if proposal.proposal_id not in seen:
             seen.add(proposal.proposal_id)
             proposals.append(proposal)
 
     document_kind = ""
+    rank_kind = ""
     current_piece = None
     for page in pages:
         mode = page.extraction_mode.value
@@ -383,11 +434,12 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
         if logical_document_for is not None:
             piece = logical_document_for(page.number)
             if piece != current_piece:
-                current_piece, document_kind = piece, ""
+                current_piece, document_kind, rank_kind = piece, "", ""
         folded_page, page_indices = _folded(page.text)
         kind = next((item for item in _PERTINENT_DOCUMENTS if item in folded_page[:600]), "")
         if kind:
             document_kind = kind
+        rank_kind = _rank_kind(folded_page[:600]) or rank_kind
         lines = page.text.splitlines()
         offsets, cursor = [], 0
         for raw in page.text.splitlines(keepends=True):
@@ -407,7 +459,7 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
                 nearby = _folded(" ".join(lines[max(0, index - 2):index + 1]))[0]
                 if _LABEL_QUALIFICATION_BLOCKERS.search(nearby):
                     continue
-            add(field, match[2].strip(), line.strip(), f"LABEL_{mode}_V1", "STRONG", page)
+            add(field, match[2].strip(), line.strip(), f"LABEL_{mode}_V1", "STRONG", page, rank_kind, current_piece)
         for field, value, excerpt, method, strength in _context_proposals(page, document_kind, folded_page, page_indices, tuple(label_spans)):
-            add(field, value, excerpt, method, strength, page)
+            add(field, value, excerpt, method, strength, page, rank_kind, current_piece)
     return tuple(proposals)

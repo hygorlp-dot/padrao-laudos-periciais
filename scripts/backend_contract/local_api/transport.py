@@ -1038,9 +1038,17 @@ class LocalApi:
                         proposals, pending = read(workspace_id)
                     else:
                         proposals, pending = self._services.get_property_proposals.execute(workspace_id), ()
+                    from ..property_clusters import cluster_property_proposals
                     values_by_field = {field: {p.value for p in proposals if p.field == field} for field, *_ in PROPERTY_FIELDS}
+                    # #288: o mesmo valor (normalizado por campo) vira um grupo com
+                    # todas as evidencias, ordenado pela hierarquia das pecas.
+                    clusters = cluster_property_proposals(tuple(proposals))
                     return _json_response(200, {"workspace_id": str(workspace_id), "proposals": [
                         {**asdict(p), "state": "CONFLICTING" if len(values_by_field[p.field]) > 1 else "PROPOSED"} for p in proposals
+                    ], "clusters": [
+                        {**{key: value for key, value in asdict(cluster).items() if key != "evidences"},
+                         "evidences": [asdict(item) for item in cluster.evidences]}
+                        for cluster in clusters
                     ], "pending_documents": list(pending)})
                 if normalized_method == "GET":
                     try:

@@ -641,6 +641,33 @@ main {
   font-size: inherit;
 }
 
+/* #288: propostas do imóvel agrupadas por valor. */
+.property-main-proposal,
+.property-divergence {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.property-cluster {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-rule);
+  border-radius: 0.32rem;
+  background: var(--color-paper);
+}
+
+.property-cluster .text-action {
+  justify-self: start;
+  margin: 0;
+}
+
+.property-cluster-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-2);
+}
+
 .source-evidence {
   display: grid;
   gap: var(--space-3);
