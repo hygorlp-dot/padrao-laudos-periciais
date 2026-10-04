@@ -51,13 +51,20 @@ const READING_LABELS: Record<ReadingState, string> = {
   LEITURA_INTERROMPIDA: "Leitura dos autos incompleta — confira os avisos abaixo",
   PROPOSTAS_DISPONIVEIS: "Propostas aguardando sua conferência",
   PROPOSTAS_CONFIRMADAS: "Propostas dos autos já conferidas",
-  NENHUMA_PROPOSTA_ENCONTRADA: "Nenhuma proposta encontrada nos autos lidos",
+  NENHUMA_PROPOSTA_ENCONTRADA: "Nenhuma proposta nos autos lidos até agora",
+};
+const READING_MARKS: Record<ReadingState, string> = {
+  LEITURA_PENDENTE: "↻", LEITURA_INTERROMPIDA: "!", PROPOSTAS_DISPONIVEIS: "●", PROPOSTAS_CONFIRMADAS: "✓", NENHUMA_PROPOSTA_ENCONTRADA: "○",
+};
+const PROPOSAL_GROUP_LABELS: Record<ParticipantPole, string> = {
+  ACTIVE: "Propostas do polo ativo", PASSIVE: "Propostas do polo passivo", OTHER: "Propostas de outros participantes",
 };
 
 // Um único estado, na ordem do que mais pesa: leitura falha ou incompleta
 // nunca aparece como "nada encontrado" (#285).
 function readingState(view: ParticipantsView): ReadingState {
-  if (view.proposals_unavailable || view.interrupted_pages.length || view.unread_pages.length) return "LEITURA_INTERROMPIDA";
+  // Texto antigo que não pôde ser trazido também deixa partes por registrar.
+  if (view.proposals_unavailable || view.interrupted_pages.length || view.unread_pages.length || view.legacy_blocked_poles.length) return "LEITURA_INTERROMPIDA";
   if (view.pending_documents.length) return "LEITURA_PENDENTE";
   if (view.proposals.length) return "PROPOSTAS_DISPONIVEIS";
   if (view.participants.some((item) => item.origin === "SOURCE")) return "PROPOSTAS_CONFIRMADAS";
@@ -307,6 +314,9 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
 
   const active = view.participants.filter((item) => item.review_state === "CONFIRMED");
   const removed = view.participants.filter((item) => item.review_state === "REJECTED");
+  const reading = readingState(view);
+  const proposalsByPole: Record<ParticipantPole, Participant[]> = { ACTIVE: [], PASSIVE: [], OTHER: [] };
+  for (const proposal of view.proposals) proposalsByPole[proposal.pole].push(proposal);
   const stale = new Set(view.stale_participant_ids);
   const order = view.participants.map((item) => item.participant_id);
   const locked = busy || !view.process_record_saved;
@@ -337,9 +347,9 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
         ) : null}
       </header>
 
-      <p className="participants-reading" data-state={readingState(view)}>
-        <span className="participants-reading__mark" aria-hidden="true">{readingState(view) === "LEITURA_INTERROMPIDA" ? "!" : readingState(view) === "LEITURA_PENDENTE" ? "↻" : readingState(view) === "PROPOSTAS_DISPONIVEIS" ? "●" : readingState(view) === "PROPOSTAS_CONFIRMADAS" ? "✓" : "○"}</span>
-        Situação: {READING_LABELS[readingState(view)]}
+      <p className="participants-reading" data-state={reading}>
+        <span className="participants-reading__mark" aria-hidden="true">{READING_MARKS[reading]}</span>
+        Situação: {READING_LABELS[reading]}
       </p>
       {!view.process_record_saved ? (
         <p className="participants-notice participants-notice--warning" role="status">
@@ -387,11 +397,11 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
         <section className="participants-proposals" aria-labelledby="participants-proposals-title">
           <h3 id="participants-proposals-title">Propostas encontradas nos autos ({view.proposals.length})</h3>
           <p className="field-hint">Confira cada nome com a fonte antes de confirmar. Nomes repetidos nos autos aparecem separados.</p>
-          {POLES.filter((pole) => view.proposals.some((item) => item.pole === pole)).map((pole) => (
-          <section className="participants-proposal-group" key={pole} aria-label={`Propostas do ${POLE_LABELS[pole].toLowerCase()}`}>
-          <h4>{POLE_LABELS[pole]} <span className="participants-count">{view.proposals.filter((item) => item.pole === pole).length}</span></h4>
+          {POLES.filter((pole) => proposalsByPole[pole].length).map((pole) => (
+          <section className="participants-proposal-group" key={pole} aria-labelledby={`participants-proposals-${pole}`}>
+          <h4 id={`participants-proposals-${pole}`}>{PROPOSAL_GROUP_LABELS[pole]} <span className="participants-count">{proposalsByPole[pole].length}</span></h4>
           <ul className="participant-list">
-            {view.proposals.filter((item) => item.pole === pole).map((proposal) => (
+            {proposalsByPole[pole].map((proposal) => (
               <li className="participant-row participant-row--proposal" key={proposal.participant_id}>
                 <div className="participant-row__main">
                   <strong className="participant-name">{proposal.name}</strong>

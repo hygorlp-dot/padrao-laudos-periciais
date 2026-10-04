@@ -96,7 +96,8 @@ describe("participants panel (#268)", () => {
 
   test("one reading state at a time, failure first, never 'nothing found' while reading (#285)", async () => {
     const cases: [Partial<ParticipantsView>, RegExp][] = [
-      [{}, /Nenhuma proposta encontrada nos autos lidos/],
+      [{}, /Nenhuma proposta nos autos lidos até agora/],
+      [{ legacy_blocked_poles: ["PASSIVE"] }, /Leitura dos autos incompleta/],
       [{ pending_documents: ["capa.pdf"] }, /Leitura dos autos em andamento/],
       [{ pending_documents: ["capa.pdf"], interrupted_pages: [{ filename: "capa.pdf", page: 1 }] }, /Leitura dos autos incompleta/],
       [{ unread_pages: [{ filename: "capa.pdf", page: 2 }] }, /Leitura dos autos incompleta/],
@@ -131,10 +132,10 @@ describe("participants panel (#268)", () => {
     render(<ParticipantsPanel workspaceId={ID} />);
 
     const proposals = await screen.findByRole("region", { name: /Propostas encontradas nos autos/ });
-    const passive = within(proposals).getByRole("region", { name: "Propostas do polo passivo" });
+    const passive = within(proposals).getByRole("region", { name: /^Propostas do polo passivo/ });
     expect(within(passive).getByText("BETA SINTÉTICA")).toBeInTheDocument();
     expect(within(passive).getByText(/Parte ré · Tipo de pessoa a confirmar/)).toBeInTheDocument();
-    expect(within(proposals).queryByRole("region", { name: "Propostas do polo ativo" })).not.toBeInTheDocument();
+    expect(within(proposals).queryByRole("region", { name: /^Propostas do polo ativo/ })).not.toBeInTheDocument();
     expect(screen.getByText(/Situação: Propostas aguardando sua conferência/)).toBeInTheDocument();
     expect(within(proposals).getByText(/PROC \(procurador\)/)).toBeInTheDocument();
     expect(within(screen.getByRole("region", { name: /^Polo passivo/ })).getByText("Nenhum participante confirmado neste polo.")).toBeInTheDocument();
