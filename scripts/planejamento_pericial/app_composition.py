@@ -14,12 +14,13 @@ e o usa pelo comportamento.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from threading import Event
 
-from scripts.backend_contract.local_api.composition import build_local_api
+from scripts.backend_contract.local_api.composition import STARTUP_FAILURES, build_local_api
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
-from scripts.backend_contract.product_bridge.server import ProductBridgeConfig
+from scripts.backend_contract.product_bridge.server import ProductBridgeConfig, ProductBridgeServerStartError
 from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
 from scripts.planejamento_pericial.construction_defect_analysis_adapter import (
     ConstructionDefectAnalysisAdapter,
@@ -75,21 +76,39 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--private-root", required=True, type=Path)
     parser.add_argument("--port", type=int, default=0)
     arguments = parser.parse_args(argv)
-    runtime = build_pericial_application(
-        arguments.database,
-        arguments.frontend,
-        private_root=arguments.private_root,
-        config=ProductBridgeConfig(port=arguments.port),
-    )
+    try:
+        runtime = build_pericial_application(
+            arguments.database,
+            arguments.frontend,
+            private_root=arguments.private_root,
+            config=ProductBridgeConfig(port=arguments.port),
+        )
+    except (*STARTUP_FAILURES, ProductBridgeServerStartError) as exc:
+        # Falha real de armazenamento ou do listener: mensagem controlada, sem
+        # traceback e sem fingir sucesso (#283).
+        return _startup_failed(str(exc))
+    except OSError:
+        # Erro do sistema (por exemplo, porta ocupada): o texto do sistema pode
+        # trazer caminhos, então só a categoria é mostrada.
+        return _startup_failed("recurso local indisponível")
     try:
         runtime.start()
         print(f"Sistema Pericial disponível em {runtime.origin}/", flush=True)
         Event().wait()
     except KeyboardInterrupt:
         return 0
+    except (*STARTUP_FAILURES, ProductBridgeServerStartError) as exc:
+        return _startup_failed(str(exc))
+    except OSError:
+        return _startup_failed("recurso local indisponível")
     finally:
         runtime.close()
     return 0
+
+
+def _startup_failed(reason: str) -> int:
+    print(f"Sistema Pericial não iniciou: {reason}", file=sys.stderr, flush=True)
+    return 2
 
 
 if __name__ == "__main__":
