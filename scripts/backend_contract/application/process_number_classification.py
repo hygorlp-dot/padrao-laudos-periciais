@@ -112,7 +112,7 @@ _PRIMARY_LABEL = re.compile(
     r"(?:"
     r"(?:N(?:UMERO|O|[.°])\s*\.?\s*(?:DO\s+)?)?PROCESSO(?:\s+JUDICIAL)?(?:\s+ELETRONICO)?"
     r"|AUTOS"
-    r"|NUMERO(?:\s+DO\s+PROCESSO)?"
+    r"|NUMERO(?:\s+(?:DO\s+PROCESSO|UNICO))?"
     r")"
     r"(?:\s*(?:N(?:UMERO|O|[.°])|NUMERO)\s*\.?)?"
     r"\s*[:\-]?\s*$"
@@ -120,7 +120,7 @@ _PRIMARY_LABEL = re.compile(
 # Marcadores de citação de outro julgado. Palavras inteiras.
 # Decisivos: só aparecem citando julgado alheio, mesmo num cabeçalho.
 _DECISIVE_CITATION = (
-    r"RESP|ARESP|AGINT|AGRG|EDCL|AGRAVO\s+INTERNO|TEMA|STJ|STF|TNU|JULGADO\s+EM|JULGAMENTO\s+EM|DJE|"
+    r"RESP|ARESP|AGINT|AGRG|EDCL|AGRAVO\s+INTERNO|TEMA|STJ|STF|TNU|JULGADO\s+EM|JULGAMENTO\s+(?:EM\b|:)|DJE|"
     r"PRECEDENTES?|JURISPRUDENCIA|EMENTA|NESSE\s+SENTIDO|NO\s+MESMO\s+SENTIDO|VEJA-SE|CONFIRA-SE|CF\."
 )
 # De classe ou de órgão: um cabeçalho de apelação traz "Apelação Cível",
@@ -138,6 +138,24 @@ _PIECE_TITLE = re.compile(
     r"ATO\s+ORDINATORIO|CERTIDAO|INTIMACAO|MANDADO|PETICAO|EXCELENTISSIM\w*|DOS\s+FATOS|"
     r"I\s*[-.]\s*RELATORIO)\b"
 )
+# Primeira linha de prosa encerra o cabeçalho: "Vistos.", "Trata-se de...",
+# "Cito julgado:", frase com pontuação final. Linha "Rótulo: valor" e título
+# institucional em maiúsculas continuam no cabeçalho.
+_PROSE_OPENING = re.compile(r"^\s*(?:VISTOS|TRATA-SE|NESSE\s+SENTIDO|NO\s+MESMO\s+SENTIDO|CONFIRA-SE|VEJA-SE|CITO|CUIDA-SE|COMO\s+SE)\b")
+_LABEL_LINE = re.compile(r"^\s*[^:]{1,60}:(?:\s|$)")
+
+
+def _is_prose(original: str, normalized: str) -> bool:
+    line = original.strip()
+    if not line:
+        return False
+    if _PROSE_OPENING.match(normalized):
+        return True
+    if _LABEL_LINE.match(line) or not any(char.islower() for char in line):
+        return False
+    return line.endswith((".", ":")) or len(line.split()) >= 6
+
+
 _HEADER_ZONE_LINES = 30
 _PREFIX_REACH = 300
 _WINDOW_REACH = 300
@@ -147,7 +165,7 @@ _FOLLOWING_LINES = 2
 _RELATION = re.compile(
     r"(?<![A-Z0-9])(?:"
     r"(?:PROCESSOS?|AUTOS|FEITOS?)\s+(?:RELACIONADOS?|VINCULADOS?|REFERENCIADOS?|ASSOCIADOS?|"
-    r"DE\s+ORIGEM|ORIGINARIOS?|PRINCIPAIS|APENSOS?|APENSADOS?)|"
+    r"(?:DE\s+)?ORIGEM|ORIGINARIOS?|PRINCIPAIS|APENSOS?|APENSADOS?)|"
     r"REFERENCIA(?:\s+DOCUMENTAL)?|DEPENDENCIA|PREVENCAO|PREVENTO|"
     r"OUTRO\s+(?:PROCESSO|FEITO)|ANEXO\s+DE\s+OUTRO\s+FEITO|APENSO|APENSADO"
     r")(?![A-Z0-9])"
@@ -189,11 +207,15 @@ class _PageView:
         self.judicial = _is_judicial_piece(self.normalized)
         self.header_end = len(self.normalized)
         self.cited_from: int | None = None
+        originals = text.split("\n")
         for number, line_start in enumerate(self.line_starts):
             line = self._line(number)
             if self.cited_from is None and _CITED_SECTION.match(line):
                 self.cited_from = line_start
-            if self.header_end == len(self.normalized) and (number >= _HEADER_ZONE_LINES or _PIECE_TITLE.match(line)):
+            if self.header_end == len(self.normalized) and (
+                number >= _HEADER_ZONE_LINES or _PIECE_TITLE.match(line)
+                or (number < len(originals) and _is_prose(originals[number][:4 * _WINDOW_REACH], line))
+            ):
                 self.header_end = line_start
 
     def _line(self, number: int) -> str:
@@ -271,9 +293,13 @@ def _context(view: _PageView, start: int, end: int) -> OccurrenceContext:
         return OccurrenceContext.CITATION
     # Cabeçalho da peça: antes do título (Sentença, Decisão...) e nas primeiras
     # linhas. "PROCESSO: X" no corpo pode ser julgado citado; nunca é principal.
-    if view.judicial and labelled and begin < view.header_end:
-        return OccurrenceContext.JUDICIAL_HEADER
     following = " ".join(view.neighbour(number, 1, _FOLLOWING_LINES))
+    if view.judicial and labelled and begin < view.header_end:
+        # Citação logo antes ou logo depois ("(STJ, julgado em ...)") desfaz o
+        # cabeçalho: é julgado citado com rótulo, nunca o número dos autos.
+        if _DECISIVE.search(following) or _DECISIVE.search(previous_line):
+            return OccurrenceContext.CITATION
+        return OccurrenceContext.JUDICIAL_HEADER
     if _CITATION.search(line) or _CITATION.search(following):
         # Rótulo com só a classe na linha ("PROCESSO: X - APELAÇÃO CÍVEL") e
         # nada de citação depois: não se sabe de quem é; não vira precedente.

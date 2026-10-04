@@ -297,3 +297,23 @@ def test_long_single_line_pages_stay_linear():
     result = _classify(_doc(_page(_JUDICIAL_TOP + "AUTOR: x\n" + line)))
     assert perf_counter() - started < 5.0
     assert result.candidates[0].occurrence_count == 5000
+
+
+# --- Revisão delta (#286): cabeçalho sem título de peça.
+
+@pytest.mark.parametrize("body", [
+    "AUTOR: x\nRÉU: y\nProcesso nº {b}\n(STJ, julgado em 2020)\n",
+    "Vistos etc.\nCito julgado do TRF5:\nPROCESSO: {b}\nAPELAÇÃO CÍVEL, DESEMBARGADOR FEDERAL FULANO, 4ª TURMA, JULGAMENTO: 01/01/2020.\n",
+    "AUTOR: x\nRÉU: y\nTrata-se de ação. Confira-se julgado:\nProcesso: {b}\nClasse: APELAÇÃO CÍVEL\nRelator: Des. Z\nJulgado em 01/01/2020\n",
+])
+def test_precedent_inside_an_untitled_header_zone_is_never_primary(body):
+    text = _JUDICIAL_TOP + f"PROCEDIMENTO COMUM CÍVEL Nº {MAIN}\nAUTOR: x\nRÉU: y\n" + body.format(b=OTHER)
+    result = _classify(_doc(_page(text)))
+    assert result.primary_value != OTHER
+    assert _classes(result)[OTHER] is ProcessNumberClass.CITED_CASE
+
+
+def test_numero_unico_label_and_origin_without_de():
+    cover = "PODER JUDICIÁRIO\nPJe - Processo Judicial Eletrônico\n" + f"Número único: {MAIN}\nProcesso origem: {OTHER}\n"
+    result = _classify(_doc(_page(cover)))
+    assert result.primary_value == MAIN and _classes(result)[OTHER] is ProcessNumberClass.RELATED_CASE
