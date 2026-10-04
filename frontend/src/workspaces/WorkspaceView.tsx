@@ -134,7 +134,7 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
             <span className="state-rule" aria-hidden="true" />
             <div>
               <h2>Carregando perícia</h2>
-              <p>Recuperando o contexto local deste workspace.</p>
+              <p>Recuperando os dados locais desta perícia.</p>
             </div>
           </section>
         ) : null}
