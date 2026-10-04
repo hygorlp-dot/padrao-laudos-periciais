@@ -317,3 +317,89 @@ def test_the_command_line_first_run_announces_the_ui(tmp_path, monkeypatch, caps
     assert started
     assert "Sistema Pericial disponível em http://127.0.0.1:" in capsys.readouterr().out
     assert (root / "dados" / "produto.sqlite3").is_file()
+
+
+# --- independent review (#283) -------------------------------------------------------
+
+
+def test_private_root_provisioning_keeps_mapping_os_errors(tmp_path, monkeypatch):
+    """provision_private_content_root still turns an OSError into RepositoryError."""
+
+    def denied(*_args, **_kwargs):
+        raise PermissionError(13, "Acesso negado", str(tmp_path / "privado"))
+
+    monkeypatch.setattr(private_filesystem.os, "mkdir", denied)
+    with pytest.raises(RepositoryError) as raised:
+        private_filesystem.provision_private_content_root(tmp_path / "privado")
+    assert str(tmp_path) not in str(raised.value)
+
+
+def test_a_private_root_failure_is_a_sanitized_startup_failure(tmp_path, monkeypatch, capsys):
+    root, frontend = _clean_machine(tmp_path)
+    real_mkdir = os.mkdir
+
+    def deny_private(path, *args, **kwargs):
+        if str(path).endswith("privado"):
+            raise PermissionError(13, "Acesso negado", str(path))
+        return real_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(private_filesystem.os, "mkdir", deny_private)
+    code = app_composition.main(
+        [
+            "--database", str(root / "dados" / "produto.sqlite3"),
+            "--frontend", str(frontend),
+            "--private-root", str(root / "dados" / "privado"),
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "Sistema Pericial não iniciou" in captured.err
+    assert "Traceback" not in captured.err + captured.out
+    assert str(root) not in captured.err
+
+
+def test_the_volume_root_is_validated_not_created():
+    assert provision_local_storage_directory(Path(Path.cwd().anchor)) is False
+
+
+def test_a_directory_refused_after_creation_fails_closed_without_deleting(tmp_path, monkeypatch):
+    """The private filesystem never deletes; a refused creation stays an empty directory."""
+    real = private_filesystem._validate_local_storage_device
+    calls = []
+
+    def refuse_the_created_directory(details):
+        calls.append(details)
+        if len(calls) == 2:
+            raise RepositoryError("armazenamento local deve estar em dispositivo local confiável")
+        return real(details)
+
+    monkeypatch.setattr(private_filesystem, "_validate_local_storage_device", refuse_the_created_directory)
+    with pytest.raises(RepositoryError):
+        provision_local_storage_directory(tmp_path / "dados")
+    assert len(calls) == 2
+    assert (tmp_path / "dados").is_dir() and not any((tmp_path / "dados").iterdir())
+
+
+def test_a_port_in_use_is_a_sanitized_startup_failure(tmp_path, capsys):
+    import socket
+
+    root, frontend = _clean_machine(tmp_path)
+    holder = socket.socket()
+    holder.bind(("127.0.0.1", 0))
+    holder.listen(1)
+    try:
+        code = app_composition.main(
+            [
+                "--database", str(root / "dados" / "produto.sqlite3"),
+                "--frontend", str(frontend),
+                "--private-root", str(root / "dados" / "privado"),
+                "--port", str(holder.getsockname()[1]),
+            ]
+        )
+    finally:
+        holder.close()
+    captured = capsys.readouterr()
+    assert code == 2
+    assert "Sistema Pericial não iniciou" in captured.err
+    assert "Traceback" not in captured.err + captured.out
+    assert "disponível em" not in captured.out
