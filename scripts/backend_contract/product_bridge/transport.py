@@ -194,6 +194,8 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/settings-snapshot"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["settings-snapshot", "refresh"] and method == "POST":
             return f"/v1/workspaces/{remainder[0]}/settings-snapshot/refresh"
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "process-number" and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/process-number"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "process-participants" and method == "GET":
             return f"/v1/workspaces/{remainder[0]}/process-participants"
         if len(remainder) == 3 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1:] == ["process-participants", "decisions"] and method == "POST":

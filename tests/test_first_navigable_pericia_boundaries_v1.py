@@ -86,6 +86,8 @@ def test_frontend_network_access_is_narrow_and_never_contains_local_api_token():
             "frontend/src/data/pjeIntake.ts",
             "frontend/src/data/processCase.ts",
         "frontend/src/data/processMetadata.ts",
+        # #286: número principal x citados, mesmo contrato same-origin /app-api.
+        "frontend/src/data/processNumber.ts",
         # #268: participantes processuais, mesmo contrato same-origin /app-api.
         "frontend/src/data/processParticipants.ts",
         "frontend/src/data/propertyRecord.ts",

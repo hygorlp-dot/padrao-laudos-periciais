@@ -22,6 +22,7 @@ from ..application.legal_editorial_preflight import GetReportPreflight
 from ..application.installation_settings import CreateWorkspaceWithSettings, GenerateTestDocument, InstallationSettings, WorkspaceSettings, validate_installation_template
 from ..infrastructure.installation_store import SQLiteInstallationStore, installation_database_path
 from ..application.process_participants import DecideProcessParticipants, GetProcessParticipants, ParticipantProposals
+from ..application.process_number_classification import GetProcessNumberClassification
 from ..application.ports import Clock, IdGenerator, RepositoryError, RepositoryIntegrityError
 from ..application.workspace_recovery import (
     AbandonWorkspaceRecovery,
@@ -595,6 +596,9 @@ def build_local_api(
         if list_case_documents is not None and read_case_document is not None else None
     )
     get_property_proposals = GetPropertyProposals(case_document_texts) if case_document_texts is not None else None
+    get_process_number_classification = (
+        GetProcessNumberClassification(case_document_texts) if case_document_texts is not None else None
+    )
     get_process_participants = GetProcessParticipants(
         get_latest_artifact, get_process_case, case_document_texts,
         ParticipantProposals(case_document_texts) if case_document_texts is not None else None,
@@ -906,6 +910,7 @@ def build_local_api(
         save_property_record=save_property_record,
         get_property_proposals=get_property_proposals,
         get_process_participants=get_process_participants,
+        get_process_number_classification=get_process_number_classification,
         decide_process_participants=decide_process_participants,
         curate_photo_library=CuratePhotoLibrary(
             store.revisions, get_latest_artifact, get_private_content,

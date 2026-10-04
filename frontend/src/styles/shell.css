@@ -668,6 +668,52 @@ main {
   gap: var(--space-2);
 }
 
+/* #286: número principal separado dos processos citados. */
+.process-number {
+  display: grid;
+  gap: var(--space-2);
+  font-size: 0.78rem;
+}
+
+.process-number__primary {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--color-ochre) 40%, var(--color-paper));
+  border-radius: 0.32rem;
+  background: color-mix(in srgb, var(--color-ochre-bright) 8%, var(--color-paper));
+}
+
+.process-number__eyebrow,
+.process-number__class,
+.process-number__source,
+.process-number__in-use {
+  color: var(--color-slate);
+}
+
+.process-number__value {
+  font-size: 0.95rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.process-number__list {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding-left: var(--space-4);
+}
+
+.process-number__list li {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.process-number .text-action {
+  justify-self: start;
+  margin: 0;
+  font-size: inherit;
+}
+
 .source-evidence {
   display: grid;
   gap: var(--space-3);

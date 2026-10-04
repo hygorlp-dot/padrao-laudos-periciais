@@ -192,6 +192,7 @@ class LocalApiServices:
     save_property_record: object | None = None
     get_property_proposals: object | None = None
     get_process_participants: object | None = None
+    get_process_number_classification: object | None = None
     decide_process_participants: object | None = None
     installation_settings: object | None = None
     workspace_settings: object | None = None
@@ -901,7 +902,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "property-record", "process-participants", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "property-record", "process-participants", "process-number", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
             private_route = private_route or (len(raw_segments) >= 2 and raw_segments[:2] == ("v1", "installation")) or (len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "settings-snapshot")
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
@@ -1074,6 +1075,20 @@ class LocalApi:
                     # Campos cuja pagina de origem o perito excluiu depois de confirmar.
                     "stale_fields": stale_fields,
                 })
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "process-number":
+                # Classificação do número principal entre os números dos autos
+                # (#286): proposta para o perito, nunca gravada aqui.
+                workspace_id = self._workspace_id(raw_segments[2])
+                self._services.get_workspace.execute(workspace_id)
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.get_process_number_classification is None:
+                    return _error(503, "PROCESS_NUMBER_UNAVAILABLE")
+                from ..application.process_number_classification import process_number_classification_dto
+                return _json_response(200, process_number_classification_dto(
+                    self._services.get_process_number_classification.execute(workspace_id)
+                ))
 
             if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "process-participants":
                 workspace_id = self._workspace_id(raw_segments[2])
