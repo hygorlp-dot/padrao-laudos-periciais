@@ -120,7 +120,7 @@ _PRIMARY_LABEL = re.compile(
 # Marcadores de citação de outro julgado. Palavras inteiras.
 # Decisivos: só aparecem citando julgado alheio, mesmo num cabeçalho.
 _DECISIVE_CITATION = (
-    r"RESP|ARESP|AGINT|AGRG|EDCL|AGRAVO\s+INTERNO|TEMA|STJ|STF|TNU|JULGADO\s+EM|JULGAMENTO\s+(?:EM\b|:)|DJE|"
+    r"RESP|ARESP|AGINT|AGRG|EDCL|AGRAVO\s+INTERNO|TEMA|STJ|STF|TNU|JULGADO\s+EM|JULGAMENTO\s+EM|DJE|"
     r"PRECEDENTES?|JURISPRUDENCIA|EMENTA|NESSE\s+SENTIDO|NO\s+MESMO\s+SENTIDO|VEJA-SE|CONFIRA-SE|CF\."
 )
 # De classe ou de órgão: um cabeçalho de apelação traz "Apelação Cível",
@@ -138,22 +138,45 @@ _PIECE_TITLE = re.compile(
     r"ATO\s+ORDINATORIO|CERTIDAO|INTIMACAO|MANDADO|PETICAO|EXCELENTISSIM\w*|DOS\s+FATOS|"
     r"I\s*[-.]\s*RELATORIO)\b"
 )
-# Primeira linha de prosa encerra o cabeçalho: "Vistos.", "Trata-se de...",
-# "Cito julgado:", frase com pontuação final. Linha "Rótulo: valor" e título
-# institucional em maiúsculas continuam no cabeçalho.
-_PROSE_OPENING = re.compile(r"^\s*(?:VISTOS|TRATA-SE|NESSE\s+SENTIDO|NO\s+MESMO\s+SENTIDO|CONFIRA-SE|VEJA-SE|CITO|CUIDA-SE|COMO\s+SE)\b")
-_LABEL_LINE = re.compile(r"^\s*[^:]{1,60}:(?:\s|$)")
+# A zona de cabeçalho é feita só de linhas com forma de cabeçalho (#286):
+# timbre institucional ("Tribunal...", "2ª Vara...", "Seção Judiciária..."),
+# endereço do juízo, "Rótulo: valor" de rótulo processual conhecido ou a linha
+# da classe com o número. A primeira linha de outra forma (prosa, transcrição,
+# "Cito o julgado:") encerra a zona: dali em diante nada é cabeçalho primário.
+_INSTITUTIONAL_START = re.compile(
+    r"^\s*(?:PODER\s+JUDICIARIO|JUSTICA\b|TRIBUNAL\b|SECAO\s+JUDICIARIA|SUBSECAO\b|COMARCA\b|JUIZO\b|JUIZADO\b|"
+    r"GABINETE\b|ESTADO\s+D[EOA]\b|REPUBLICA\b|PJE\b|PROCESSO\s+JUDICIAL\s+ELETRONICO|"
+    r"\d{1,3}\s*A?\s+(?:VARA|TURMA|CAMARA|JUIZADO|SECAO)\b|(?:VARA|TURMA|CAMARA)\b)"
+)
+_ADDRESS_START = re.compile(r"^\s*(?:RUA|AV\.?|AVENIDA|PRACA|CEP|FONE|TELEFONE|TEL\.?|E-?MAIL|SITE|HTTPS?)\b")
+_HEADER_LABELS = frozenset({
+    "PROCESSO", "AUTOS", "NUMERO", "N", "NO", "CLASSE", "ASSUNTO", "ASSUNTOS", "AUTOR", "AUTORA", "AUTORES", "REU", "REUS", "RE",
+    "REQUERENTE", "REQUERENTES", "REQUERIDO", "REQUERIDA", "REQUERIDOS", "EXEQUENTE", "EXECUTADO", "EXECUTADA",
+    "APELANTE", "APELANTES", "APELADO", "APELADA", "APELADOS", "AGRAVANTE", "AGRAVADO", "AGRAVADA", "RECORRENTE",
+    "RECORRIDO", "RECORRIDA", "IMPETRANTE", "IMPETRADO", "EMBARGANTE", "EMBARGADO", "RELATOR", "RELATORA", "ORGAO",
+    "JUIZ", "JUIZA", "JUIZO", "VARA", "VALOR", "POLO", "ADVOGADO", "ADVOGADA", "ADVOGADOS", "PROCURADOR",
+    "PROCURADORA", "DATA", "ENDERECO", "PARTES", "DISTRIBUICAO", "DISTRIBUIDO", "PRIORIDADE", "SEGREDO",
+    "COMPETENCIA", "CHAVE", "ID", "INTERESSADO", "INTERESSADA", "TERCEIRO", "PERITO", "PERITA", "ORIGEM",
+})
+_CASE_CLASS_LINE = re.compile(
+    r"^\s*(?:PROCEDIMENTO|ACAO|CUMPRIMENTO|EXECUCAO|APELACAO|AGRAVO|RECURSO|EMBARGOS|MANDADO|PROCESSO|AUTOS|"
+    r"RECLAMACAO|INCIDENTE|TUTELA|PRODUCAO|CAUTELAR)\b"
+)
 
 
-def _is_prose(original: str, normalized: str) -> bool:
-    line = original.strip()
-    if not line:
-        return False
-    if _PROSE_OPENING.match(normalized):
+def _header_shaped(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
         return True
-    if _LABEL_LINE.match(line) or not any(char.islower() for char in line):
+    if stripped.endswith(":") and _PRIMARY_LABEL.fullmatch(stripped) is None:
         return False
-    return line.endswith((".", ":")) or len(line.split()) >= 6
+    label = re.match(r"^([A-Z][A-Z0-9()/ .-]{0,40}?)\s*:", stripped)
+    if label:
+        first = re.match(r"[A-Z]+", label.group(1))
+        return first is not None and first.group(0) in _HEADER_LABELS
+    if _INSTITUTIONAL_START.match(stripped) or _ADDRESS_START.match(stripped):
+        return True
+    return _CASE_CLASS_LINE.match(stripped) is not None and _CNJ_PATTERN.search(stripped) is not None
 
 
 _HEADER_ZONE_LINES = 30
@@ -177,7 +200,8 @@ _CITED_SECTION = re.compile(
 _INSTITUTIONAL = ("PODER JUDICIARIO", "JUSTICA FEDERAL", "TRIBUNAL REGIONAL FEDERAL", "TRIBUNAL DE JUSTICA", "JUSTICA DO TRABALHO")
 _JUDICIAL_STRUCTURE = re.compile(
     r"(?m)^\s*(?:ORGAO\s+JULGADOR|POLO\s+ATIVO|POLO\s+PASSIVO|CLASSE(?:\s+JUDICIAL)?\s*:"
-    r"|(?:AUTOR|AUTORA|REQUERENTE|EXEQUENTE|REU|REQUERIDO|REQUERIDA|EXECUTADO|EXECUTADA)\s*:)"
+    r"|(?:AUTOR|AUTORA|REQUERENTE|EXEQUENTE|REU|REQUERIDO|REQUERIDA|EXECUTADO|EXECUTADA|APELANTE|APELADO|APELADA|"
+    r"AGRAVANTE|AGRAVADO|AGRAVADA|RECORRENTE|RECORRIDO|RECORRIDA|IMPETRANTE|IMPETRADO|EMBARGANTE|EMBARGADO)\s*:)"
 )
 
 
@@ -207,14 +231,13 @@ class _PageView:
         self.judicial = _is_judicial_piece(self.normalized)
         self.header_end = len(self.normalized)
         self.cited_from: int | None = None
-        originals = text.split("\n")
         for number, line_start in enumerate(self.line_starts):
             line = self._line(number)
             if self.cited_from is None and _CITED_SECTION.match(line):
                 self.cited_from = line_start
             if self.header_end == len(self.normalized) and (
                 number >= _HEADER_ZONE_LINES or _PIECE_TITLE.match(line)
-                or (number < len(originals) and _is_prose(originals[number][:4 * _WINDOW_REACH], line))
+                or not _header_shaped(line)
             ):
                 self.header_end = line_start
 

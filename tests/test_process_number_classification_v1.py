@@ -317,3 +317,30 @@ def test_numero_unico_label_and_origin_without_de():
     cover = "PODER JUDICIÁRIO\nPJe - Processo Judicial Eletrônico\n" + f"Número único: {MAIN}\nProcesso origem: {OTHER}\n"
     result = _classify(_doc(_page(cover)))
     assert result.primary_value == MAIN and _classes(result)[OTHER] is ProcessNumberClass.RELATED_CASE
+
+
+# --- Segunda revisão delta (#286): zona de cabeçalho por forma de linha.
+
+@pytest.mark.parametrize("lead", [
+    "Transcrevo o seguinte julgado:",
+    "TRANSCREVO O SEGUINTE JULGADO DO TRF5",
+    "Veja o julgado abaixo",
+    "Conforme o Tribunal decidiu:",
+])
+def test_any_non_header_line_closes_the_header_zone(lead):
+    text = _JUDICIAL_TOP + f"AUTOR: x\nRÉU: y\n{lead}\nPROCESSO: {OTHER}\nAPELAÇÃO CÍVEL, DESEMBARGADOR FEDERAL FULANO, 4ª TURMA.\n"
+    result = _classify(_doc(_page(text)))
+    assert result.primary_value is None, lead
+
+
+@pytest.mark.parametrize("top", [
+    "TRIBUNAL REGIONAL FEDERAL DA 5ª REGIÃO\nGABINETE DO DESEMBARGADOR FEDERAL Z\n",
+    "PODER JUDICIÁRIO\nJUSTIÇA FEDERAL DE 1º GRAU EM PERNAMBUCO\n",
+    "Tribunal Regional Federal da 5ª Região\n",
+    "2ª Vara Federal da Seção Judiciária de Pernambuco\nAv. Desembargador Guerra Barreto, s/n - Recife - PE\n",
+    "Tribunal de Justiça do Estado de Pernambuco\nJuízo Federal da 2ª Vara - PE\n",
+])
+def test_real_header_layouts_keep_the_case_number_primary(top):
+    text = top + f"PROCESSO Nº: {MAIN} - APELAÇÃO CÍVEL\nAPELANTE: x\nAPELADO: y\nRELATOR: DESEMBARGADOR FEDERAL Z\nDATA DE JULGAMENTO: 01/01/2024\nACÓRDÃO\n"
+    result = _classify(_doc(_page(text)))
+    assert result.primary_value == MAIN, top
