@@ -70,6 +70,26 @@ describe("participants panel (#268)", () => {
     expect(screen.queryByRole("textbox", { name: "Parte requerente" })).not.toBeInTheDocument();
   });
 
+  test("says when the documents read produced no proposal, and never while reading failed or is pending (#285)", async () => {
+    const none = "Nenhuma proposta encontrada nos documentos lidos.";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, view())));
+    const { unmount } = render(<ParticipantsPanel workspaceId={ID} />);
+    expect(await screen.findByText(new RegExp(none))).toBeInTheDocument();
+    unmount();
+    for (const overrides of [
+      { interrupted_pages: [{ filename: "capa.pdf", page: 1 }] },
+      { pending_documents: ["capa.pdf"] },
+      { proposals_unavailable: true },
+      { participants: [participant({})] },
+    ]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, view(overrides))));
+      const rendered = render(<ParticipantsPanel workspaceId={ID} />);
+      expect(await screen.findByRole("heading", { name: /Polo ativo/ })).toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(none))).not.toBeInTheDocument();
+      rendered.unmount();
+    }
+  });
+
   test("a proposal stays a proposal until the expert confirms it, with the source on demand", async () => {
     const proposal = participant({
       participant_id: "PARTICIPANT-SRC-" + "B".repeat(24), name: "BETA SINTÉTICA", pole: "PASSIVE", procedural_role: "DEFENDANT",

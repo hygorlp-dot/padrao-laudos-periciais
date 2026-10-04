@@ -44,9 +44,21 @@ _ACTIVE_ROLES = frozenset({"AUTOR", "AUTORA", "REQUERENTE", "EXEQUENTE"})
 _PASSIVE_ROLES = frozenset(
     {"REQUERIDO", "REQUERIDA", "REU", "EXECUTADO", "EXECUTADA"}
 )
+# Cabeçalho da tabela de partes da capa PJe. O PJe escreve
+# "Partes Procurador/Terceiro vinculado" (com barra); a forma com espaço e as
+# flexões de número são as mesmas colunas (#285). Nada além disso abre a
+# tabela: a gramática continua estrutural.
 _HEADER = re.compile(
-    r"^\s*PARTES\s+PROCURADOR(?:ES)?(?:\s+TERCEIRO\s+VINCULADO)?\s*$",
+    r"^\s*PARTES\s+PROCURADOR(?:ES)?"
+    r"(?:(?:\s*/\s*|\s+)TERCEIROS?\s+VINCULADOS?)?\s*$",
     re.IGNORECASE,
+)
+# Linha que tem a forma de um cabeçalho de partes ("PARTES ... PROCURADOR..."
+# ou "PARTES ... VINCULADO", inclusive com palavra partida pelo OCR) mas não é
+# o cabeçalho aceito: a tabela pode estar ali e não foi lida, o que é dito ao
+# perito em vez de virar "nenhum participante" (#285). Só sinaliza; nunca lê.
+_HEADER_LIKE = re.compile(
+    r"^\s*PARTES\b.*(?:\bPROCURADOR|VINCULAD)", re.IGNORECASE
 )
 _EXPLICIT_POLES = (
     ("POLO ATIVO", PjePartyPole.ACTIVE),
@@ -395,6 +407,9 @@ class PjeParticipantParseResult:
     # A leitura parou numa linha com papel que nao reconhece, num conflito de
     # polo ou numa tabela PJe vazia; o fim natural da tabela nao conta.
     interrupted: bool = False
+    # A pagina tem um cabecalho de partes que a gramatica nao aceita (#285):
+    # a tabela nao foi lida, o que nao e o mesmo que nao haver partes.
+    unrecognized_header: bool = False
 
 
 def _trimmed_span(normalized: str, start: int, end: int) -> tuple[int, int]:
@@ -427,6 +442,7 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
     # quando o cabecalho PJe abriu a tabela e nenhuma linha foi lida.
     interrupted = False
     header_rows: int | None = None
+    unrecognized_header = False
     section: PjeParticipantPole | None = None
     # Indice da parte que pode receber procurador em linha de continuacao; zera
     # a cada cabecalho ou secao, para nunca ligar o advogado de um polo a parte
@@ -442,6 +458,8 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
             inside, terminated, section, opened, continuation_target = True, False, None, True, None
             header_rows = 0
             continue
+        if _HEADER_LIKE.match(normalized):
+            unrecognized_header = True
         section_match = _SECTION_LINE.fullmatch(normalized)
         if section_match:
             inside, terminated, section, opened, continuation_target = True, False, _PARTICIPANT_SECTIONS[section_match.group(1)], True, None
@@ -526,4 +544,4 @@ def parse_pje_participant_rows(page_text: str) -> PjeParticipantParseResult:
         continuation_target = len(rows) - 1
         if header_rows is not None:
             header_rows += 1
-    return PjeParticipantParseResult(tuple(rows), terminated, opened, inside and not terminated, leading_party_like, interrupted)
+    return PjeParticipantParseResult(tuple(rows), terminated, opened, inside and not terminated, leading_party_like, interrupted, unrecognized_header)

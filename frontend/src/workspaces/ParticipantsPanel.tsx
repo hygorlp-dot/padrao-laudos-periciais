@@ -326,6 +326,12 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
         </p>
       ) : null}
 
+      {!view.proposals.length && !view.participants.length && !view.proposals_unavailable && !view.pending_documents.length && !view.interrupted_pages.length ? (
+        <p className="participants-notice" role="status">
+          Nenhuma proposta encontrada nos documentos lidos. Se a capa do processo ainda não foi importada, importe-a em Materiais; se já foi, confira os autos e adicione os participantes manualmente.
+        </p>
+      ) : null}
+
       {view.proposals.length ? (
         <section className="participants-proposals" aria-labelledby="participants-proposals-title">
           <h3 id="participants-proposals-title">Encontrados nos documentos ({view.proposals.length})</h3>

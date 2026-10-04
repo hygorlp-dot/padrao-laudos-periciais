@@ -117,7 +117,11 @@ class ParticipantProposals:
                     previous_open = False
                     continue
                 parsed = parse_pje_participant_rows(page.text)
-                broken = parsed.interrupted or (previous_open and parsed.leading_party_like)
+                broken = (
+                    parsed.interrupted
+                    or parsed.unrecognized_header
+                    or (previous_open and parsed.leading_party_like)
+                )
                 previous_open = parsed.open_at_end
                 logical = document.logical_document_for(page.number)
                 logical_id = logical.document_id if logical is not None else None
