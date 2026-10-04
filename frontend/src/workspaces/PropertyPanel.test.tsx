@@ -101,9 +101,9 @@ it("groups repeated values into one proposal with counts and saves the best evid
   fireEvent.click(screen.getByRole("button", { name: "Buscar informações nos documentos" }));
   expect(await screen.findByText("2 ocorrências · 2 peças")).toBeInTheDocument();
   expect(screen.getByText(/Consistência documental: alta · melhor fonte: contrato/)).toBeInTheDocument();
-  expect(screen.getAllByRole("button", { name: "Usar esta proposta" })).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: /^Usar esta proposta/ })).toHaveLength(1);
   expect(screen.queryByText(/Valores divergentes/)).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "Usar esta proposta" }));
+  fireEvent.click(screen.getByRole("button", { name: "Usar esta proposta: Fulana Sintética" }));
   fireEvent.click(screen.getByRole("button", { name: "Confirmar dados do imóvel" }));
   await waitFor(() => expect(savePropertyRecord).toHaveBeenCalledWith(WS, 1, [{ field: "owner", value: "Fulana Sintética", proposal_id: "p-contrato" }]));
 });
@@ -121,8 +121,9 @@ it("shows divergent values side by side and never picks one as the main proposal
   const group = await screen.findByRole("group", { name: "Valores divergentes encontrados" });
   expect(group).toHaveTextContent("Fulana Sintética");
   expect(group).toHaveTextContent("Beltrana Sintética");
-  expect(screen.queryByRole("button", { name: "Usar esta proposta" })).not.toBeInTheDocument();
-  expect(screen.getAllByRole("button", { name: "Usar este valor" })).toHaveLength(2);
+  expect(screen.queryByRole("button", { name: /^Usar esta proposta/ })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Usar este valor: Fulana Sintética" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Usar este valor: Beltrana Sintética" })).toBeInTheDocument();
 });
 it("a possible-only value is never shown with high confidence and other values stay listed (#288)", async () => {
   const strong = [proposal("p-s", "Fulana Sintética", "contrato.pdf", "B")];
@@ -136,5 +137,6 @@ it("a possible-only value is never shown with high confidence and other values s
   await screen.findByLabelText("Proprietário do imóvel");
   fireEvent.click(screen.getByRole("button", { name: "Buscar informações nos documentos" }));
   expect(await screen.findByText("Outros valores encontrados (1)")).toBeInTheDocument();
+  expect(screen.getByText(/Há 1 outro valor para este campo nos autos/)).toBeInTheDocument();
   expect(screen.getByText(/Consistência documental: baixa · melhor fonte: contexto possível/)).toBeInTheDocument();
 });

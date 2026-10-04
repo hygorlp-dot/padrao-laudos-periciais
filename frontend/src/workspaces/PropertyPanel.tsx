@@ -29,8 +29,8 @@ function ClusterCard({ cluster, label, disabled, onUse }: { cluster: PropertyVal
     <small>{plural(cluster.source_count, "ocorrência", "ocorrências")} · {plural(cluster.document_count, "peça", "peças")}</small>
     {cluster.strength === "POSSIBLE" ? <small className="field-warning">Possível informação encontrada — confira a fonte</small> : null}
     {cluster.evidences.slice(0, 2).map((item) => <Source key={item.proposal_id} evidence={item.evidence} />)}
-    {cluster.evidences.length > 2 ? <small className="field-hint">e mais {plural(cluster.evidences.length - 2, "fonte", "fontes")}</small> : null}
-    <button type="button" className="text-action" disabled={disabled} onClick={() => onUse(cluster)}>{label}</button>
+    {cluster.evidences.length > 2 ? <details className="property-more-sources"><summary>Ver mais {plural(cluster.evidences.length - 2, "fonte", "fontes")}</summary>{cluster.evidences.slice(2).map((item) => <Source key={item.proposal_id} evidence={item.evidence} />)}</details> : null}
+    <button type="button" className="text-action" disabled={disabled} aria-label={`${label}: ${cluster.display_value}`} onClick={() => onUse(cluster)}>{label}</button>
   </div>;
 }
 
@@ -51,6 +51,7 @@ function FieldClusters({ clusters, disabled, onUse }: { clusters: PropertyValueC
   const [main, ...others] = strong.length ? [strong[0], ...possible] : possible;
   return <>
     <div className="property-main-proposal"><small>Proposta encontrada nos autos</small><ClusterCard cluster={main} label="Usar esta proposta" disabled={disabled} onUse={onUse} /></div>
+    {others.length ? <p className="field-warning" role="status">Há {plural(others.length, "outro valor", "outros valores")} para este campo nos autos. Confira antes de usar.</p> : null}
     {others.length ? <details className="property-candidates"><summary>Outros valores encontrados ({others.length})</summary>{others.map((cluster) => <ClusterCard key={cluster.cluster_id} cluster={cluster} label="Usar este valor" disabled={disabled} onUse={onUse} />)}</details> : null}
   </>;
 }

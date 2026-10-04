@@ -58,7 +58,9 @@ def normalized_property_value(field: str, value: str) -> tuple[str, str]:
         named = _UF_BY_NAME.get(_unaccented(text).casefold())
         if named is not None:
             return named, named
-    if _KINDS.get(field) == "decimal":
+    # "150.000" pode ser cento e cinquenta mil ou 150 com tres casas: fica com
+    # a grafia da fonte e nunca se funde a "150,00" (#288).
+    if _KINDS.get(field) == "decimal" and not re.fullmatch(r"\d{1,3}(?:\.\d{3})+", text):
         grouped = re.fullmatch(r"\d{1,3}(?:\.\d{3})+,\d+", text)
         number = Decimal(text.replace(".", "").replace(",", ".") if grouped else text.replace(",", "."))
         canonical = format(number.normalize(), "f")
@@ -68,6 +70,10 @@ def normalized_property_value(field: str, value: str) -> tuple[str, str]:
         return day.isoformat(), day.strftime("%d/%m/%Y")
     if field in _NUMERIC_IDENTIFIERS and re.fullmatch(r"\d+", text):
         return str(int(text)), str(int(text))
+    if _KINDS.get(field) == "decimal":
+        # Grafia ambígua: a chave é a própria grafia, marcada para nunca
+        # coincidir com uma chave canônica.
+        return "literal:" + text, text
     return text.casefold(), text
 
 
@@ -79,8 +85,8 @@ class PropertyValueCluster:
     # Valor da melhor evidência, como está na fonte: é o que "Usar" grava.
     display_value: str
     normalized_value: str
-    # HIGH: peça A–D com vínculo forte e sem divergência forte no campo.
-    # MEDIUM: vínculo forte em outra peça, ou divergência forte no campo.
+    # HIGH: peça A–D com vínculo forte e nenhum outro valor no campo.
+    # MEDIUM: vínculo forte em outra peça, ou qualquer outro valor no campo.
     # LOW: só contexto possível.
     confidence: str
     strength: str
@@ -118,10 +124,9 @@ def cluster_property_proposals(proposals: tuple[PropertyProposal, ...]) -> tuple
     clusters = []
     for draft in drafts:
         siblings = [other for other in drafts if other["field"] == draft["field"] and other is not draft]
-        strong_conflict = draft["strength"] == "STRONG" and any(other["strength"] == "STRONG" for other in siblings)
         if draft["strength"] != "STRONG":
             confidence = "LOW"
-        elif draft["best_rank"] in "ABCD" and not strong_conflict:
+        elif draft["best_rank"] in "ABCD" and not siblings:
             confidence = "HIGH"
         else:
             confidence = "MEDIUM"
