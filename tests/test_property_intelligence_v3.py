@@ -270,3 +270,9 @@ def test_party_residence_never_becomes_the_property_city(text):
 def test_registration_reference_after_the_address_keeps_the_city():
     found = {(p.field, p.value) for p in _proposals(_page("MATRÍCULA Nº 123\nImóvel situado na Rua X, nº 10, Caruaru - PE, objeto do registro R-2 desta matrícula.\n"))}
     assert ("city", "Caruaru") in found and ("state", "PE") in found
+
+
+def test_natural_light_does_not_hide_the_property_city():
+    found = {(p.field, p.value) for p in _proposals(_page("LAUDO DE VISTORIA\nO imóvel vistoriado, com iluminação natural, fica na Rua X, nº 10, Caruaru - PE.\n"))}
+    assert ("city", "Caruaru") in found
+    assert not {p.field for p in _proposals(_page("CONTRATO DE COMPRA E VENDA\nComprador natural de Garanhuns, residente na Rua X, nº 1, Caruaru/PE, adquire o imóvel objeto.\n"))} & {"city"}

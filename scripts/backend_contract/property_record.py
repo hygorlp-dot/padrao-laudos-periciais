@@ -302,7 +302,7 @@ _ADDRESS_ANCHOR = re.compile(
 )
 _CITY_BLOCKERS = re.compile(
     r"\b(?:comarca|foro|eleit\w*|dirimir|crea|cau|ssp|sds|detran|agencia|cartorio|oficio|registro de imoveis|oab|"
-    r"assinad\w*|datad\w*|morador\w*|estabelecid\w*|natural)\b"
+    r"assinad\w*|datad\w*|morador\w*|estabelecid\w*|natural de)\b"
 )
 _DATE_AFTER = re.compile(r"[ \t]*,?[ \t]*\d{1,2}(?:/|[ \t]+de[ \t]+)")
 _CITY_CONNECTIVES = frozenset({"de", "da", "do", "dos", "das", "e"})
