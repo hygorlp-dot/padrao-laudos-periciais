@@ -1,0 +1,278 @@
+"""#288 — propostas do imóvel agrupadas por valor, com hierarquia documental.
+
+Tudo sintético. Agrupar nunca promove: o perito continua escolhendo e
+confirmando. Endereço de parte, advogado, juízo ou precedente continua fora.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from scripts.backend_contract.property_clusters import cluster_property_proposals, normalized_property_value
+from scripts.backend_contract.property_record import property_proposals
+
+
+def _page(text, number=1, mode="NATIVE_TEXT"):
+    return SimpleNamespace(number=number, text=text, extraction_mode=SimpleNamespace(value=mode), confidence=None if mode == "NATIVE_TEXT" else 0.91)
+
+
+def _proposals(*pages, document="d", pieces=None, filename="autos.pdf"):
+    logical = (lambda number: pieces.get(number)) if pieces is not None else None
+    return property_proposals("w", document, "a" * 64, filename, list(pages), logical_document_for=logical)
+
+
+def _clusters(*proposal_sets):
+    return cluster_property_proposals(tuple(item for group in proposal_sets for item in group))
+
+
+def _field(clusters, field):
+    return [cluster for cluster in clusters if cluster.field == field]
+
+
+CONTRACT = "CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato é o apartamento nº 01, Bloco 04, situado na Rua das Flores Sintéticas, nº 10, Bairro Sintético, Caruaru - PE, CEP 55000-000.\n"
+PETITION = "PETIÇÃO INICIAL\nA autora adquiriu o imóvel objeto da ação, apartamento nº 1, Bloco 4, CEP 55000000, em Caruaru/PE.\n"
+
+
+@pytest.mark.parametrize("field, left, right", [
+    ("postal_code", "55000-000", "55000000"),
+    ("state", "PE", "Pernambuco"),
+    ("state", "pe", "PERNAMBUCO"),
+    ("city", "Caruaru", "  CARUARU "),
+    ("unit", "01", "1"),
+    ("block", "04", "4"),
+    ("private_area_m2", "42,50", "42.5"),
+    ("contractual_value", "150.000,00", "150000"),
+    ("habite_se_date", "05/03/2020", "2020-03-05"),
+])
+def test_safe_normalization_merges_the_same_value(field, left, right):
+    assert normalized_property_value(field, left)[0] == normalized_property_value(field, right)[0]
+
+
+@pytest.mark.parametrize("field, left, right", [
+    ("street", "Rua 1", "Rua Um"),
+    ("unit", "01A", "1A"),
+    ("unit", "101", "11"),
+    ("postal_code", "55000-000", "55000-001"),
+    ("city", "Caruaru", "Carauru"),
+    ("block", "A", "B"),
+    ("development", "Residencial Sol", "Residencial Sol Nascente"),
+])
+def test_normalization_never_merges_different_values(field, left, right):
+    assert normalized_property_value(field, left)[0] != normalized_property_value(field, right)[0]
+
+
+def test_same_value_in_two_pieces_is_one_cluster_with_two_evidences():
+    clusters = _clusters(_proposals(_page(CONTRACT, 1), _page(PETITION, 2), pieces={1: "DOC-CONTRATO", 2: "DOC-INICIAL"}))
+    (unit,) = _field(clusters, "unit")
+    assert unit.normalized_value == "1" and unit.source_count == 2 and unit.document_count == 2
+    assert unit.display_value == "01" and unit.best_rank == "B"
+    assert [e.source_rank for e in unit.evidences] == ["B", "E"]
+    (postal,) = _field(clusters, "postal_code")
+    assert postal.canonical_value == "55000-000" and postal.source_count == 2
+    (state,) = _field(clusters, "state")
+    assert state.canonical_value == "PE" and state.source_count == 2
+    (city,) = _field(clusters, "city")
+    assert city.display_value == "Caruaru" and city.confidence == "HIGH"
+
+
+def test_city_and_state_come_from_city_dash_uf_only_for_the_subject_property():
+    found = {(p.field, p.value) for p in _proposals(_page(CONTRACT))}
+    assert ("city", "Caruaru") in found and ("state", "PE") in found
+    for text in (
+        "Fulana Sintética, residente e domiciliada na Rua X, nº 5, Caruaru - PE, CEP 55000-000.\n",
+        "Advogado Sintético, OAB/PE 0000, com escritório na Rua Y, Recife - PE.\n",
+        "Juízo da 1ª Vara Federal, Caruaru - PE.\n",
+        "TRF5, Apelação Cível, Rel. Des. Fulano, imóvel localizado em Olinda - PE.\n",
+        "Caruaru - PE, 10 de maio de 2024.\n",
+        "o imóvel objeto da ação fica em caruaru - pe.\n",
+    ):
+        assert not {p.field for p in _proposals(_page(text))} & {"city", "state"}, text
+
+
+def test_ranking_orders_matricula_contract_delivery_report_petition_and_possible():
+    pages = {
+        1: "MATRÍCULA Nº 0001 - REGISTRO DE IMÓVEIS\nImóvel: apartamento nº 101, unidade habitacional do Residencial Sintético.\n",
+        2: "CONTRATO DE FINANCIAMENTO\nO imóvel objeto do contrato é o apartamento nº 102.\n",
+        3: "TERMO DE ENTREGA\nEntrega da unidade habitacional apartamento nº 103.\n",
+        4: "LAUDO TÉCNICO\nApartamento vistoriado: apartamento nº 104.\n",
+        5: "PETIÇÃO INICIAL\nO imóvel objeto da ação é o apartamento nº 105.\n",
+        6: "CONTESTAÇÃO\nO imóvel objeto da ação é o apartamento nº 106.\n",
+        7: "DESPACHO\nO imóvel objeto da ação é o apartamento nº 107.\n",
+    }
+    proposals = _proposals(*(_page(text, number) for number, text in pages.items()), pieces={n: f"DOC-{n}" for n in pages})
+    ranks = {p.value: p.source_rank for p in proposals if p.field == "unit"}
+    assert ranks == {"101": "A", "102": "B", "103": "C", "104": "D", "105": "E", "106": "F", "107": "G"}
+    units = _field(cluster_property_proposals(proposals), "unit")
+    assert [c.display_value for c in units] == ["101", "102", "103", "104", "105", "106", "107"]
+    # Sete valores fortes diferentes: conflito explícito, nenhum com confiança alta.
+    assert all(c.confidence == "MEDIUM" for c in units)
+    assert all(len(c.conflicting_cluster_ids) == 6 for c in units)
+
+
+def test_possible_context_is_rank_h_and_low_confidence():
+    proposals = _proposals(_page("O imóvel objeto da ação, apartamento nº 302, fica ao lado do apartamento nº 101.\n"))
+    units = [p for p in proposals if p.field == "unit"]
+    assert units and all(p.strength == "POSSIBLE" and p.source_rank == "H" for p in units)
+    assert all(c.confidence == "LOW" for c in _field(cluster_property_proposals(proposals), "unit"))
+
+
+def test_repeated_ten_times_is_one_cluster_and_never_outranks_the_registry():
+    petitions = [_page("PETIÇÃO INICIAL\nO imóvel objeto da ação é o apartamento nº 202.\n", number) for number in range(1, 11)]
+    registry = _page("MATRÍCULA Nº 0002 - REGISTRO DE IMÓVEIS\nImóvel: apartamento nº 201, unidade habitacional.\n", 11)
+    proposals = _proposals(*petitions, registry, pieces={**{n: "DOC-INICIAL" for n in range(1, 11)}, 11: "DOC-MATRICULA"})
+    units = _field(cluster_property_proposals(proposals), "unit")
+    assert [(c.display_value, c.source_count, c.document_count) for c in units] == [("201", 1, 1), ("202", 10, 1)]
+    # Ordem pela peça; divergência forte mantém ambos em confiança média.
+    assert {c.confidence for c in units} == {"MEDIUM"}
+
+
+def test_contract_petition_and_report_corroborate_without_auto_effect():
+    pages = (
+        _page("CONTRATO DE COMPRA E VENDA\nObjeto do contrato: unidade habitacional apartamento nº 303, Bloco 2.\n", 1),
+        _page("PETIÇÃO INICIAL\nO imóvel objeto da ação, apartamento nº 303, Bloco 02.\n", 2),
+        _page("LAUDO TÉCNICO\nApartamento vistoriado: apartamento nº 303, Bloco 2.\n", 3),
+    )
+    clusters = cluster_property_proposals(_proposals(*pages, pieces={1: "A", 2: "B", 3: "C"}))
+    (unit,) = _field(clusters, "unit")
+    (block,) = _field(clusters, "block")
+    assert unit.document_count == 3 and unit.confidence == "HIGH" and unit.conflicting_cluster_ids == ()
+    assert block.document_count == 3 and block.display_value == "2"
+    # O cluster carrega as propostas originais: "Usar" grava uma delas, nunca um valor inventado.
+    assert unit.display_value == unit.evidences[0].value
+
+
+def test_party_address_never_joins_or_creates_a_subject_cluster():
+    text = (
+        "CONTRATO DE COMPRA E VENDA\n"
+        "COMPRADORA: Fulana Sintética, residente e domiciliada na Rua Particular Sintética, nº 9, CEP 50000-111, Recife - PE.\n"
+        "O imóvel objeto do contrato está situado na Rua das Flores Sintéticas, nº 10, CEP 55000-000, Caruaru - PE.\n"
+    )
+    clusters = cluster_property_proposals(_proposals(_page(text)))
+    assert [c.display_value for c in _field(clusters, "postal_code")] == ["55000-000"]
+    assert [c.display_value for c in _field(clusters, "city")] == ["Caruaru"]
+    assert [c.display_value for c in _field(clusters, "street")] == ["Rua das Flores Sintéticas"]
+
+
+def test_product_proposals_carry_clusters_with_rank_and_counts(tmp_path):
+    from tests.test_process_participants_v1 import _import, _runtime
+    from tests.test_product_integration_oracle_v1 import _http
+    from tests.test_property_record_v1 import _text_pdf
+    runtime = _runtime(tmp_path)
+    try:
+        _, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Imóvel agrupado"})
+        root = f"/v1/workspaces/{workspace['workspace_id']}"
+        _import(runtime, root, _text_pdf(["CONTRATO DE COMPRA E VENDA", "O imóvel objeto do contrato é o apartamento nº 01, Caruaru - PE, CEP 55000-000."]), "contrato.pdf")
+        _import(runtime, root, _text_pdf(["PETIÇÃO INICIAL", "O imóvel objeto da ação é o apartamento nº 1, CEP 55000000."]), "inicial.pdf")
+        status, body = _http(runtime, "GET", root + "/property-record/proposals")
+        assert status == 200
+        unit = next(c for c in body["clusters"] if c["field"] == "unit")
+        assert unit["source_count"] == 2 and unit["document_count"] == 2 and unit["best_rank"] == "B"
+        assert unit["display_value"] == "01" and unit["evidences"][0]["evidence"]["filename"] == "contrato.pdf"
+        assert {e["source_rank"] for e in unit["evidences"]} == {"B", "E"}
+        postal = next(c for c in body["clusters"] if c["field"] == "postal_code")
+        assert postal["canonical_value"] == "55000-000" and postal["source_count"] == 2
+        # Nada foi gravado.
+        status, record = _http(runtime, "GET", root + "/property-record")
+        assert status == 200 and record["record"]["values"] == []
+    finally:
+        runtime.close()
+
+
+# --- Revisão independente da PR (#288).
+
+@pytest.mark.parametrize("text", [
+    "CONTRATO DE COMPRA E VENDA\nFica eleito o foro de Recife/PE para as questões do imóvel objeto deste contrato.\n",
+    "CONTRATO DE COMPRA E VENDA\nComarca de Recife/PE para dirimir dúvidas sobre o imóvel objeto deste contrato.\n",
+    "TERMO DE ENTREGA\nDeclaro ter recebido o imóvel objeto do contrato, Recife/PE, 10 de maio de 2020.\n",
+    "CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato fica em Olinda.\nAssinado em Recife/PE, 10 de maio de 2020.\n",
+    "CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato, processo de Execução - SE 123.\n",
+    "CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato, de Fulano - PR\n",
+    "CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato está em construção/PE.\n",
+    "MATRÍCULA Nº 123\n1º Ofício de Registro de Imóveis de Caruaru/PE\nunidade habitacional.\n",
+    "CONTRATO DE FINANCIAMENTO\nCAIXA SINTÉTICA, Rua Z, nº 1, Agência de Caruaru/PE, financia a unidade habitacional.\n",
+    "LAUDO DE VISTORIA\nImóvel vistoriado na Rua X, nº 3, pelo Eng. Fulano, CREA/PE 12345.\n",
+    "CONTRATO DE COMPRA E VENDA\nunidade habitacional: Fulano, RG 123, SSP/PE.\n",
+])
+def test_city_and_state_never_come_from_venue_signature_agency_or_registration(text):
+    assert not {p.field for p in _proposals(_page(text))} & {"city", "state"}, text
+
+
+def test_city_after_em_following_the_street_is_read_with_its_state():
+    found = {(p.field, p.value) for p in _proposals(_page("CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato fica na Rua X, nº 10, em Caruaru/PE.\n"))}
+    assert ("city", "Caruaru") in found and ("state", "PE") in found
+
+
+def test_thousand_grouped_decimal_without_cents_never_merges():
+    clusters = _clusters(_proposals(
+        _page("CONTRATO DE COMPRA E VENDA\nValor contratual: R$ 150.000\n", 1),
+        _page("LAUDO\nValor contratual: 150,00\n", 2),
+    ))
+    values = _field(clusters, "contractual_value")
+    assert len(values) == 2 and all(c.conflicting_cluster_ids for c in values)
+    assert normalized_property_value("private_area_m2", "1.234")[0] != normalized_property_value("private_area_m2", "1,234")[0]
+
+
+def test_rank_comes_only_from_the_title_of_the_piece():
+    pieces = {1: "INI", 2: "INI"}
+    first = _page("PETIÇÃO INICIAL\nDos fatos.\n", 1)
+    for body, expected in (
+        ("Conforme o contrato de compra e venda anexo, o imóvel objeto da ação é o apartamento nº 202.", "E"),
+        ("O imóvel, matrícula nº 555, é o imóvel objeto da ação: apartamento nº 303.", "E"),
+    ):
+        ranks = {p.source_rank for p in _proposals(first, _page(body, 2), pieces=pieces) if p.field == "unit"}
+        assert ranks == {expected}, body
+    carried = _proposals(_page("CONTRATO DE COMPRA E VENDA\nTexto.\n", 1), _page("EXCELENTÍSSIMO SENHOR JUIZ\nA autora mora no imóvel objeto da ação, apartamento nº 404.\n", 2))
+    assert {p.source_rank for p in carried if p.field == "unit"} == {"G"}
+    for text in (
+        "Sr. Laudomiro, imóvel objeto da ação apartamento nº 707.\n",
+        "EXCELENTÍSSIMO SENHOR JUIZ FEDERAL\nAÇÃO ORDINÁRIA. Requer laudo pericial. O imóvel objeto da ação é o apartamento nº 505.\n",
+    ):
+        assert {p.source_rank for p in _proposals(_page(text)) if p.field == "unit"} == {"G"}, text
+
+
+def test_any_other_value_in_the_field_caps_confidence():
+    clusters = _clusters(_proposals(
+        _page("MATRÍCULA Nº 0003 - REGISTRO DE IMÓVEIS\nImóvel: apartamento nº 601, unidade habitacional.\n", 1),
+        _page("CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato, apartamento nº 602, fica ao lado do apartamento nº 603.\n", 2),
+        pieces={1: "M", 2: "C"},
+    ))
+    units = _field(clusters, "unit")
+    assert units[0].display_value == "601" and units[0].confidence == "MEDIUM"
+
+
+# --- Revisão delta (#288).
+
+def test_file_without_pje_pieces_reads_each_page_title_on_the_production_path():
+    no_pieces = {}
+    carried = _proposals(_page("CONTRATO DE COMPRA E VENDA\nPartes etc.\n", 1), _page("EXCELENTÍSSIMO SENHOR JUIZ\nA autora mora no imóvel objeto da ação, apartamento nº 404.\n", 2), pieces=no_pieces)
+    assert {p.source_rank for p in carried if p.field == "unit"} == {"G"}
+    reverse = _proposals(_page("PETIÇÃO INICIAL\nDos fatos.\n", 1), _page("CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato é o apartamento nº 909.\n", 2), pieces=no_pieces)
+    assert {p.source_rank for p in reverse if p.field == "unit"} == {"B"}
+
+
+@pytest.mark.parametrize("prefix", ["Município de ", "Cidade do ", "Município do "])
+def test_administrative_prefix_is_not_part_of_the_city(prefix):
+    found = {(p.field, p.value) for p in _proposals(_page(f"CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato fica na Rua X, nº 10, {prefix}Caruaru/PE.\n"))}
+    assert ("city", "Caruaru") in found and not any(field == "city" and value != "Caruaru" for field, value in found)
+
+
+@pytest.mark.parametrize("text", [
+    "CONTRATO DE COMPRA E VENDA\nCOMPRADOR: Fulano, morador na Rua Bela Vista, nº 2, em Jaboatão/PE, adquire o imóvel objeto deste contrato.\n",
+    "PETIÇÃO INICIAL\nFulana, moradora da Rua Bela Vista, nº 2, Olinda/PE, proprietária do imóvel objeto da ação.\n",
+    "CONTRATO DE COMPRA E VENDA\nA VENDEDORA, estabelecida na Av. Norte, nº 5, Recife/PE, vende o imóvel objeto deste contrato.\n",
+])
+def test_party_residence_never_becomes_the_property_city(text):
+    assert not {p.field for p in _proposals(_page(text))} & {"city", "state"}
+
+
+def test_registration_reference_after_the_address_keeps_the_city():
+    found = {(p.field, p.value) for p in _proposals(_page("MATRÍCULA Nº 123\nImóvel situado na Rua X, nº 10, Caruaru - PE, objeto do registro R-2 desta matrícula.\n"))}
+    assert ("city", "Caruaru") in found and ("state", "PE") in found
+
+
+def test_natural_light_does_not_hide_the_property_city():
+    found = {(p.field, p.value) for p in _proposals(_page("LAUDO DE VISTORIA\nO imóvel vistoriado, com iluminação natural, fica na Rua X, nº 10, Caruaru - PE.\n"))}
+    assert ("city", "Caruaru") in found
+    assert not {p.field for p in _proposals(_page("CONTRATO DE COMPRA E VENDA\nComprador natural de Garanhuns, residente na Rua X, nº 1, Caruaru/PE, adquire o imóvel objeto.\n"))} & {"city"}

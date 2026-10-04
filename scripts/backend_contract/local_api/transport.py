@@ -13,7 +13,7 @@ from urllib.parse import unquote_to_bytes, urlsplit
 from ..application.document_ingestion import PROCESSING_STATES, READY as PROCESSING_READY
 from ..application.photo_library import DuplicatePhoto, photo_library_to_mapping
 from ..application.site_location import LocationInputError, site_location_to_mapping
-from ..application.property_record import PROPERTY_FIELDS, property_record_to_mapping
+from ..application.property_record import PROPERTY_FIELDS, cluster_property_proposals, property_record_to_mapping
 from ..application.content import (
     DOCUMENT_IO_CHUNK_BYTES,
     MAX_DOCUMENT_BYTES,
@@ -1039,8 +1039,15 @@ class LocalApi:
                     else:
                         proposals, pending = self._services.get_property_proposals.execute(workspace_id), ()
                     values_by_field = {field: {p.value for p in proposals if p.field == field} for field, *_ in PROPERTY_FIELDS}
+                    # #288: o mesmo valor (normalizado por campo) vira um grupo com
+                    # todas as evidencias, ordenado pela hierarquia das pecas.
+                    clusters = cluster_property_proposals(tuple(proposals))
                     return _json_response(200, {"workspace_id": str(workspace_id), "proposals": [
                         {**asdict(p), "state": "CONFLICTING" if len(values_by_field[p.field]) > 1 else "PROPOSED"} for p in proposals
+                    ], "clusters": [
+                        {**{key: value for key, value in asdict(cluster).items() if key != "evidences"},
+                         "evidences": [asdict(item) for item in cluster.evidences]}
+                        for cluster in clusters
                     ], "pending_documents": list(pending)})
                 if normalized_method == "GET":
                     try:

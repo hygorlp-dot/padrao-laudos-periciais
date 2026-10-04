@@ -176,6 +176,13 @@ class PropertyProposal:
     # STRONG: o contexto liga o dado ao imovel objeto. POSSIBLE: a peca e
     # pertinente, mas o trecho nao diz de qual imovel fala -- confira a fonte.
     strength: str = "STRONG"
+    # Hierarquia documental da peca de origem (#288), so para ordenar e
+    # destacar: A matricula/registro, B contrato, C termo de entrega, D laudo
+    # ou parecer, E peticao inicial ligada ao imovel objeto, F contestacao,
+    # G outras pecas, H contexto apenas possivel. Nunca torna nada efetivo.
+    source_rank: str = "G"
+    # Peca logica do export PJe (ou None): "M pecas" conta pecas, nao paginas.
+    piece_id: str | None = None
 
 
 def _normalized(value):
@@ -211,6 +218,40 @@ _PERTINENT_DOCUMENTS = (
     "contrato de mutuo", "matricula", "registro de imoveis", "termo de entrega", "termo de recebimento",
     "laudo", "parecer tecnico", "vistoria",
 )
+# Tipo de peca para o ranking (#288), lido SO no titulo: as duas primeiras
+# linhas nao vazias da primeira pagina da peca. Citar um contrato ou uma
+# matricula no corpo de uma peticao nunca empresta a ela o peso daquela peca.
+_RANK_MARKERS = (
+    (re.compile(r"\bmatricula\b|\bregistro de imoveis\b|\bcertidao de inteiro teor\b"), "A"),
+    (re.compile(r"\bcontrato (?:de compra e venda|por instrumento particular|de financiamento|de mutuo)\b|\binstrumento particular de compra e venda\b"), "B"),
+    (re.compile(r"\btermo de (?:entrega|recebimento)\b"), "C"),
+    (re.compile(r"^\s*(?:laudo|parecer tecnico)\b"), "D"),
+    (re.compile(r"\bpeticao inicial\b"), "E"),
+    (re.compile(r"\bcontestacao\b"), "F"),
+)
+_TITLE_LINES = 2
+
+
+def _rank_kind(folded_page):
+    title = [line for line in folded_page[:600].split("\n") if line.strip()][:_TITLE_LINES]
+    found = []
+    for line_number, line in enumerate(title):
+        for pattern, rank in _RANK_MARKERS:
+            match = pattern.search(line)
+            if match:
+                found.append((line_number, match.start(), rank))
+    return min(found)[2] if found else ""
+
+
+def _source_rank(kind, method, strength):
+    if strength != "STRONG":
+        return "H"
+    if kind == "E":
+        # A inicial so pesa quando o trecho fala do imovel objeto (ou rotula o dado).
+        return "E" if method.startswith(("CONTEXT_BOUND_", "LABEL_")) else "G"
+    return kind or "G"
+
+
 _INTRINSIC_FIELDS = {"development", "private_area_m2", "constructed_area_m2", "program", "habite_se_date", "contract_number", "contractual_value"}
 _SENTENCE_BREAK = re.compile(r"(?:\.\s|;\s|\n\s*\n)")
 # "Av. ", "Dr. ", "Rel. ", "nº. " nao terminam a frase.
@@ -249,6 +290,34 @@ def _original(text, indices, start, end):
     return text[indices[start]:indices[end - 1] + 1].strip(" ,.;:-")
 
 
+_UF_CODES = ("ac", "al", "ap", "am", "ba", "ce", "df", "es", "go", "ma", "mt", "ms", "mg", "pa", "pb", "pr", "pe", "pi", "rj", "rn", "rs", "ro", "rr", "sc", "sp", "se", "to")
+# "..., Rua X, nº 10, CEP ..., Caruaru - PE" (#288): municipio e UF saem do
+# MESMO achado, logo depois de um trecho de endereco da mesma frase; nunca de
+# foro, assinatura com data, orgao ("CREA/PE") ou agencia.
+_CITY_UF = re.compile(
+    r"(?:,|;)[ \t]+(?:em[ \t]+)?([a-z][a-z' ]{1,40}?[a-z])[ \t]*(?:-|/)[ \t]*(" + "|".join(_UF_CODES) + r")\b(?![-/])"
+)
+_ADDRESS_ANCHOR = re.compile(
+    r"\b(?:rua|avenida|av\.|travessa|estrada|rodovia|alameda|praca|largo|cep|bairro|quadra|lote)\b|" + _NUMBER_MARK + r"\s*\d"
+)
+_CITY_BLOCKERS = re.compile(
+    r"\b(?:comarca|foro|eleit\w*|dirimir|crea|cau|ssp|sds|detran|agencia|cartorio|oficio|registro de imoveis|oab|"
+    r"assinad\w*|datad\w*|morador\w*|estabelecid\w*|natural de)\b"
+)
+_DATE_AFTER = re.compile(r"[ \t]*,?[ \t]*\d{1,2}(?:/|[ \t]+de[ \t]+)")
+_CITY_CONNECTIVES = frozenset({"de", "da", "do", "dos", "das", "e"})
+_ANCHOR_REACH = 160
+
+
+_CITY_PREFIX = re.compile(r"^(?:Munic[ií]pio|Cidade|Distrito|MUNIC[IÍ]PIO|CIDADE|DISTRITO)\s+d[eoa]\s+")
+
+
+def _city_name(value):
+    words = value.split()
+    named = [word for word in words if word not in _CITY_CONNECTIVES]
+    return bool(named) and all(
+        word[:1].isupper() and not (word.isupper() and len(word) <= 4) for word in named
+    )
 _STREET = re.compile(r"\b(?:rua|avenida|av\.|travessa|estrada|rodovia|alameda|praca|largo)\s+[^,;\n]{2,80}?(?=\s*(?:,|;|\n|$|\s" + _NUMBER_MARK + r"|\s-\s))")
 _PATTERNS = (
     ("street", _STREET, 0),
@@ -342,6 +411,44 @@ def _context_proposals(page, document_kind, folded, indices, label_spans=()):
             if value not in excerpt or len(excerpt) > 2000:
                 continue
             found.append((field, value, excerpt, method, strength))
+    found.extend(_city_state_proposals(page, document_kind, folded, indices, label_spans))
+    return found
+
+
+def _city_state_proposals(page, document_kind, folded, indices, label_spans):
+    text = page.text
+    mode = page.extraction_mode.value
+    found = []
+    label_starts = [start for start, _end in label_spans]
+    for match in _CITY_UF.finditer(folded):
+        source = indices[match.start()]
+        position = bisect_right(label_starts, source) - 1
+        if position >= 0 and source < label_spans[position][1]:
+            continue
+        begin, stop = _window(folded, match.start(), match.end())
+        context = folded[begin:stop]
+        if _PARTY_ADDRESS_BLOCKERS.search(context) or _CITY_BLOCKERS.search(context):
+            continue
+        if not _ADDRESS_ANCHOR.search(folded, max(begin, match.start() - _ANCHOR_REACH), match.start()):
+            continue
+        if _DATE_AFTER.match(folded, match.end()):
+            continue
+        city = _CITY_PREFIX.sub("", _original(text, indices, match.start(1), match.end(1)))
+        state = _original(text, indices, match.start(2), match.end(2))
+        if not _city_name(city) or not (len(state) == 2 and state.isupper()):
+            continue
+        bound = any(cue in context for cue in _SUBJECT_PROPERTY_CUES)
+        if bound:
+            strength, method = "STRONG", f"CONTEXT_BOUND_{mode}_V2"
+        elif document_kind:
+            strength, method = "POSSIBLE", f"DOCUMENT_PATTERN_{mode}_V2"
+        else:
+            continue
+        excerpt = text[indices[begin]:indices[stop - 1] + 1].strip() if stop > begin else ""
+        if city not in excerpt or state not in excerpt or len(excerpt) > 2000:
+            continue
+        found.append(("city", city, excerpt, method, strength))
+        found.append(("state", state, excerpt, method, strength))
     return found
 
 
@@ -360,7 +467,7 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
     proposals = []
     seen = set()
 
-    def add(field, value, excerpt, method, strength, page):
+    def add(field, value, excerpt, method, strength, page, rank_kind="", piece=None):
         if _DEFINITIONS[field][1] == "decimal":
             value = re.sub(r"\s*m[²2]\s*$", "", value).removeprefix("R$").strip()
         try:
@@ -369,12 +476,16 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
             return
         evidence = PropertyEvidence(str(document_id), checksum, filename, page.number, excerpt, method, page.confidence, value)
         identity = json.dumps([str(workspace_id), field, asdict(evidence)], ensure_ascii=False, sort_keys=True)
-        proposal = PropertyProposal(sha256(identity.encode()).hexdigest(), str(workspace_id), field, value, evidence, strength)
+        proposal = PropertyProposal(
+            sha256(identity.encode()).hexdigest(), str(workspace_id), field, value, evidence, strength,
+            _source_rank(rank_kind or "", method, strength), piece,
+        )
         if proposal.proposal_id not in seen:
             seen.add(proposal.proposal_id)
             proposals.append(proposal)
 
     document_kind = ""
+    rank_kind = None
     current_piece = None
     for page in pages:
         mode = page.extraction_mode.value
@@ -384,10 +495,16 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
             piece = logical_document_for(page.number)
             if piece != current_piece:
                 current_piece, document_kind = piece, ""
+                rank_kind = None
         folded_page, page_indices = _folded(page.text)
         kind = next((item for item in _PERTINENT_DOCUMENTS if item in folded_page[:600]), "")
         if kind:
             document_kind = kind
+        # O peso vem do titulo da primeira pagina da peca; sem pecas do PJe,
+        # cada pagina vale pelo proprio titulo e nada se arrasta para a seguinte.
+        # Pagina fora de qualquer peca (arquivo sem inventario PJe) tambem.
+        if current_piece is None or rank_kind is None:
+            rank_kind = _rank_kind(folded_page)
         lines = page.text.splitlines()
         offsets, cursor = [], 0
         for raw in page.text.splitlines(keepends=True):
@@ -407,7 +524,7 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
                 nearby = _folded(" ".join(lines[max(0, index - 2):index + 1]))[0]
                 if _LABEL_QUALIFICATION_BLOCKERS.search(nearby):
                     continue
-            add(field, match[2].strip(), line.strip(), f"LABEL_{mode}_V1", "STRONG", page)
+            add(field, match[2].strip(), line.strip(), f"LABEL_{mode}_V1", "STRONG", page, rank_kind, current_piece)
         for field, value, excerpt, method, strength in _context_proposals(page, document_kind, folded_page, page_indices, tuple(label_spans)):
-            add(field, value, excerpt, method, strength, page)
+            add(field, value, excerpt, method, strength, page, rank_kind, current_piece)
     return tuple(proposals)
