@@ -131,7 +131,7 @@ describe("construction defect analysis workbench", () => {
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<ConstructionDefectAnalysisView workspaceId={ID} />);
-    expect(await screen.findByRole("heading", { name: "Gerar nova proposta PAT sobre a vistoria atual" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Gerar nova proposta de análise técnica sobre a vistoria atual" })).toBeInTheDocument();
     expect(screen.getByText(/revisões permanecem no histórico/)).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Observação direta"), "OBS-001");
     await user.selectOptions(screen.getByLabelText("Método registrado"), "METHOD-001");
