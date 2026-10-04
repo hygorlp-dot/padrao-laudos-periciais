@@ -10,6 +10,7 @@ device, no active recovery quarantine.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -359,7 +360,8 @@ def test_a_private_root_failure_is_a_sanitized_startup_failure(tmp_path, monkeyp
 
 
 def test_the_volume_root_is_validated_not_created():
-    assert provision_local_storage_directory(Path(Path.cwd().anchor)) is False
+    """The trusted volume is the one the interpreter runs from (C:\\ on the RC)."""
+    assert provision_local_storage_directory(Path(Path(sys.executable).anchor)) is False
 
 
 def test_a_directory_refused_after_creation_fails_closed_without_deleting(tmp_path, monkeypatch):
