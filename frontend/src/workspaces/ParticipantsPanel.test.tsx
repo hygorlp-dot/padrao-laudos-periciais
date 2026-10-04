@@ -94,6 +94,13 @@ describe("participants panel (#268)", () => {
     }
   });
 
+  test("a long list of unreadable pages is grouped by file and capped (#285)", async () => {
+    const unread = Array.from({ length: 30 }, (_, index) => ({ filename: "autos.pdf", page: index + 1 }));
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, view({ unread_pages: [...unread, { filename: "capa.pdf", page: 2 }] }))));
+    render(<ParticipantsPanel workspaceId={ID} />);
+    expect(await screen.findByText(/Sem texto legível em autos\.pdf, p\. 1, 2, 3, 4, 5, 6, 7, 8 e mais 22 páginas; capa\.pdf, p\. 2\./)).toBeInTheDocument();
+  });
+
   test("a proposal stays a proposal until the expert confirms it, with the source on demand", async () => {
     const proposal = participant({
       participant_id: "PARTICIPANT-SRC-" + "B".repeat(24), name: "BETA SINTÉTICA", pole: "PASSIVE", procedural_role: "DEFENDANT",

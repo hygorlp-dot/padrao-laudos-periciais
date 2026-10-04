@@ -194,6 +194,20 @@ function ParticipantForm({
   );
 }
 
+const UNREAD_PAGES_LISTED = 8;
+
+// Um processo digitalizado grande pode ter centenas de páginas sem texto: o
+// aviso agrupa por arquivo e diz quantas faltam, em vez de ler todas em voz alta.
+function unreadSummary(pages: readonly { filename: string; page: number }[]) {
+  const byFile = new Map<string, number[]>();
+  for (const item of pages) byFile.set(item.filename, [...(byFile.get(item.filename) ?? []), item.page]);
+  return Array.from(byFile, ([filename, numbers]) => {
+    const listed = numbers.slice(0, UNREAD_PAGES_LISTED).join(", ");
+    const rest = numbers.length - UNREAD_PAGES_LISTED;
+    return `${filename}, p. ${listed}${rest > 0 ? ` e mais ${rest} página${rest > 1 ? "s" : ""}` : ""}`;
+  }).join("; ");
+}
+
 export function ParticipantsPanel({ workspaceId, processSaved = true }: { workspaceId: string; processSaved?: boolean }) {
   // Gravar o processo pela primeira vez libera as decisões: a lista é relida.
   return <ParticipantsContent key={`${workspaceId}:${processSaved}`} workspaceId={workspaceId} />;
@@ -328,7 +342,7 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
 
       {view.unread_pages.length ? (
         <p className="participants-notice participants-notice--warning" role="status">
-          Sem texto legível em {view.unread_pages.map((item) => `${item.filename}, p. ${item.page}`).join("; ")}. Participantes nessas páginas não podem ser propostos: confira os autos.
+          Sem texto legível em {unreadSummary(view.unread_pages)}. Participantes nessas páginas não podem ser propostos: confira os autos.
         </p>
       ) : null}
       {!view.proposals.length && !view.participants.length && !view.proposals_unavailable && !view.pending_documents.length && !view.interrupted_pages.length && !view.unread_pages.length && !view.legacy_blocked_poles.length ? (
