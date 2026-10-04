@@ -854,6 +854,84 @@ class _ProvisionedRootHandoff:
 
 
 @_controlled_filesystem_errors("falha ao provisionar armazenamento privado")
+@_controlled_filesystem_errors("falha ao provisionar o diretório local do armazenamento")
+def provision_local_storage_directory(directory: str | Path) -> bool:
+    """Provisiona, fail-closed, o diretório que guarda o banco local (#283).
+
+    O primeiro uso parte de uma raiz local válida sem o diretório de dados; o
+    produto precisa criá-lo sozinho, sem enfraquecer o que a abertura do banco
+    exige. Cria SOMENTE este diretório (nunca ancestrais intermediários): o pai
+    precisa existir, ser diretório, ter ancestralidade sem link/junction/reparse
+    e estar no dispositivo local confiável. A criação é ligada à identidade do
+    pai (``dir_fd`` + ``O_NOFOLLOW`` em POSIX; custódia aberta no pai no
+    Windows) e o resultado é reaberto e revalidado. Um diretório já existente
+    só é aceito com as mesmas garantias. Retorna ``True`` quando criou.
+    """
+
+    raw = str(directory)
+    if raw.startswith(("\\\\", "//", "\\\\?\\", "\\\\.\\")):
+        raise RepositoryIntegrityError("armazenamento local não pode usar caminho de rede ou dispositivo")
+    configured = Path(directory).absolute()
+    _entry_name(configured)
+    if os.path.lexists(configured):
+        _validate_plain_ancestry(configured)
+        existing = os.lstat(configured)
+        if not stat.S_ISDIR(existing.st_mode):
+            raise RepositoryIntegrityError("diretório local do armazenamento inválido")
+        _validate_trusted_local_device(existing)
+        return False
+    parent = configured.parent
+    if not os.path.lexists(parent):
+        raise RepositoryError("ancestral do armazenamento local não existe")
+    _validate_plain_ancestry(parent)
+    parent_identity = os.lstat(parent)
+    if not stat.S_ISDIR(parent_identity.st_mode):
+        raise RepositoryIntegrityError("ancestral do armazenamento local inválido")
+    _validate_trusted_local_device(parent_identity)
+    parent_fd = None
+    custody_fd = None
+    created_fd = None
+    try:
+        if os.name == "posix":
+            parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            if not _same_identity(parent_identity, os.fstat(parent_fd)):
+                raise RepositoryIntegrityError("identidade do ancestral mudou durante o provisioning")
+            os.mkdir(_entry_name(configured), 0o700, dir_fd=parent_fd)
+            created = os.stat(_entry_name(configured), dir_fd=parent_fd, follow_symlinks=False)
+            created_fd = os.open(
+                _entry_name(configured),
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+            if not _same_identity(created, os.fstat(created_fd)):
+                raise RepositoryIntegrityError("identidade do diretório local mudou durante o provisioning")
+        else:
+            # Um arquivo aberto no pai impede trocá-lo ou renomeá-lo enquanto
+            # o diretório é criado; a identidade é conferida antes e depois.
+            custody_fd = os.open(
+                parent / f".storage-root-custody.{uuid4().hex}.tmp",
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_BINARY | os.O_TEMPORARY,
+                0o600,
+            )
+            _validate_regular(os.fstat(custody_fd), expected_links=1)
+            if not _same_identity(parent_identity, os.lstat(parent)):
+                raise RepositoryIntegrityError("identidade do ancestral mudou durante o provisioning")
+            os.mkdir(configured, 0o700)
+            if not _same_identity(parent_identity, os.lstat(parent)):
+                raise RepositoryIntegrityError("identidade do ancestral mudou durante o provisioning")
+            created = os.lstat(configured)
+        _validate_plain_ancestry(configured)
+        observed = os.lstat(configured)
+        if not stat.S_ISDIR(created.st_mode) or not _same_identity(created, observed):
+            raise RepositoryIntegrityError("diretório local do armazenamento inválido")
+        _validate_trusted_local_device(observed)
+        return True
+    finally:
+        for descriptor in (created_fd, parent_fd, custody_fd):
+            if descriptor is not None:
+                os.close(descriptor)
+
+
 def provision_private_content_root(
     private_root: str | Path,
     *,

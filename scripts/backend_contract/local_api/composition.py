@@ -70,7 +70,11 @@ from ..application.services import (
     StoreDeliverySupportingFile,
     StorePrivateContent,
 )
-from ..infrastructure.private_filesystem import LocalPrivateContentStore, _validate_trusted_local_device
+from ..infrastructure.private_filesystem import (
+    LocalPrivateContentStore,
+    _validate_trusted_local_device,
+    provision_local_storage_directory,
+)
 from ..infrastructure.pdf_text import LocalPdfTextExtractor
 from ..infrastructure.office_pdf import LocalOfficePdfConverter
 from ..infrastructure.rapid_ocr import RapidOcrLatinEngine
@@ -148,6 +152,12 @@ from ..application.budget_foundation import (
 
 class LocalApiStartupError(RuntimeError):
     """Falha sanitizada antes de a API local ficar disponível."""
+
+
+#: Falhas controladas de compor o armazenamento local e o listener: mensagens
+#: sem caminho nem conteúdo, que a entrada do produto pode mostrar ao usuário
+#: em vez de um traceback (#283).
+STARTUP_FAILURES = (RepositoryError, LocalApiStartupError)
 
 
 class _SystemClock:
@@ -336,6 +346,11 @@ def build_local_api(
     database_path = Path(database)
     if _path_has_recovery_quarantine(database_path, path_is_file=True) or (private_root is not None and _path_has_recovery_quarantine(Path(private_root), path_is_file=False)):
         raise RepositoryIntegrityError("recovery staging is quarantined and cannot become active")
+    # O primeiro uso parte de uma raiz local sem o diretório de dados (#283):
+    # ele é provisionado aqui, depois das recusas de rede, dispositivo e
+    # quarentena, e com as mesmas garantias de ancestralidade e dispositivo
+    # que a abertura do banco exige logo abaixo.
+    provision_local_storage_directory(database_path.parent)
     before_identity = _assert_plain_single_link_database(database_path)
     store = SQLiteApplicationStore(database)
     try:

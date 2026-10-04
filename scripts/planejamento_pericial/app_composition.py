@@ -14,10 +14,12 @@ e o usa pelo comportamento.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from threading import Event
 
-from scripts.backend_contract.local_api.composition import build_local_api
+
+from scripts.backend_contract.local_api.composition import STARTUP_FAILURES, build_local_api
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
 from scripts.backend_contract.product_bridge.server import ProductBridgeConfig
 from scripts.triagem_pericial.pje_intake_adapter import PjeIntakeAdapter
@@ -75,12 +77,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--private-root", required=True, type=Path)
     parser.add_argument("--port", type=int, default=0)
     arguments = parser.parse_args(argv)
-    runtime = build_pericial_application(
-        arguments.database,
-        arguments.frontend,
-        private_root=arguments.private_root,
-        config=ProductBridgeConfig(port=arguments.port),
-    )
+    try:
+        runtime = build_pericial_application(
+            arguments.database,
+            arguments.frontend,
+            private_root=arguments.private_root,
+            config=ProductBridgeConfig(port=arguments.port),
+        )
+    except STARTUP_FAILURES as exc:
+        # Falha real de armazenamento: mensagem controlada, sem traceback e
+        # sem fingir sucesso (#283).
+        print(f"Sistema Pericial não iniciou: {exc}", file=sys.stderr, flush=True)
+        return 2
     try:
         runtime.start()
         print(f"Sistema Pericial disponível em {runtime.origin}/", flush=True)
