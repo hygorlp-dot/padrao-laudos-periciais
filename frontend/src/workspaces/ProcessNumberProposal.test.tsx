@@ -72,3 +72,19 @@ describe("process number proposal (#286)", () => {
     expect(parseProcessNumberClassification(classification()).primary_value).toBe(MAIN);
   });
 });
+
+describe("process number proposal — review (#286)", () => {
+  test("not found and invalid check digits are said instead of an empty box", () => {
+    render(<ProcessNumberProposal classification={classification({ resolution: "NOT_FOUND", primary_value: null, confidence: null, candidates: [], invalid_occurrences: [{ filename: "capa.pdf", page: 1 }] })} current="" disabled={false} onUse={vi.fn()} />);
+    expect(screen.getByText(/Nenhum número de processo válido/)).toBeInTheDocument();
+    expect(screen.getByText(/dígito verificador inválido .* capa.pdf, p. 1/)).toBeInTheDocument();
+  });
+
+  test("parser rejects unknown reasons, contexts and a resolved answer without its primary candidate", () => {
+    expect(() => parseProcessNumberClassification({ ...classification({ resolution: "UNRESOLVED", primary_value: null, confidence: null }), unresolved_reason: "WHATEVER" })).toThrow();
+    const bad = classification();
+    expect(() => parseProcessNumberClassification({ ...bad, candidates: [{ ...bad.candidates[0], occurrences: [{ ...bad.candidates[0].occurrences[0], context: "NOPE" }] }] })).toThrow();
+    expect(() => parseProcessNumberClassification({ ...bad, candidates: bad.candidates.slice(1) })).toThrow();
+    expect(() => parseProcessNumberClassification({ ...bad, primary_value: OTHER })).toThrow();
+  });
+});

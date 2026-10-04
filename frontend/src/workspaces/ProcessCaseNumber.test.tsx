@@ -71,3 +71,12 @@ test("when the classification is unavailable the unclassified list says so", asy
   expect(await screen.findByText(/Não foi possível separar o número principal/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: new RegExp(`Usar ${CITED}`) })).toBeInTheDocument();
 });
+
+test("while the numbers are being classified no unclassified buttons are offered", async () => {
+  const pending = routes(null);
+  vi.stubGlobal("fetch", vi.fn((url: string) => (url.endsWith("/process-number") ? new Promise(() => undefined) : pending(url))));
+  render(<ProcessCaseView workspaceId={ID} />);
+  expect(await screen.findByText(/Separando o número principal/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: new RegExp(`Usar ${CITED}`) })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: new RegExp(`Usar ${MAIN}`) })).not.toBeInTheDocument();
+});

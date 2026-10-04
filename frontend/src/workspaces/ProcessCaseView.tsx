@@ -348,7 +348,9 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
             ? numberClassification.value
             : null;
           const classified = classification !== null && classification !== "unavailable";
-          const reviewCandidates = !classified && (extracted?.state === "AMBIGUOUS"
+          // Enquanto classifica, o número não aparece como lista indistinta.
+          const classifying = field.key === "numero_processo" && classification === null;
+          const reviewCandidates = !classified && !classifying && (extracted?.state === "AMBIGUOUS"
             || extracted?.state === "CONFLICTING")
             ? distinctReviewCandidates(extracted.evidence)
             : [];
@@ -378,12 +380,15 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
                 onUse={(value) => update("numero_processo", value)}
               />
             ) : null}
+            {classifying ? (
+              <p className="field-hint" role="status">Separando o número principal dos processos citados nos autos…</p>
+            ) : null}
             {classification === "unavailable" ? (
               <p className="field-warning" role="status">
                 Não foi possível separar o número principal dos processos citados agora. Os números abaixo não estão classificados: confira a fonte de cada um.
               </p>
             ) : null}
-            {!classified && extracted?.evidence[0] && reviewCandidates.length === 0 ? (
+            {!classified && !classifying && extracted?.evidence[0] && reviewCandidates.length === 0 ? (
               <p className="field-provenance">
                 {extracted.evidence[0].extraction_mode === "OCR" ? "Extraído por OCR local de " : "Extraído de "}
                 {extracted.evidence[0].source_filename}, página {extracted.evidence[0].source_page}

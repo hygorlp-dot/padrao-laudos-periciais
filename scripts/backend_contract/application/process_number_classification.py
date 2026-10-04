@@ -18,6 +18,7 @@ resolução: nada é inventado e nada é salvo; o perito decide.
 from __future__ import annotations
 
 import re
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -56,6 +57,8 @@ class UnresolvedReason(StrEnum):
     NO_PRIMARY_SOURCE = "NO_PRIMARY_SOURCE"
     READING_INCOMPLETE = "READING_INCOMPLETE"
     SOURCES_UNAVAILABLE = "SOURCES_UNAVAILABLE"
+    # A capa ou o cabeçalho existe, mas só em OCR de baixa confiança.
+    LOW_CONFIDENCE_OCR = "LOW_CONFIDENCE_OCR"
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,16 +117,32 @@ _PRIMARY_LABEL = re.compile(
     r"(?:\s*(?:N(?:UMERO|O|[.°])|NUMERO)\s*\.?)?"
     r"\s*[:\-]?\s*$"
 )
-# Marcadores de citação de outro julgado. Palavras inteiras, na linha do número.
-_CITATION = re.compile(
-    r"(?<![A-Z0-9])(?:"
-    r"AC|APELACAO|APELACAO\s+CIVEL|RESP|ARESP|AGINT|AGRG|EDCL|AGRAVO\s+INTERNO|"
-    r"TEMA|REL|RELATOR|RELATORA|DES|DESEMBARGADOR|DESEMBARGADORA|MIN|MINISTRO|MINISTRA|"
-    r"STJ|STF|TNU|TRF\s*\d?|TJ[A-Z]{2}|JULGADO\s+EM|JULGAMENTO\s+EM|DJE|DJ|"
-    r"PRECEDENTES?|JURISPRUDENCIA|EMENTA|ACORDAO|NESSE\s+SENTIDO|NO\s+MESMO\s+SENTIDO|"
-    r"VEJA-SE|CONFIRA-SE|CF\."
-    r")(?![A-Z0-9])"
+# Marcadores de citação de outro julgado. Palavras inteiras.
+# Decisivos: só aparecem citando julgado alheio, mesmo num cabeçalho.
+_DECISIVE_CITATION = (
+    r"RESP|ARESP|AGINT|AGRG|EDCL|AGRAVO\s+INTERNO|TEMA|STJ|STF|TNU|JULGADO\s+EM|JULGAMENTO\s+EM|DJE|"
+    r"PRECEDENTES?|JURISPRUDENCIA|EMENTA|NESSE\s+SENTIDO|NO\s+MESMO\s+SENTIDO|VEJA-SE|CONFIRA-SE|CF\."
 )
+# De classe ou de órgão: um cabeçalho de apelação traz "Apelação Cível",
+# "Relator: Des. ...", "TRF5" sobre o PRÓPRIO processo.
+_CLASS_CITATION = (
+    r"AC|APELACAO|APELACAO\s+CIVEL|REL|RELATOR|RELATORA|DES|DESEMBARGADOR|DESEMBARGADORA|"
+    r"MIN|MINISTRO|MINISTRA|TRF\s*\d?|TJ[A-Z]{2}|ACORDAO|DJ"
+)
+_DECISIVE = re.compile(r"(?<![A-Z0-9])(?:" + _DECISIVE_CITATION + r")(?![A-Z0-9])")
+_CITATION = re.compile(r"(?<![A-Z0-9])(?:" + _DECISIVE_CITATION + "|" + _CLASS_CITATION + r")(?![A-Z0-9])")
+# Título de peça: o cabeçalho do processo termina nele; "PROCESSO: X" depois
+# do título já está no corpo da peça (onde também se citam julgados).
+_PIECE_TITLE = re.compile(
+    r"^\s*(?:SENTENCA|DECISAO|DESPACHO|ACORDAO|VOTO|RELATORIO|EMENTA|FUNDAMENTACAO|DISPOSITIVO|"
+    r"ATO\s+ORDINATORIO|CERTIDAO|INTIMACAO|MANDADO|PETICAO|EXCELENTISSIM\w*|DOS\s+FATOS|"
+    r"I\s*[-.]\s*RELATORIO)\b"
+)
+_HEADER_ZONE_LINES = 30
+_PREFIX_REACH = 300
+_WINDOW_REACH = 300
+_FOLLOWING_LINES = 2
+
 # Relação declarada com outro processo.
 _RELATION = re.compile(
     r"(?<![A-Z0-9])(?:"
@@ -135,7 +154,7 @@ _RELATION = re.compile(
 )
 # Título de seção que abre jurisprudência citada até o fim da página.
 _CITED_SECTION = re.compile(
-    r"^\s*(?:JURISPRUDENCIA(?:\s+\w+)?|PRECEDENTES?|EMENTA|ACORDAO(?:\s+CITADO)?)\s*:?\s*$"
+    r"^\s*(?:(?:JURISPRUDENCIA(?:\s+\w+)?|PRECEDENTES?|EMENTA|ACORDAO(?:\s+CITADO)?)\s*:?\s*$|EMENTA\s*:)"
 )
 _INSTITUTIONAL = ("PODER JUDICIARIO", "JUSTICA FEDERAL", "TRIBUNAL REGIONAL FEDERAL", "TRIBUNAL DE JUSTICA", "JUSTICA DO TRABALHO")
 _JUDICIAL_STRUCTURE = re.compile(
@@ -158,74 +177,117 @@ def _is_judicial_piece(normalized_page: str) -> bool:
     ) and _JUDICIAL_STRUCTURE.search(normalized_page) is not None
 
 
-def _page_occurrences(page_text: str, ocr: bool):
+class _PageView:
+    """Página normalizada UMA vez; todo contexto é fatia limitada dela."""
+
+    def __init__(self, text: str):
+        self.text = text
+        self.normalized, indices = _ascii_upper_with_source_indices(text)
+        self.indices = indices
+        self.line_starts = [0] + [index + 1 for index, char in enumerate(self.normalized) if char == "\n"]
+        self.cover = _is_pje_cover(self.normalized)
+        self.judicial = _is_judicial_piece(self.normalized)
+        self.header_end = len(self.normalized)
+        self.cited_from: int | None = None
+        for number, line_start in enumerate(self.line_starts):
+            line = self._line(number)
+            if self.cited_from is None and _CITED_SECTION.match(line):
+                self.cited_from = line_start
+            if self.header_end == len(self.normalized) and (number >= _HEADER_ZONE_LINES or _PIECE_TITLE.match(line)):
+                self.header_end = line_start
+
+    def _line(self, number: int) -> str:
+        start = self.line_starts[number]
+        end = self.line_starts[number + 1] - 1 if number + 1 < len(self.line_starts) else len(self.normalized)
+        return self.normalized[start:min(end, start + 4 * _WINDOW_REACH)]
+
+    def position(self, source_index: int) -> int:
+        return bisect_left(self.indices, source_index)
+
+    def line_number(self, position: int) -> int:
+        return bisect_right(self.line_starts, position) - 1
+
+    def line_end(self, number: int) -> int:
+        return self.line_starts[number + 1] - 1 if number + 1 < len(self.line_starts) else len(self.normalized)
+
+    def neighbour(self, number: int, step: int, count: int) -> list[str]:
+        found = []
+        index = number + step
+        while 0 <= index < len(self.line_starts) and len(found) < count:
+            line = self._line(index).strip()
+            if line:
+                found.append(line)
+            index += step
+        return found
+
+
+def _page_occurrences(view: _PageView, ocr: bool):
     """(valor bruto normalizado, início, fim) na página, sem sobreposição."""
-    normalized, indices = _ascii_upper_with_source_indices(page_text)
     found = []
     taken: list[tuple[int, int]] = []
-    for match in _CNJ_PATTERN.finditer(page_text):
+    for match in _CNJ_PATTERN.finditer(view.text):
         found.append((match.group(0), match.start(), match.end()))
         taken.append((match.start(), match.end()))
     if ocr:
-        for match in _OCR_CNJ_PATTERN.finditer(normalized):
-            start = indices[match.start()]
-            end = indices[match.end() - 1] + 1
-            if any(start < other_end and other_start < end for other_start, other_end in taken):
+        for match in _OCR_CNJ_PATTERN.finditer(view.normalized):
+            start = view.indices[match.start()]
+            end = view.indices[match.end() - 1] + 1
+            position = bisect_right(taken, (start, end))
+            neighbours = taken[max(0, position - 1):position + 1]
+            if any(start < other_end and other_start < end for other_start, other_end in neighbours):
                 continue
             groups = tuple(group.translate(_OCR_DIGIT_CONFUSIONS) for group in match.groups())
             found.append((f"{groups[0]}-{groups[1]}.{groups[2]}.{groups[3]}.{groups[4]}.{groups[5]}", start, end))
     return sorted(found, key=lambda item: item[1])
 
 
-def _line_bounds(text: str, start: int, end: int) -> tuple[int, int]:
-    line_start = text.rfind("\n", 0, start) + 1
-    line_end = text.find("\n", end)
-    return line_start, len(text) if line_end < 0 else line_end
-
-
 def _upper(value: str) -> str:
     return _ascii_upper_with_source_indices(value)[0]
 
 
-def _context(page_text: str, start: int, end: int, *, cover: bool, judicial: bool, cited_from: int | None) -> OccurrenceContext:
-    line_start, line_end = _line_bounds(page_text, start, end)
-    prefix = _upper(page_text[line_start:start])
-    line = _upper(page_text[line_start:line_end])
-    previous_end = line_start - 1
-    previous = ""
-    while previous_end > 0 and not previous.strip():
-        previous_start = page_text.rfind("\n", 0, previous_end) + 1
-        previous = page_text[previous_start:previous_end]
-        previous_end = previous_start - 1
-    previous = _upper(previous).strip()
-    if _RELATION.search(prefix) or (previous.endswith(":") and _RELATION.search(previous)):
+def _context(view: _PageView, start: int, end: int) -> OccurrenceContext:
+    begin = view.position(start)
+    finish = view.position(end)
+    number = view.line_number(begin)
+    line_start = view.line_starts[number]
+    line_end = view.line_end(number)
+    prefix = view.normalized[max(line_start, begin - _PREFIX_REACH):begin]
+    line = view.normalized[max(line_start, begin - _WINDOW_REACH):min(line_end, finish + _WINDOW_REACH)]
+    previous = view.neighbour(number, -1, 1)
+    previous_line = previous[0] if previous else ""
+    if _RELATION.search(prefix) or (previous_line.endswith(":") and _RELATION.search(previous_line)):
         return OccurrenceContext.DECLARED_RELATION
-    labelled = _PRIMARY_LABEL.fullmatch(prefix) is not None
+    # Rótulo na mesma linha ("Número: X") ou, na capa em tabela, sozinho na
+    # linha anterior ("Número:" / "X").
+    labelled = _PRIMARY_LABEL.fullmatch(prefix) is not None or (
+        not prefix.strip() and previous_line.endswith(":") and _PRIMARY_LABEL.fullmatch(previous_line) is not None
+    )
+    cited_section = view.cited_from is not None and begin >= view.cited_from
     # Na capa PJe a linha "Número: X" é a identidade do processo; a classe
     # processual ("Apelação Cível") pode estar na mesma linha sem ser citação.
-    if cover and labelled and cited_from is None:
+    if view.cover and labelled and not cited_section:
         return OccurrenceContext.PJE_COVER
-    if cited_from is not None and start >= cited_from:
+    if cited_section or _DECISIVE.search(line):
         return OccurrenceContext.CITATION
-    if _CITATION.search(line):
-        return OccurrenceContext.CITATION
-    if judicial and labelled:
+    # Cabeçalho da peça: antes do título (Sentença, Decisão...) e nas primeiras
+    # linhas. "PROCESSO: X" no corpo pode ser julgado citado; nunca é principal.
+    if view.judicial and labelled and begin < view.header_end:
         return OccurrenceContext.JUDICIAL_HEADER
+    following = " ".join(view.neighbour(number, 1, _FOLLOWING_LINES))
+    if _CITATION.search(line) or _CITATION.search(following):
+        # Rótulo com só a classe na linha ("PROCESSO: X - APELAÇÃO CÍVEL") e
+        # nada de citação depois: não se sabe de quem é; não vira precedente.
+        if labelled and not _CITATION.search(following):
+            return OccurrenceContext.UNQUALIFIED
+        return OccurrenceContext.CITATION
     return OccurrenceContext.UNQUALIFIED
 
 
-def _cited_section_start(page_text: str) -> int | None:
-    offset = 0
-    for raw_line in page_text.splitlines(keepends=True):
-        if _CITED_SECTION.fullmatch(_upper(raw_line.rstrip("\r\n"))):
-            return offset
-        offset += len(raw_line)
-    return None
-
-
-def _excerpt(page_text: str, start: int, end: int) -> str:
-    line_start, line_end = _line_bounds(page_text, start, end)
-    return " ".join(page_text[line_start:line_end].split())[:_EXCERPT_LIMIT]
+def _excerpt(view: _PageView, start: int, end: int) -> str:
+    line_start = view.text.rfind("\n", max(0, start - _WINDOW_REACH), start) + 1 or max(0, start - _WINDOW_REACH)
+    line_end = view.text.find("\n", end, end + _WINDOW_REACH)
+    line_end = min(len(view.text), end + _WINDOW_REACH) if line_end < 0 else line_end
+    return " ".join(view.text[line_start:line_end].split())[:_EXCERPT_LIMIT]
 
 
 _PRIMARY_CONTEXTS = frozenset({OccurrenceContext.PJE_COVER, OccurrenceContext.JUDICIAL_HEADER})
@@ -236,6 +298,7 @@ def classify_process_numbers(documents) -> ProcessNumberClassification:
     pending: list[str] = []
     unread: list[tuple[str, int]] = []
     invalid: list[tuple[str, int]] = []
+    weak_primary = False
     for document in documents:
         if document.reading_pending:
             pending.append(document.filename)
@@ -251,29 +314,27 @@ def classify_process_numbers(documents) -> ProcessNumberClassification:
             ocr = mode == "OCR"
             # OCR de baixa confiança é mostrado, mas nunca sustenta o principal.
             weak = ocr and (page.confidence is None or page.confidence < _OCR_MIN_CONFIDENCE)
-            normalized_page = _upper(page.text)
-            cover = _is_pje_cover(normalized_page)
-            judicial = _is_judicial_piece(normalized_page)
-            cited_from = _cited_section_start(page.text)
+            view = _PageView(page.text)
             logical = document.logical_document_for(page.number)
-            for raw, start, end in _page_occurrences(page.text, ocr):
+            for raw, start, end in _page_occurrences(view, ocr):
                 try:
                     value = validate_cnj_number(raw).canonical
                 except ValueError:
                     invalid.append((document.filename, page.number))
                     continue
-                context = _context(page.text, start, end, cover=cover, judicial=judicial, cited_from=cited_from)
+                context = _context(view, start, end)
                 if weak and context in _PRIMARY_CONTEXTS:
                     context = OccurrenceContext.UNQUALIFIED
+                    weak_primary = True
                 occurrences.append(ProcessNumberOccurrence(
                     value, document.content_id, document.filename, page.number, start, end,
-                    _excerpt(page.text, start, end), mode, context,
+                    _excerpt(view, start, end), mode, context,
                     logical.document_id if logical is not None else None,
                 ))
-    return _resolve(occurrences, tuple(pending), tuple(unread), tuple(dict.fromkeys(invalid)))
+    return _resolve(occurrences, tuple(pending), tuple(unread), tuple(dict.fromkeys(invalid)), weak_primary)
 
 
-def _resolve(occurrences, pending, unread, invalid) -> ProcessNumberClassification:
+def _resolve(occurrences, pending, unread, invalid, weak_primary=False) -> ProcessNumberClassification:
     by_value: dict[str, list[ProcessNumberOccurrence]] = {}
     for item in occurrences:
         by_value.setdefault(item.value, []).append(item)
@@ -293,8 +354,12 @@ def _resolve(occurrences, pending, unread, invalid) -> ProcessNumberClassificati
         confidence = "HIGH" if primary in cover_values or len(header_pages) > 1 else "MEDIUM"
     elif len(primary_values) > 1:
         reason = UnresolvedReason.CONFLICTING_PRIMARY_SOURCES
+    elif reading_incomplete and (by_value or invalid):
+        reason = UnresolvedReason.READING_INCOMPLETE
+    elif weak_primary:
+        reason = UnresolvedReason.LOW_CONFIDENCE_OCR
     elif by_value:
-        reason = UnresolvedReason.READING_INCOMPLETE if reading_incomplete else UnresolvedReason.NO_PRIMARY_SOURCE
+        reason = UnresolvedReason.NO_PRIMARY_SOURCE
     elif reading_incomplete:
         reason = UnresolvedReason.READING_INCOMPLETE
 

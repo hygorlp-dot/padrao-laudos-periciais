@@ -239,3 +239,61 @@ def test_product_route_proposes_the_cover_number_and_lists_cited_cases(tmp_path)
         assert _http(runtime, "POST", root + "/process-number", {})[0] == 405
     finally:
         runtime.close()
+
+
+# --- Revisão independente da PR (#286).
+
+_JUDICIAL_TOP = "PODER JUDICIÁRIO\nJUSTIÇA FEDERAL\n2ª VARA FEDERAL\n"
+
+
+def test_precedent_labelled_after_an_inline_ementa_is_never_primary():
+    text = _JUDICIAL_TOP + f"AUTOR: x\nEMENTA: ADMINISTRATIVO. RESPONSABILIDADE.\nProcesso: {OTHER}\nClasse: APELAÇÃO CÍVEL\nRelator: Des. Z\n"
+    result = _classify(_doc(_page(text)))
+    assert result.primary_value is None and _classes(result)[OTHER] is ProcessNumberClass.CITED_CASE
+
+
+def test_precedent_labelled_inside_the_body_with_citation_on_the_next_line_is_cited():
+    text = _JUDICIAL_TOP + (
+        f"PROCEDIMENTO COMUM CÍVEL Nº {MAIN}\nAUTOR: x\nRÉU: y\nSENTENÇA\nCito julgado do TRF5:\n"
+        f"PROCESSO: {OTHER}\nAPELAÇÃO CÍVEL, DESEMBARGADOR FEDERAL FULANO, julgado em 2020.\n"
+    )
+    result = _classify(_doc(_page(text)))
+    assert result.primary_value is None
+    assert _classes(result)[OTHER] is ProcessNumberClass.CITED_CASE
+
+
+@pytest.mark.parametrize("line", [
+    "PROCESSO Nº: {n} - APELAÇÃO CÍVEL",
+    "PROCESSO: {n} - APELAÇÃO CÍVEL (198) - RELATOR: DES. FED. Z",
+    "PROCESSO: {n} - TRF5",
+])
+def test_appellate_header_of_the_case_itself_is_primary_not_a_precedent(line):
+    text = _JUDICIAL_TOP + line.format(n=MAIN) + "\nAPELANTE: x\nAPELADO: y\nAUTOR: x\nACÓRDÃO\n"
+    result = _classify(_doc(_page(text)))
+    assert result.primary_value == MAIN
+    assert _classes(result)[MAIN] is ProcessNumberClass.PRIMARY
+
+
+def test_labelled_number_with_class_only_outside_a_header_is_not_called_a_precedent():
+    result = _classify(_doc(_page(f"Petição sintética\nPROCESSO: {MAIN} - APELAÇÃO CÍVEL\nRequer a juntada.\n")))
+    assert result.primary_value is None and _classes(result)[MAIN] is ProcessNumberClass.UNKNOWN
+
+
+def test_cover_label_on_the_previous_line_is_read():
+    cover = "PODER JUDICIÁRIO\nPJe - Processo Judicial Eletrônico\nNúmero:\n" + MAIN + "\nClasse: PROCEDIMENTO COMUM CÍVEL\n"
+    result = _classify(_doc(_page(cover)))
+    assert result.primary_value == MAIN and result.confidence == "HIGH"
+
+
+def test_weak_ocr_cover_says_why_it_is_unresolved():
+    result = _classify(_doc(_page(COVER, mode=PageExtractionMode.OCR, confidence=0.5)))
+    assert result.primary_value is None and result.unresolved_reason is UnresolvedReason.LOW_CONFIDENCE_OCR
+
+
+def test_long_single_line_pages_stay_linear():
+    from time import perf_counter
+    line = " ".join(f"ver {PRECEDENTS[0]}" for _ in range(5000))
+    started = perf_counter()
+    result = _classify(_doc(_page(_JUDICIAL_TOP + "AUTOR: x\n" + line)))
+    assert perf_counter() - started < 5.0
+    assert result.candidates[0].occurrence_count == 5000

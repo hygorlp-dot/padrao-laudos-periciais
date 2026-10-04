@@ -47,6 +47,7 @@ const UNRESOLVED_TEXT: Record<NonNullable<ProcessNumberClassification["unresolve
   NO_PRIMARY_SOURCE: "Nenhum número aparece na capa do PJe nem no cabeçalho de uma peça judicial. Os números encontrados estão abaixo; confira antes de usar.",
   READING_INCOMPLETE: "A leitura dos documentos ainda não terminou ou há páginas sem texto legível. O número principal pode estar nelas.",
   SOURCES_UNAVAILABLE: "Não foi possível reler os documentos agora. Tente novamente mais tarde; o campo continua editável.",
+  LOW_CONFIDENCE_OCR: "O número da capa ou do cabeçalho foi lido por OCR com baixa confiança e não pode ser proposto como principal. Confira a página e digite o número.",
 };
 
 export function ProcessNumberProposal({ classification, current, disabled, onUse }: {
@@ -72,6 +73,14 @@ export function ProcessNumberProposal({ classification, current, disabled, onUse
           {incomplete ? <span className="field-warning">Leitura incompleta: há documentos ou páginas ainda não lidos.</span> : null}
           <UseButton value={primary.value} current={current} disabled={disabled} onUse={onUse} label="Usar este número" />
         </div>
+      ) : null}
+      {classification.resolution === "NOT_FOUND" ? (
+        <p className="field-hint" role="status">Nenhum número de processo válido foi encontrado nos documentos lidos.</p>
+      ) : null}
+      {classification.invalid_occurrences.length ? (
+        <p className="field-warning" role="status">
+          Número com dígito verificador inválido (truncado ou mal lido) em {classification.invalid_occurrences.map((item) => `${item.filename}, p. ${item.page}`).join("; ")}. Não foi proposto: confira a página.
+        </p>
       ) : null}
       {classification.resolution === "UNRESOLVED" && classification.unresolved_reason ? (
         <p className="field-warning" role={classification.unresolved_reason === "CONFLICTING_PRIMARY_SOURCES" ? "alert" : "status"}>
