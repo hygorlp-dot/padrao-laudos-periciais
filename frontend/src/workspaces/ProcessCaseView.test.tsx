@@ -8,6 +8,9 @@ import { ProcessCaseView } from "./ProcessCaseView";
 // O painel de participantes tem testes próprios; aqui ele não disputa as
 // respostas encadeadas do formulário do processo.
 vi.mock("./ParticipantsPanel", () => ({ ParticipantsPanel: () => null }));
+// A classificação do número principal (#286) tem testes próprios; aqui fica
+// pendente, e o campo mantém o comportamento sem classificação.
+vi.mock("../data/processNumber", () => ({ getProcessNumberClassification: () => new Promise(() => undefined) }));
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_ID = "22222222-2222-4222-8222-222222222222";

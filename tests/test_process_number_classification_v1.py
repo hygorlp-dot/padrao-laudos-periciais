@@ -1,0 +1,241 @@
+"""#286 — número do processo principal x processos citados nos autos.
+
+Tudo sintético. Os números CNJ são gerados com dígito verificador válido.
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+
+from scripts.backend_contract.application.case_document_texts import CaseDocumentText, LogicalDocumentSpan
+from scripts.backend_contract.application.process_metadata import (
+    PageExtractionMode,
+    PageProcessingStatus,
+    PdfTextPage,
+    validate_cnj_number,
+)
+from scripts.backend_contract.application.process_number_classification import (
+    GetProcessNumberClassification,
+    OccurrenceContext,
+    PrimaryResolution,
+    ProcessNumberClass,
+    UnresolvedReason,
+    classify_process_numbers,
+    process_number_classification_dto,
+)
+
+
+def _cnj(sequence: int, year: int = 2024, segment: int = 4, court: int = 5, origin: int = 1) -> str:
+    for check in range(100):
+        value = f"{sequence:07d}-{check:02d}.{year}.{segment}.{court:02d}.{origin:04d}"
+        try:
+            return validate_cnj_number(value).canonical
+        except ValueError:
+            continue
+    raise AssertionError("sem dígito verificador")
+
+
+MAIN = _cnj(1234567)
+OTHER = _cnj(7654321)
+PRECEDENTS = [_cnj(7000000 + index, 2019) for index in range(12)]
+
+COVER = "\n".join([
+    "PODER JUDICIÁRIO",
+    "PJe - Processo Judicial Eletrônico",
+    f"Número: {MAIN}",
+    "Classe: PROCEDIMENTO COMUM CÍVEL",
+    "Órgão julgador: 1ª Vara Federal",
+])
+DECISION = "\n".join([
+    "PODER JUDICIÁRIO",
+    "JUSTIÇA FEDERAL",
+    "1ª VARA FEDERAL",
+    f"PROCESSO: {MAIN}",
+    "AUTOR: ALFA SINTÉTICA",
+    "RÉU: BETA SINTÉTICA",
+    "DECISÃO",
+])
+
+
+def _page(text: str, number: int = 1, *, mode=PageExtractionMode.NATIVE_TEXT, confidence=None, status=PageProcessingStatus.AVAILABLE):
+    return PdfTextPage(number, text, mode, confidence=confidence, processing_status=status)
+
+
+def _doc(*pages, filename="autos.pdf", content="11111111-1111-4111-8111-111111111111", logical=(), pending=False):
+    return CaseDocumentText(content, "a" * 64, filename, tuple(pages), tuple(logical), pending)
+
+
+def _classify(*documents):
+    return classify_process_numbers(documents)
+
+
+def _classes(result):
+    return {item.value: item.classification for item in result.candidates}
+
+
+def test_main_number_and_ten_cited_precedents():
+    citations = "\n".join(f"Nesse sentido: TRF5, AC {number}, Rel. Des. Fulano, julgado em 2020." for number in PRECEDENTS[:10])
+    result = _classify(_doc(_page(DECISION + "\n" + citations)))
+    assert result.resolution is PrimaryResolution.RESOLVED and result.primary_value == MAIN
+    assert result.confidence == "MEDIUM"
+    classes = _classes(result)
+    assert classes.pop(MAIN) is ProcessNumberClass.PRIMARY
+    assert set(classes.values()) == {ProcessNumberClass.CITED_CASE} and len(classes) == 10
+    assert result.candidates[0].value == MAIN
+
+
+def test_precedent_repeated_twenty_times_never_wins_by_frequency():
+    repeated = "\n".join(f"Conforme REsp {PRECEDENTS[0]}, STJ." for _ in range(20))
+    result = _classify(_doc(_page(DECISION + "\n" + repeated)))
+    assert result.primary_value == MAIN
+    cited = next(item for item in result.candidates if item.value == PRECEDENTS[0])
+    assert cited.classification is ProcessNumberClass.CITED_CASE and cited.occurrence_count == 20
+    # Sem número principal, a frequência também não promove nada.
+    alone = _classify(_doc(_page("PETIÇÃO\n" + repeated)))
+    assert alone.resolution is PrimaryResolution.UNRESOLVED and alone.primary_value is None
+    assert alone.unresolved_reason is UnresolvedReason.NO_PRIMARY_SOURCE
+    assert _classes(alone) == {PRECEDENTS[0]: ProcessNumberClass.CITED_CASE}
+
+
+@pytest.mark.parametrize("line", [
+    f"Processo relacionado: {OTHER}",
+    f"Distribuído por dependência ao processo {OTHER}",
+    f"Autos de origem: {OTHER}",
+    f"Referência: {OTHER}",
+])
+def test_related_case_is_classified_and_not_promoted(line):
+    result = _classify(_doc(_page(DECISION + "\n" + line)))
+    assert result.primary_value == MAIN
+    assert _classes(result)[OTHER] is ProcessNumberClass.RELATED_CASE
+
+
+def test_related_case_declared_on_the_previous_heading_line():
+    result = _classify(_doc(_page(DECISION + "\nProcessos relacionados:\n" + OTHER)))
+    assert _classes(result)[OTHER] is ProcessNumberClass.RELATED_CASE
+
+
+def test_number_only_on_the_pje_cover_is_primary_with_high_confidence():
+    result = _classify(_doc(_page(COVER)))
+    assert result.resolution is PrimaryResolution.RESOLVED and result.primary_value == MAIN
+    assert result.confidence == "HIGH"
+    (evidence,) = result.candidates[0].occurrences
+    assert evidence.context is OccurrenceContext.PJE_COVER and evidence.page == 1
+    assert COVER[evidence.source_start:evidence.source_end] == MAIN
+
+
+def test_cover_decision_and_initial_petition_corroborate():
+    result = _classify(_doc(_page(COVER, 1), _page(DECISION, 2), _page(f"PETIÇÃO INICIAL\nAutos n. {MAIN}\n", 3)))
+    assert result.primary_value == MAIN and result.confidence == "HIGH"
+    (candidate,) = result.candidates
+    assert candidate.occurrence_count == 3
+    assert [o.context for o in candidate.occurrences] == [
+        OccurrenceContext.PJE_COVER, OccurrenceContext.JUDICIAL_HEADER, OccurrenceContext.UNQUALIFIED,
+    ]
+
+
+def test_two_conflicting_pje_covers_leave_the_primary_unresolved():
+    result = _classify(_doc(_page(COVER, 1), _page(COVER.replace(MAIN, OTHER), 2)))
+    assert result.resolution is PrimaryResolution.UNRESOLVED and result.primary_value is None
+    assert result.unresolved_reason is UnresolvedReason.CONFLICTING_PRIMARY_SOURCES
+    assert all(item.primary_evidence for item in result.candidates)
+    assert ProcessNumberClass.PRIMARY not in set(_classes(result).values())
+
+
+def test_composite_pdf_of_two_cases_is_unresolved():
+    result = _classify(_doc(_page(DECISION, 1), _page(DECISION.replace(MAIN, OTHER), 2)))
+    assert result.resolution is PrimaryResolution.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.CONFLICTING_PRIMARY_SOURCES
+    # Capa de um processo e cabeçalho de outro: também conflito, nunca escolha.
+    mixed = _classify(_doc(_page(COVER, 1)), _doc(_page(DECISION.replace(MAIN, OTHER)), filename="outro.pdf", content="22222222-2222-4222-8222-222222222222"))
+    assert mixed.resolution is PrimaryResolution.UNRESOLVED
+
+
+def test_partial_ocr_never_supports_the_primary_and_unread_pages_are_said():
+    weak = _page(DECISION, 1, mode=PageExtractionMode.OCR, confidence=0.5)
+    failed = PdfTextPage(2, "", PageExtractionMode.OCR, processing_status=PageProcessingStatus.OCR_FAILED)
+    result = _classify(_doc(weak, failed))
+    assert result.primary_value is None and result.resolution is PrimaryResolution.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.READING_INCOMPLETE
+    assert result.unread_pages == (("autos.pdf", 2),)
+    assert _classes(result) == {MAIN: ProcessNumberClass.UNKNOWN}
+    # OCR confiável com confusão de dígitos (O/0) ainda é lido.
+    strong = _page(DECISION.replace(MAIN, MAIN.replace("0", "O")), 1, mode=PageExtractionMode.OCR, confidence=0.95)
+    assert _classify(_doc(strong)).primary_value == MAIN
+
+
+def test_truncated_or_invalid_numbers_are_never_candidates():
+    truncated = DECISION.replace(MAIN, MAIN[:15])
+    result = _classify(_doc(_page(truncated)))
+    assert result.resolution is PrimaryResolution.NOT_FOUND and result.candidates == ()
+    wrong_check = MAIN[:8] + ("00" if MAIN[8:10] != "00" else "01") + MAIN[10:]
+    invalid = _classify(_doc(_page(DECISION.replace(MAIN, wrong_check))))
+    assert invalid.candidates == () and invalid.invalid_occurrences == (("autos.pdf", 1),)
+
+
+def test_citation_on_the_labelled_line_or_in_a_jurisprudence_section_is_cited():
+    inline = _classify(_doc(_page(DECISION + f"\nPROCESSO: {OTHER} (AgInt no REsp, Rel. Min. Fulano)")))
+    assert inline.primary_value == MAIN and _classes(inline)[OTHER] is ProcessNumberClass.CITED_CASE
+    section = _classify(_doc(_page(DECISION + f"\nJURISPRUDÊNCIA\nPROCESSO: {OTHER}\nTexto da ementa sintética.")))
+    assert section.primary_value == MAIN and _classes(section)[OTHER] is ProcessNumberClass.CITED_CASE
+
+
+def test_an_unlabelled_number_in_a_judicial_piece_is_not_promoted():
+    text = DECISION.replace(f"PROCESSO: {MAIN}", "") + f"\nVistos. O feito {OTHER} segue concluso."
+    result = _classify(_doc(_page(text)))
+    assert result.primary_value is None and _classes(result) == {OTHER: ProcessNumberClass.UNKNOWN}
+
+
+def test_excluded_piece_and_pending_documents_are_respected():
+    excluded = LogicalDocumentSpan("DOC-1", "Decisão", "DECISAO", 1, 1, False)
+    result = _classify(_doc(_page(DECISION), logical=(excluded,)), _doc(filename="nova.pdf", content="33333333-3333-4333-8333-333333333333", pending=True))
+    assert result.candidates == () and result.pending_documents == ("nova.pdf",)
+    assert result.resolution is PrimaryResolution.UNRESOLVED and result.unresolved_reason is UnresolvedReason.READING_INCOMPLETE
+
+
+def test_read_failure_is_unavailable_not_nothing_found():
+    def broken(_workspace):
+        raise OSError("disco")
+    result = GetProcessNumberClassification(SimpleNamespace(execute=broken)).execute("w")
+    assert result.resolution is PrimaryResolution.UNRESOLVED
+    assert result.unresolved_reason is UnresolvedReason.SOURCES_UNAVAILABLE
+
+
+def test_dto_lists_structural_evidence_first_and_caps_occurrences():
+    repeated = "\n".join(f"Conforme REsp {PRECEDENTS[0]}, STJ." for _ in range(20))
+    dto = process_number_classification_dto(_classify(_doc(_page(f"Autos n. {MAIN}\n" + DECISION + "\n" + repeated))))
+    assert dto["resolution"] == "RESOLVED" and dto["primary_value"] == MAIN
+    primary = dto["candidates"][0]
+    assert primary["classification"] == "PRIMARY" and primary["occurrences"][0]["context"] == "JUDICIAL_HEADER"
+    cited = dto["candidates"][1]
+    assert cited["occurrence_count"] == 20 and len(cited["occurrences"]) == 5
+
+
+def test_product_route_proposes_the_cover_number_and_lists_cited_cases(tmp_path):
+    from tests.test_process_participants_v1 import _cover, _import, _runtime
+    from tests.test_product_integration_oracle_v1 import _http
+    runtime = _runtime(tmp_path)
+    try:
+        status, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Número principal"})
+        assert status == 201
+        root = f"/v1/workspaces/{workspace['workspace_id']}"
+        status, empty = _http(runtime, "GET", root + "/process-number")
+        assert status == 200 and empty["resolution"] == "NOT_FOUND" and empty["candidates"] == []
+        _import(runtime, root, _cover([
+            f"Número: {MAIN}",
+            f"Nesse sentido: TRF5, AC {PRECEDENTS[0]}, Rel. Des. Fulano.",
+        ]), "capa.pdf")
+        status, view = _http(runtime, "GET", root + "/process-number")
+        assert status == 200
+        assert view["resolution"] == "RESOLVED" and view["primary_value"] == MAIN and view["confidence"] == "HIGH"
+        assert [(c["value"], c["classification"]) for c in view["candidates"]] == [
+            (MAIN, "PRIMARY"), (PRECEDENTS[0], "CITED_CASE"),
+        ]
+        assert view["candidates"][0]["occurrences"][0]["filename"] == "capa.pdf"
+        # Nada foi gravado no registro do processo.
+        status, process = _http(runtime, "GET", root + "/process-case")
+        assert status == 200 and process["data"]["numero_processo"] == ""
+        assert _http(runtime, "POST", root + "/process-number", {})[0] == 405
+    finally:
+        runtime.close()

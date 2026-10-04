@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { ExpertProfilePanel } from "./ExpertProfileSetup";
 import { PropertyPanel } from "./PropertyPanel";
 import { ParticipantsPanel } from "./ParticipantsPanel";
+import { ProcessNumberProposal } from "./ProcessNumberProposal";
+import { getProcessNumberClassification, type ProcessNumberClassification } from "../data/processNumber";
 
 import {
   getProcessCase,
@@ -111,6 +113,22 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
   // #266: extracao ausente pode ser leitura EM ANDAMENTO, nao falha. O estado vem
   // do produto; sem ele, a tela mantem o comportamento anterior.
   const [processing, setProcessing] = useState<Record<string, MaterialProcessingState>>({});
+  // #286: classificação do número principal. "unavailable" é dito na tela;
+  // nunca volta em silêncio para a lista indistinta de números.
+  const [numberClassification, setNumberClassification] = useState<
+    { workspaceId: string; value: ProcessNumberClassification | "unavailable" } | null
+  >(null);
+
+  // Pedida depois do formulário: a releitura dos autos nunca atrasa a tela.
+  const formReady = state.kind === "ready" && state.workspaceId === workspaceId;
+  useEffect(() => {
+    if (!formReady) return undefined;
+    const controller = new AbortController();
+    getProcessNumberClassification(workspaceId, controller.signal)
+      .then((value) => { if (!controller.signal.aborted) setNumberClassification({ workspaceId, value }); })
+      .catch(() => { if (!controller.signal.aborted) setNumberClassification({ workspaceId, value: "unavailable" }); });
+    return () => controller.abort();
+  }, [workspaceId, loadAttempt, formReady]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -326,8 +344,12 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
       <div className="process-case-fields">
         {FIELDS.map((field) => {
           const extracted = review?.fields[field.key];
-          const reviewCandidates = extracted?.state === "AMBIGUOUS"
-            || extracted?.state === "CONFLICTING"
+          const classification = field.key === "numero_processo" && numberClassification?.workspaceId === workspaceId
+            ? numberClassification.value
+            : null;
+          const classified = classification !== null && classification !== "unavailable";
+          const reviewCandidates = !classified && (extracted?.state === "AMBIGUOUS"
+            || extracted?.state === "CONFLICTING")
             ? distinctReviewCandidates(extracted.evidence)
             : [];
           const manualValue = visibleState.snapshot.data[field.key];
@@ -348,7 +370,20 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
               disabled={saving}
               onChange={(event) => update(field.key, event.currentTarget.value)}
             />
-            {extracted?.evidence[0] && reviewCandidates.length === 0 ? (
+            {classified ? (
+              <ProcessNumberProposal
+                classification={classification}
+                current={visibleState.draft.numero_processo}
+                disabled={saving}
+                onUse={(value) => update("numero_processo", value)}
+              />
+            ) : null}
+            {classification === "unavailable" ? (
+              <p className="field-warning" role="status">
+                Não foi possível separar o número principal dos processos citados agora. Os números abaixo não estão classificados: confira a fonte de cada um.
+              </p>
+            ) : null}
+            {!classified && extracted?.evidence[0] && reviewCandidates.length === 0 ? (
               <p className="field-provenance">
                 {extracted.evidence[0].extraction_mode === "OCR" ? "Extraído por OCR local de " : "Extraído de "}
                 {extracted.evidence[0].source_filename}, página {extracted.evidence[0].source_page}
