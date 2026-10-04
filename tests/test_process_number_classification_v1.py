@@ -224,6 +224,8 @@ def test_product_route_proposes_the_cover_number_and_lists_cited_cases(tmp_path)
         assert status == 200 and empty["resolution"] == "NOT_FOUND" and empty["candidates"] == []
         _import(runtime, root, _cover([
             f"Número: {MAIN}",
+            "Classe: PROCEDIMENTO COMUM CÍVEL",
+            "Órgão julgador: 1ª Vara Federal",
             f"Nesse sentido: TRF5, AC {PRECEDENTS[0]}, Rel. Des. Fulano.",
         ]), "capa.pdf")
         status, view = _http(runtime, "GET", root + "/process-number")
@@ -280,7 +282,7 @@ def test_labelled_number_with_class_only_outside_a_header_is_not_called_a_preced
 
 
 def test_cover_label_on_the_previous_line_is_read():
-    cover = "PODER JUDICIÁRIO\nPJe - Processo Judicial Eletrônico\nNúmero:\n" + MAIN + "\nClasse: PROCEDIMENTO COMUM CÍVEL\n"
+    cover = "PODER JUDICIÁRIO\nPJe - Processo Judicial Eletrônico\nNúmero:\n" + MAIN + "\nClasse: PROCEDIMENTO COMUM CÍVEL\nÓrgão julgador: 1ª Vara Federal\n"
     result = _classify(_doc(_page(cover)))
     assert result.primary_value == MAIN and result.confidence == "HIGH"
 
@@ -314,7 +316,7 @@ def test_precedent_inside_an_untitled_header_zone_is_never_primary(body):
 
 
 def test_numero_unico_label_and_origin_without_de():
-    cover = "PODER JUDICIÁRIO\nPJe - Processo Judicial Eletrônico\n" + f"Número único: {MAIN}\nProcesso origem: {OTHER}\n"
+    cover = "PODER JUDICIÁRIO\nPJe - Processo Judicial Eletrônico\n" + f"Número único: {MAIN}\nProcesso origem: {OTHER}\nClasse: PROCEDIMENTO COMUM CÍVEL\nÓrgão julgador: 1ª Vara Federal\n"
     result = _classify(_doc(_page(cover)))
     assert result.primary_value == MAIN and _classes(result)[OTHER] is ProcessNumberClass.RELATED_CASE
 
@@ -375,3 +377,25 @@ def test_only_the_first_labelled_number_of_the_header_counts():
 def test_more_real_header_lines_keep_the_case_number(top):
     text = "PODER JUDICIÁRIO\n" + top + f"PROCESSO: {MAIN}\nAUTOR: x\nRÉU: y\nSENTENÇA\n"
     assert _classify(_doc(_page(text))).primary_value == MAIN, top
+
+
+# --- Quarta revisão delta (#286): capa PJe é estrutura, não a palavra "PJe".
+
+_PRECEDENT_BODY = "SENTENÇA\nVistos etc.\nNo mesmo sentido do TRF5,\nPROCESSO: {b}, APELAÇÃO CÍVEL, DESEMBARGADOR FEDERAL Z, 4ª TURMA, JULGAMENTO: 01/01/2020.\n"
+
+
+@pytest.mark.parametrize("page", [
+    _JUDICIAL_TOP + "PROCEDIMENTO COMUM CÍVEL Nº {a}\nAUTOR: x\nRÉU: y\n" + _PRECEDENT_BODY + "https://pje1g.trf5.jus.br/pje/Processo/ConsultaDocumento/listView.seam?x=1\n",
+    "PODER JUDICIÁRIO\nTRIBUNAL REGIONAL FEDERAL DA 5ª REGIÃO\nAPELAÇÃO CÍVEL Nº {a} (PJe)\nAPELANTE: x\nAPELADO: y\n" + _PRECEDENT_BODY,
+    _JUDICIAL_TOP + "PROCEDIMENTO COMUM CÍVEL Nº {a} - PJe\nAUTOR: x\nDECISÃO\nNesse sentido:\nProcesso: {b}\nClasse: Apelação Cível\n",
+])
+def test_a_pje_mention_or_url_never_makes_a_cover(page):
+    result = _classify(_doc(_page(page.format(a=MAIN, b=OTHER))))
+    assert result.primary_value != OTHER
+    assert all(o.context is not OccurrenceContext.PJE_COVER for c in result.candidates for o in c.occurrences)
+
+
+def test_only_the_first_labelled_number_on_a_cover_counts():
+    cover = COVER + f"\nProcesso: {OTHER}\n"
+    result = _classify(_doc(_page(cover)))
+    assert result.primary_value == MAIN and _classes(result)[OTHER] is not ProcessNumberClass.PRIMARY

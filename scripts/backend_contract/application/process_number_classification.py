@@ -225,11 +225,21 @@ _JUDICIAL_STRUCTURE = re.compile(
 )
 
 
+# Capa PJe é estrutura, não a palavra "PJe": o título "Processo Judicial
+# Eletrônico" e o bloco de rótulos da capa. URL "pje1g...", "(PJe)" depois da
+# classe ou rodapé de documento assinado nunca fazem de uma peça uma capa.
+_COVER_LABELS = re.compile(
+    r"(?m)^\s*(?:CLASSE(?:\s+JUDICIAL)?|ORGAO\s+JULGADOR|ULTIMA\s+DISTRIBUICAO|VALOR\s+DA\s+CAUSA|ASSUNTOS?|"
+    r"SEGREDO\s+DE\s+JUSTICA|JUSTICA\s+GRATUITA|PEDIDO\s+DE\s+LIMINAR|PROCESSO\s+REFERENCIA|AUTUACAO)\s*[:?]"
+)
+_COVER_MIN_LABELS = 2
+
+
 def _is_pje_cover(normalized_page: str) -> bool:
-    return "PROCESSO JUDICIAL ELETRONICO" in normalized_page or (
-        re.search(r"(?<![A-Z])PJE(?![A-Z])", normalized_page) is not None
-        and any(marker in normalized_page for marker in _INSTITUTIONAL)
-    )
+    if re.search(r"(?m)^\s*(?:PJE\s*-\s*)?PROCESSO\s+JUDICIAL\s+ELETRONICO\s*$", normalized_page) is None:
+        return False
+    labels = {match.group(0).split(":")[0].split("?")[0].strip() for match in _COVER_LABELS.finditer(normalized_page)}
+    return len(labels) >= _COVER_MIN_LABELS
 
 
 def _is_judicial_piece(normalized_page: str) -> bool:
@@ -253,6 +263,7 @@ class _PageView:
         self.cited_from: int | None = None
         # Só o PRIMEIRO número rotulado do cabeçalho é candidato a principal.
         self.first_header: int | None = None
+        self.first_cover: int | None = None
         parties_seen = False
         for number, line_start in enumerate(self.line_starts):
             line = self._line(number)
@@ -340,13 +351,23 @@ def _context(view: _PageView, start: int, end: int) -> OccurrenceContext:
     cited_section = view.cited_from is not None and begin >= view.cited_from
     # Na capa PJe a linha "Número: X" é a identidade do processo; a classe
     # processual ("Apelação Cível") pode estar na mesma linha sem ser citação.
-    if view.cover and labelled and not cited_section:
-        return OccurrenceContext.PJE_COVER
+    following = " ".join(view.neighbour(number, 1, _FOLLOWING_LINES))
+    # Na capa só o PRIMEIRO número rotulado, no topo, sem citação vizinha.
+    if (
+        view.cover and labelled and not cited_section and number < _HEADER_ZONE_LINES
+        and not _DECISIVE.search(line) and not _DECISIVE.search(following) and not _DECISIVE.search(previous_line)
+    ):
+        if view.first_cover is None:
+            view.first_cover = begin
+        if view.first_cover == begin:
+            return OccurrenceContext.PJE_COVER
+        # Outro número rotulado na capa (processo de origem sem rótulo de
+        # relação, etc.): visível, nunca candidato a principal.
+        return OccurrenceContext.UNQUALIFIED
     if cited_section or _DECISIVE.search(line):
         return OccurrenceContext.CITATION
     # Cabeçalho da peça: antes do título (Sentença, Decisão...) e nas primeiras
     # linhas. "PROCESSO: X" no corpo pode ser julgado citado; nunca é principal.
-    following = " ".join(view.neighbour(number, 1, _FOLLOWING_LINES))
     if view.judicial and labelled and begin < view.header_end:
         # Citação logo antes ou logo depois ("(STJ, julgado em ...)") desfaz o
         # cabeçalho: é julgado citado com rótulo, nunca o número dos autos.
