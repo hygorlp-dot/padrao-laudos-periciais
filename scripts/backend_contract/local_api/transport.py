@@ -13,7 +13,7 @@ from urllib.parse import unquote_to_bytes, urlsplit
 from ..application.document_ingestion import PROCESSING_STATES, READY as PROCESSING_READY
 from ..application.photo_library import DuplicatePhoto, photo_library_to_mapping
 from ..application.site_location import LocationInputError, site_location_to_mapping
-from ..application.property_record import PROPERTY_FIELDS, property_record_to_mapping
+from ..application.property_record import PROPERTY_FIELDS, cluster_property_proposals, property_record_to_mapping
 from ..application.content import (
     DOCUMENT_IO_CHUNK_BYTES,
     MAX_DOCUMENT_BYTES,
@@ -1038,7 +1038,6 @@ class LocalApi:
                         proposals, pending = read(workspace_id)
                     else:
                         proposals, pending = self._services.get_property_proposals.execute(workspace_id), ()
-                    from ..property_clusters import cluster_property_proposals
                     values_by_field = {field: {p.value for p in proposals if p.field == field} for field, *_ in PROPERTY_FIELDS}
                     # #288: o mesmo valor (normalizado por campo) vira um grupo com
                     # todas as evidencias, ordenado pela hierarquia das pecas.
