@@ -399,3 +399,8 @@ def test_only_the_first_labelled_number_on_a_cover_counts():
     cover = COVER + f"\nProcesso: {OTHER}\n"
     result = _classify(_doc(_page(cover)))
     assert result.primary_value == MAIN and _classes(result)[OTHER] is not ProcessNumberClass.PRIMARY
+
+
+def test_agravo_interno_as_the_case_class_is_not_a_citation():
+    text = _JUDICIAL_TOP + f"PROCESSO Nº: {MAIN} - AGRAVO INTERNO CÍVEL\nAGRAVANTE: x\nAGRAVADO: y\nACÓRDÃO\n"
+    assert _classify(_doc(_page(text))).primary_value == MAIN

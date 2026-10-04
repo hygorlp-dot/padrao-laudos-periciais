@@ -120,13 +120,13 @@ _PRIMARY_LABEL = re.compile(
 # Marcadores de citação de outro julgado. Palavras inteiras.
 # Decisivos: só aparecem citando julgado alheio, mesmo num cabeçalho.
 _DECISIVE_CITATION = (
-    r"RESP|ARESP|AGINT|AGRG|EDCL|AGRAVO\s+INTERNO|TEMA|STJ|STF|TNU|JULGADO\s+EM|JULGAMENTO\s+EM|DJE|"
+    r"RESP|ARESP|AGINT|AGRG|EDCL|TEMA|STJ|STF|TNU|JULGADO\s+EM|JULGAMENTO\s+EM|DJE|"
     r"PRECEDENTES?|JURISPRUDENCIA|EMENTA|NESSE\s+SENTIDO|NO\s+MESMO\s+SENTIDO|VEJA-SE|CONFIRA-SE|CF\."
 )
 # De classe ou de órgão: um cabeçalho de apelação traz "Apelação Cível",
 # "Relator: Des. ...", "TRF5" sobre o PRÓPRIO processo.
 _CLASS_CITATION = (
-    r"AC|APELACAO|APELACAO\s+CIVEL|REL|RELATOR|RELATORA|DES|DESEMBARGADOR|DESEMBARGADORA|"
+    r"AC|APELACAO|APELACAO\s+CIVEL|AGRAVO\s+INTERNO|REL|RELATOR|RELATORA|DES|DESEMBARGADOR|DESEMBARGADORA|"
     r"MIN|MINISTRO|MINISTRA|TRF\s*\d?|TJ[A-Z]{2}|ACORDAO|DJ"
 )
 _DECISIVE = re.compile(r"(?<![A-Z0-9])(?:" + _DECISIVE_CITATION + r")(?![A-Z0-9])")
