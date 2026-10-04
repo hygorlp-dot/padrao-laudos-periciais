@@ -301,11 +301,15 @@ _ADDRESS_ANCHOR = re.compile(
     r"\b(?:rua|avenida|av\.|travessa|estrada|rodovia|alameda|praca|largo|cep|bairro|quadra|lote)\b|" + _NUMBER_MARK + r"\s*\d"
 )
 _CITY_BLOCKERS = re.compile(
-    r"\b(?:comarca|foro|eleit\w*|dirimir|crea|cau|ssp|sds|detran|agencia|cartorio|oficio|registro|oab|assinad\w*|datad\w*)\b"
+    r"\b(?:comarca|foro|eleit\w*|dirimir|crea|cau|ssp|sds|detran|agencia|cartorio|oficio|registro de imoveis|oab|"
+    r"assinad\w*|datad\w*|morador\w*|estabelecid\w*|natural)\b"
 )
 _DATE_AFTER = re.compile(r"[ \t]*,?[ \t]*\d{1,2}(?:/|[ \t]+de[ \t]+)")
 _CITY_CONNECTIVES = frozenset({"de", "da", "do", "dos", "das", "e"})
 _ANCHOR_REACH = 160
+
+
+_CITY_PREFIX = re.compile(r"^(?:Munic[ií]pio|Cidade|Distrito|MUNIC[IÍ]PIO|CIDADE|DISTRITO)\s+d[eoa]\s+")
 
 
 def _city_name(value):
@@ -429,7 +433,7 @@ def _city_state_proposals(page, document_kind, folded, indices, label_spans):
             continue
         if _DATE_AFTER.match(folded, match.end()):
             continue
-        city = _original(text, indices, match.start(1), match.end(1))
+        city = _CITY_PREFIX.sub("", _original(text, indices, match.start(1), match.end(1)))
         state = _original(text, indices, match.start(2), match.end(2))
         if not _city_name(city) or not (len(state) == 2 and state.isupper()):
             continue
@@ -498,7 +502,8 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
             document_kind = kind
         # O peso vem do titulo da primeira pagina da peca; sem pecas do PJe,
         # cada pagina vale pelo proprio titulo e nada se arrasta para a seguinte.
-        if logical_document_for is None or rank_kind is None:
+        # Pagina fora de qualquer peca (arquivo sem inventario PJe) tambem.
+        if current_piece is None or rank_kind is None:
             rank_kind = _rank_kind(folded_page)
         lines = page.text.splitlines()
         offsets, cursor = [], 0

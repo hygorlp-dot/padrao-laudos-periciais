@@ -240,3 +240,33 @@ def test_any_other_value_in_the_field_caps_confidence():
     ))
     units = _field(clusters, "unit")
     assert units[0].display_value == "601" and units[0].confidence == "MEDIUM"
+
+
+# --- Revisão delta (#288).
+
+def test_file_without_pje_pieces_reads_each_page_title_on_the_production_path():
+    no_pieces = {}
+    carried = _proposals(_page("CONTRATO DE COMPRA E VENDA\nPartes etc.\n", 1), _page("EXCELENTÍSSIMO SENHOR JUIZ\nA autora mora no imóvel objeto da ação, apartamento nº 404.\n", 2), pieces=no_pieces)
+    assert {p.source_rank for p in carried if p.field == "unit"} == {"G"}
+    reverse = _proposals(_page("PETIÇÃO INICIAL\nDos fatos.\n", 1), _page("CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato é o apartamento nº 909.\n", 2), pieces=no_pieces)
+    assert {p.source_rank for p in reverse if p.field == "unit"} == {"B"}
+
+
+@pytest.mark.parametrize("prefix", ["Município de ", "Cidade do ", "Município do "])
+def test_administrative_prefix_is_not_part_of_the_city(prefix):
+    found = {(p.field, p.value) for p in _proposals(_page(f"CONTRATO DE COMPRA E VENDA\nO imóvel objeto do contrato fica na Rua X, nº 10, {prefix}Caruaru/PE.\n"))}
+    assert ("city", "Caruaru") in found and not any(field == "city" and value != "Caruaru" for field, value in found)
+
+
+@pytest.mark.parametrize("text", [
+    "CONTRATO DE COMPRA E VENDA\nCOMPRADOR: Fulano, morador na Rua Bela Vista, nº 2, em Jaboatão/PE, adquire o imóvel objeto deste contrato.\n",
+    "PETIÇÃO INICIAL\nFulana, moradora da Rua Bela Vista, nº 2, Olinda/PE, proprietária do imóvel objeto da ação.\n",
+    "CONTRATO DE COMPRA E VENDA\nA VENDEDORA, estabelecida na Av. Norte, nº 5, Recife/PE, vende o imóvel objeto deste contrato.\n",
+])
+def test_party_residence_never_becomes_the_property_city(text):
+    assert not {p.field for p in _proposals(_page(text))} & {"city", "state"}
+
+
+def test_registration_reference_after_the_address_keeps_the_city():
+    found = {(p.field, p.value) for p in _proposals(_page("MATRÍCULA Nº 123\nImóvel situado na Rua X, nº 10, Caruaru - PE, objeto do registro R-2 desta matrícula.\n"))}
+    assert ("city", "Caruaru") in found and ("state", "PE") in found
