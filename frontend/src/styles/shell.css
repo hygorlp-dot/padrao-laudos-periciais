@@ -1960,7 +1960,12 @@ button.text-action {
 .icon-action:hover:not(:disabled) { border-color: var(--color-slate); }
 .icon-action:disabled { cursor: not-allowed; opacity: 0.45; }
 .participant-source { font-size: 0.84rem; color: var(--color-slate); }
-.participant-source summary { width: fit-content; cursor: pointer; text-decoration: underline; text-decoration-color: var(--color-rule); text-underline-offset: 0.2em; }
+.participants-reading { display: flex; align-items: baseline; gap: var(--space-2); margin: var(--space-3) 0 0; font-size: 0.86rem; color: var(--color-graphite); }
+.participants-reading__mark { display: inline-grid; place-items: center; min-width: 1.4em; font-weight: 600; }
+.participants-reading[data-state="LEITURA_INTERROMPIDA"] { color: var(--color-error); }
+.participants-proposal-group { margin-top: var(--space-4); }
+.participants-proposal-group h4 { display: flex; align-items: baseline; gap: var(--space-2); margin: 0 0 var(--space-2); font-size: 0.92rem; }
+.participant-source summary { width: fit-content; max-width: 100%; overflow-wrap: anywhere; cursor: pointer; text-decoration: underline; text-decoration-color: var(--color-rule); text-underline-offset: 0.2em; }
 .participant-source p { margin: var(--space-2) 0 0; }
 .participant-source blockquote { margin: var(--space-1) 0 0; padding-left: var(--space-3); border-left: 2px solid var(--color-ochre-bright); color: var(--color-graphite); font-family: var(--font-data); font-size: 0.8rem; overflow-wrap: anywhere; }
 .participant-row--removed .participant-name { color: var(--color-slate); text-decoration: line-through; text-decoration-color: var(--color-rule); }

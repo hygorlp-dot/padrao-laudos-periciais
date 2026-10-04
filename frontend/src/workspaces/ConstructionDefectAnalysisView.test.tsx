@@ -131,13 +131,13 @@ describe("construction defect analysis workbench", () => {
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
     render(<ConstructionDefectAnalysisView workspaceId={ID} />);
-    expect(await screen.findByRole("heading", { name: "Gerar nova proposta PAT sobre a vistoria atual" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Gerar nova proposta de análise técnica sobre a vistoria atual" })).toBeInTheDocument();
     expect(screen.getByText(/revisões permanecem no histórico/)).toBeInTheDocument();
     await user.selectOptions(screen.getByLabelText("Observação direta"), "OBS-001");
     await user.selectOptions(screen.getByLabelText("Método registrado"), "METHOD-001");
     await user.type(screen.getByLabelText("Manifestação classificada"), "Mancha de umidade aparente.");
     fetchMock.mockImplementationOnce(() => Promise.resolve(response(201, { ...envelope, revision: 6 })));
-    await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));
+    await user.click(screen.getByRole("button", { name: "Gerar proposta de análise técnica" }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith("/construction-defect-analysis/successor"))).toBe(true));
     const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/construction-defect-analysis/successor"))!;
     expect(JSON.parse(String(call[1]?.body)).expected_revision).toBe(5);
@@ -159,7 +159,7 @@ describe("construction defect analysis workbench", () => {
     expect(screen.getByRole("option", { name: "Registro 1 · Alegação sintética." })).toHaveValue("CLAIM-001");
     expect(screen.getByRole("option", { name: "Registro 1 · Qual a origem da manifestação?" })).toHaveValue("QUESTION-001");
     await user.selectOptions(screen.getByLabelText("Método registrado"), "METHOD-001");
-    await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));
+    await user.click(screen.getByRole("button", { name: "Gerar proposta de análise técnica" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("operação foi recusada");
     expect(fetchMock).toHaveBeenCalledTimes(3);
     await user.type(screen.getByLabelText("Manifestação classificada"), "Mancha de umidade aparente.");
@@ -167,7 +167,7 @@ describe("construction defect analysis workbench", () => {
     await user.click(screen.getByLabelText("Fotografia 1 · Parede inspecionada."));
     await user.selectOptions(screen.getByLabelText("Alegação relacionada"), "CLAIM-001");
     await user.selectOptions(screen.getByLabelText("Quesito relacionado"), "QUESTION-001");
-    await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));
+    await user.click(screen.getByRole("button", { name: "Gerar proposta de análise técnica" }));
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
     const body = JSON.parse(String(fetchMock.mock.calls[3][1]?.body));
@@ -235,7 +235,7 @@ describe("construction defect analysis workbench", () => {
     await user.selectOptions(await screen.findByLabelText("Observação direta"), "OBS-001");
     await user.selectOptions(screen.getByLabelText("Método registrado"), "METHOD-001");
     await user.type(screen.getByLabelText("Manifestação classificada"), "Mancha de umidade aparente.");
-    await user.click(screen.getByRole("button", { name: "Gerar proposta PAT" }));
+    await user.click(screen.getByRole("button", { name: "Gerar proposta de análise técnica" }));
 
     expect(await screen.findByRole("heading", { name: "PAT-001" })).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();

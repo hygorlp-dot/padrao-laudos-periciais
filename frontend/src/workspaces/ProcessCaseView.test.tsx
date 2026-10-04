@@ -417,7 +417,9 @@ describe("process case form", () => {
 
     const number = await screen.findByRole("textbox", { name: "Número do processo" });
     expect(number).toHaveValue("");
-    const firstCandidate = screen.getByRole("button", {
+    // #286: a lista sem classificação só aparece depois que a classificação
+    // (mockada aqui como indisponível) responde; antes disso, nada é oferecido.
+    const firstCandidate = await screen.findByRole("button", {
       name: `Usar ${DATA.numero_processo} — autos.pdf, página 2`,
     });
     const secondCandidate = screen.getByRole("button", {

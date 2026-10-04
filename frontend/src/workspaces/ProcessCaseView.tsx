@@ -261,7 +261,7 @@ export function ProcessCaseView({ workspaceId }: ProcessCaseViewProps) {
         <span className="state-rule" aria-hidden="true" />
         <div>
           <h2>Carregando dados do processo</h2>
-          <p>Recuperando a identificação processual deste workspace.</p>
+          <p>Recuperando a identificação processual desta perícia.</p>
         </div>
       </section>
     );

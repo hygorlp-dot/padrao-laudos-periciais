@@ -94,6 +94,22 @@ describe("participants panel (#268)", () => {
     }
   });
 
+  test("one reading state at a time, failure first, never 'nothing found' while reading (#285)", async () => {
+    const cases: [Partial<ParticipantsView>, RegExp][] = [
+      [{}, /Nenhuma proposta nos autos lidos até agora/],
+      [{ legacy_blocked_poles: ["PASSIVE"] }, /Leitura dos autos incompleta/],
+      [{ pending_documents: ["capa.pdf"] }, /Leitura dos autos em andamento/],
+      [{ pending_documents: ["capa.pdf"], interrupted_pages: [{ filename: "capa.pdf", page: 1 }] }, /Leitura dos autos incompleta/],
+      [{ unread_pages: [{ filename: "capa.pdf", page: 2 }] }, /Leitura dos autos incompleta/],
+    ];
+    for (const [overrides, expected] of cases) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, view(overrides))));
+      const rendered = render(<ParticipantsPanel workspaceId={ID} />);
+      expect(await screen.findByText(expected)).toBeInTheDocument();
+      rendered.unmount();
+    }
+  });
+
   test("a long list of unreadable pages is grouped by file and capped (#285)", async () => {
     const unread = Array.from({ length: 30 }, (_, index) => ({ filename: "autos.pdf", page: index + 1 }));
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, view({ unread_pages: [...unread, { filename: "capa.pdf", page: 2 }] }))));
@@ -115,18 +131,22 @@ describe("participants panel (#268)", () => {
     const user = userEvent.setup();
     render(<ParticipantsPanel workspaceId={ID} />);
 
-    const proposals = await screen.findByRole("region", { name: /Encontrados nos documentos/ });
-    expect(within(proposals).getByText("BETA SINTÉTICA")).toBeInTheDocument();
-    expect(within(proposals).getByText(/Polo passivo · Parte ré/)).toBeInTheDocument();
+    const proposals = await screen.findByRole("region", { name: /Propostas encontradas nos autos/ });
+    const passive = within(proposals).getByRole("region", { name: /^Propostas do polo passivo/ });
+    expect(within(passive).getByText("BETA SINTÉTICA")).toBeInTheDocument();
+    expect(within(passive).getByText(/Parte ré · Tipo de pessoa a confirmar/)).toBeInTheDocument();
+    expect(within(proposals).queryByRole("region", { name: /^Propostas do polo ativo/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/Situação: Propostas aguardando sua conferência/)).toBeInTheDocument();
     expect(within(proposals).getByText(/PROC \(procurador\)/)).toBeInTheDocument();
-    expect(within(screen.getByRole("region", { name: /Polo passivo/ })).getByText("Nenhum participante confirmado neste polo.")).toBeInTheDocument();
-    await user.click(within(proposals).getByText("Ver fonte"));
+    expect(within(screen.getByRole("region", { name: /^Polo passivo/ })).getByText("Nenhum participante confirmado neste polo.")).toBeInTheDocument();
+    await user.click(within(proposals).getByText(/Fonte: capa.pdf, p. 1 · ver trecho/));
     expect(within(proposals).getByText("BETA (REU) PROC (PROCURADOR)")).toBeVisible();
 
     await user.click(within(proposals).getByRole("button", { name: "Confirmar BETA SINTÉTICA" }));
     expect(await screen.findByText("BETA SINTÉTICA confirmado.")).toBeInTheDocument();
     expect(JSON.parse(fetchSpy.mock.calls[1][1].body)).toEqual({ action: "CONFIRM", expected_revision: null, payload: { proposal_id: proposal.participant_id } });
-    expect(within(screen.getByRole("region", { name: /Polo passivo/ })).getByText("BETA SINTÉTICA")).toBeInTheDocument();
+    expect(within(screen.getByRole("region", { name: /^Polo passivo/ })).getByText("BETA SINTÉTICA")).toBeInTheDocument();
+    expect(screen.getByText(/Situação: Propostas dos autos já conferidas/)).toBeInTheDocument();
   });
 
   test("adds a manual participant with a linked representative", async () => {
@@ -235,7 +255,8 @@ describe("participants panel (#268)", () => {
     expect(screen.getByRole("button", { name: "Adicionar participante" })).toBeDisabled();
     expect(screen.getByText(/Nada foi cortado: registre as partes uma a uma/)).toBeInTheDocument();
     expect(screen.getByText(/não puderam ser relidos agora/)).toBeInTheDocument();
-    expect(screen.getByText(/Polo passivo · parte ré/)).toBeInTheDocument();
+    expect(screen.getByText(/parte ré · Tipo de pessoa a confirmar/)).toBeInTheDocument();
+    expect(screen.getByText(/Situação: Leitura dos autos incompleta/)).toBeInTheDocument();
   });
 
   test("flags a possible duplicate and never claims nothing changed on an unclear failure", async () => {

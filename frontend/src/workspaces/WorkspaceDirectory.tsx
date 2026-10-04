@@ -151,7 +151,7 @@ export function WorkspaceDirectory() {
                 </span>
                 <div>
                   <h2 id="workspace-directory-title">Nenhuma perícia cadastrada</h2>
-                  <p>Crie uma perícia para iniciar um workspace técnico local.</p>
+                  <p>Crie uma perícia para começar o trabalho técnico neste computador.</p>
                   <p>
                     Antes da primeira perícia, preencha seu perfil e sua identidade visual em{" "}
                     <a className="text-action" href="/configuracoes" onClick={navigate}>Configurações</a>: cada perícia nova já começa com eles.

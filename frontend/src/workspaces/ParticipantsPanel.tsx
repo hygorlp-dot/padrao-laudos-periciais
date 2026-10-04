@@ -44,17 +44,52 @@ function failure(error: unknown) {
   return "Não foi possível confirmar o resultado. A lista foi recarregada com o que está gravado; confira antes de repetir.";
 }
 
+type ReadingState = "LEITURA_PENDENTE" | "LEITURA_INTERROMPIDA" | "PROPOSTAS_DISPONIVEIS" | "PROPOSTAS_CONFIRMADAS" | "NENHUMA_PROPOSTA_ENCONTRADA";
+
+const READING_LABELS: Record<ReadingState, string> = {
+  LEITURA_PENDENTE: "Leitura dos autos em andamento",
+  LEITURA_INTERROMPIDA: "Leitura dos autos incompleta — confira os avisos abaixo",
+  PROPOSTAS_DISPONIVEIS: "Propostas aguardando sua conferência",
+  PROPOSTAS_CONFIRMADAS: "Propostas dos autos já conferidas",
+  NENHUMA_PROPOSTA_ENCONTRADA: "Nenhuma proposta nos autos lidos até agora",
+};
+const READING_MARKS: Record<ReadingState, string> = {
+  LEITURA_PENDENTE: "↻", LEITURA_INTERROMPIDA: "!", PROPOSTAS_DISPONIVEIS: "●", PROPOSTAS_CONFIRMADAS: "✓", NENHUMA_PROPOSTA_ENCONTRADA: "○",
+};
+const PROPOSAL_GROUP_LABELS: Record<ParticipantPole, string> = {
+  ACTIVE: "Propostas do polo ativo", PASSIVE: "Propostas do polo passivo", OTHER: "Propostas de outros participantes",
+};
+
+// Um único estado, na ordem do que mais pesa: leitura falha ou incompleta
+// nunca aparece como "nada encontrado" (#285).
+function readingState(view: ParticipantsView): ReadingState {
+  // Texto antigo que não pôde ser trazido também deixa partes por registrar.
+  if (view.proposals_unavailable || view.interrupted_pages.length || view.unread_pages.length || view.legacy_blocked_poles.length) return "LEITURA_INTERROMPIDA";
+  if (view.pending_documents.length) return "LEITURA_PENDENTE";
+  if (view.proposals.length) return "PROPOSTAS_DISPONIVEIS";
+  if (view.participants.some((item) => item.origin === "SOURCE")) return "PROPOSTAS_CONFIRMADAS";
+  return "NENHUMA_PROPOSTA_ENCONTRADA";
+}
+
 function originText(participant: Participant) {
   if (participant.origin === "MANUAL") return "Informado pelo perito";
   if (participant.origin === "LEGACY_PROCESS_CASE") return "Registrado antes da lista de participantes";
   return participant.edited ? "Lido dos autos e corrigido pelo perito" : "Lido dos autos";
 }
 
+function personTypeText(participant: Participant) {
+  const label = PERSON_TYPE_OPTIONS.find((item) => item.value === participant.person_type)?.label ?? "Não informado";
+  return participant.person_type === "UNKNOWN" ? "Tipo de pessoa a confirmar" : label;
+}
+
+// #285: a fonte (arquivo e página) fica visível sem abrir nada; o trecho
+// exato fica a um clique.
 function SourceDetails({ participant }: { participant: Participant }) {
   if (!participant.provenance.length) return null;
+  const first = participant.provenance[0];
   return (
     <details className="participant-source">
-      <summary>Ver fonte</summary>
+      <summary>Fonte: {first.filename}, p. {first.page}{participant.provenance.length > 1 ? ` e mais ${participant.provenance.length - 1}` : ""} · ver trecho</summary>
       {participant.provenance.map((source) => (
         <div key={`${source.content_id}-${source.page}-${source.source_start}`}>
           <p>
@@ -279,6 +314,9 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
 
   const active = view.participants.filter((item) => item.review_state === "CONFIRMED");
   const removed = view.participants.filter((item) => item.review_state === "REJECTED");
+  const reading = readingState(view);
+  const proposalsByPole: Record<ParticipantPole, Participant[]> = { ACTIVE: [], PASSIVE: [], OTHER: [] };
+  for (const proposal of view.proposals) proposalsByPole[proposal.pole].push(proposal);
   const stale = new Set(view.stale_participant_ids);
   const order = view.participants.map((item) => item.participant_id);
   const locked = busy || !view.process_record_saved;
@@ -309,6 +347,10 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
         ) : null}
       </header>
 
+      <p className="participants-reading" data-state={reading}>
+        <span className="participants-reading__mark" aria-hidden="true">{READING_MARKS[reading]}</span>
+        Situação: {READING_LABELS[reading]}
+      </p>
       {!view.process_record_saved ? (
         <p className="participants-notice participants-notice--warning" role="status">
           Confirme os dados do processo acima para confirmar, adicionar ou alterar participantes. As propostas continuam visíveis para conferência.
@@ -353,14 +395,17 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
 
       {view.proposals.length ? (
         <section className="participants-proposals" aria-labelledby="participants-proposals-title">
-          <h3 id="participants-proposals-title">Encontrados nos documentos ({view.proposals.length})</h3>
+          <h3 id="participants-proposals-title">Propostas encontradas nos autos ({view.proposals.length})</h3>
           <p className="field-hint">Confira cada nome com a fonte antes de confirmar. Nomes repetidos nos autos aparecem separados.</p>
+          {POLES.filter((pole) => proposalsByPole[pole].length).map((pole) => (
+          <section className="participants-proposal-group" key={pole} aria-labelledby={`participants-proposals-${pole}`}>
+          <h4 id={`participants-proposals-${pole}`}>{PROPOSAL_GROUP_LABELS[pole]} <span className="participants-count">{proposalsByPole[pole].length}</span></h4>
           <ul className="participant-list">
-            {view.proposals.map((proposal) => (
+            {proposalsByPole[pole].map((proposal) => (
               <li className="participant-row participant-row--proposal" key={proposal.participant_id}>
                 <div className="participant-row__main">
                   <strong className="participant-name">{proposal.name}</strong>
-                  <span className="participant-role">{POLE_LABELS[proposal.pole]} · {roleLabel(proposal)}</span>
+                  <span className="participant-role">{roleLabel(proposal)} · {personTypeText(proposal)}</span>
                   {duplicates.has(proposal.participant_id) ? (
                     <p className="field-warning">Possível repetição de “{duplicates.get(proposal.participant_id)}”, já na lista. Se for a mesma parte, descarte esta proposta.</p>
                   ) : null}
@@ -378,6 +423,8 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
               </li>
             ))}
           </ul>
+          </section>
+          ))}
         </section>
       ) : null}
 
@@ -411,7 +458,7 @@ function ParticipantsContent({ workspaceId }: { workspaceId: string }) {
                       <>
                         <div className="participant-row__main">
                           <strong className="participant-name">{participant.name}</strong>
-                          <span className="participant-role">{roleLabel(participant)} · {originText(participant)}</span>
+                          <span className="participant-role">{roleLabel(participant)} · {personTypeText(participant)} · {originText(participant)}</span>
                           <Representatives participant={participant} />
                           {stale.has(participant.participant_id) ? (
                             <p className="field-warning" role="status">A peça que sustentava este participante foi excluída da análise. Confirme por outra fonte ou remova.</p>
