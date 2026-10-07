@@ -181,6 +181,20 @@ PROBES = {
     "r3_trabalhava_na_obra": "O pedreiro que trabalhava na obra da Rua do Imóvel, nº 20, objeto da ação, relatou falhas.\n",
     # P2-3: vizinhanca presa ao participio do imovel.
     "r3_situado_proximo_ao_conjunto": "O imóvel objeto da ação, situado próximo ao Conjunto Habitacional Sintético, na Rua do Imóvel, nº 20, tem fissuras.\n",
+    # Rodada 4 da revisão independente da PR #294.
+    # P1-1: relativa do proprio imovel em qualquer forma.
+    "r4_que_quebra_de_linha": "O imóvel objeto da ação, que\nfoi adquirido pela autora, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r4_que_dois_espacos": "O imóvel objeto da ação, que  foi adquirido pela autora, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r4_que_ja_foi": "O imóvel objeto da ação, que já foi adquirido pela autora, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r4_o_qual_foi": "O imóvel objeto da ação, o qual foi adquirido pela autora, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r4_que_em_2015_foi": "O imóvel objeto da ação, que em 2015 foi financiado pelo banco, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    # P1-2: no regime B, relativa com agente nomeado tira a ancora.
+    "r4_cnpj_que_foi_vendida_a_fulana": "A ré, CNPJ 00.000.000/0001-00, informa que a unidade habitacional, que foi vendida a FULANA, situada na Rua da Parte, nº 10, tem fissuras.\n",
+    "r4_cpf_que_foi_vendida_pela_ltda": "FULANA, CPF 000.000.000-00, comprou a unidade habitacional, que foi vendida pela SINTÉTICA LTDA, localizada na Rua da Parte, nº 10.\n",
+    # P2-1: vizinhanca vale para o sintagma inteiro da pista.
+    "r4_cpf_proximo_ao_imovel_objeto": "FULANA, CPF 000.000.000-00, tem casa situada próximo ao imóvel objeto da ação, na Rua da Parte, nº 10.\n",
+    # P2-2: "tem endereço atual" do proprio imovel.
+    "r4_tem_endereco_atual": "LAUDO\nO imóvel objeto da ação tem endereço atual Rua do Imóvel, nº 20, após renomeação.\n",
 }
 
 
@@ -657,6 +671,33 @@ MAIN_8941B2C_REPLAY_IDS = {
         "499424faf0f838b64a41718f32da01b73e881f6caa1c9848192b96476861f211",
         "905894d3531981a2229ed698d879cdd7dac6417c4536fd380502daf20dc02100",
     ),
+    "r4_que_quebra_de_linha": (
+        "740dfd38fb0b373cddd7a52f4f8cf9eb516adae95c17657407dc28be8c5cc5f9",
+        "f5008b912ca90eb018f7c9c2d647880070ee6033b1f376ee0ea065ced74936b9",
+    ),
+    "r4_que_dois_espacos": (
+        "970fca6ef760aaf0c4540efcfb23cbd713bd0ae346a60b01e200e5c68c68bfe0",
+        "9ceb1c0d4c6bc7513bded3f22e9eda3a37e11b2dc3ad9582550737d469d27f35",
+    ),
+    "r4_que_ja_foi": (
+        "5d91a2c152da3d90a433936d5b4216315b66c3ee4f766827cf177e96c6292ac0",
+        "f7a8b4fc2402e1d0f31df2880fdca594c522f660f13c139bbe0eab6fe434152d",
+    ),
+    "r4_o_qual_foi": (
+        "6e728ee063bef6358f8b730cb4cf45b60991f5a8943abb78fd55ced659005c8c",
+        "ac23c8b0ffb17de1ea8c31e2bb671308995ea8b3388a29d389a2dc380902cf6e",
+    ),
+    "r4_que_em_2015_foi": (
+        "167d9f8a4acb5e15eb0147b26d89d2cec6a5ca156c44f4e4b018c821a1f1d19e",
+        "61d8489ccaf5e69c522fd2b956376d97250ed635cf7770b24a17c92fb82cd064",
+    ),
+    "r4_cnpj_que_foi_vendida_a_fulana": (),
+    "r4_cpf_que_foi_vendida_pela_ltda": (),
+    "r4_cpf_proximo_ao_imovel_objeto": (),
+    "r4_tem_endereco_atual": (
+        "39f3473e769f8bc0ec3104362b6299f80f0af777966ce8d4918266ebcd4410a4",
+        "c0b4d83a99a44edb2e0b6fcfe5632225c2c5e0bb9131cb02eac07310b8c0df29",
+    ),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -771,6 +812,16 @@ EXPECTED = {
     "r3_mudar_a_tubulacao": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
     "r3_trabalhava_na_obra": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
     "r3_situado_proximo_ao_conjunto": {("development", "Conjunto Habitacional Sintético", "STRONG"), ("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    # Rodada 4 da revisão independente da PR #294.
+    "r4_que_quebra_de_linha": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r4_que_dois_espacos": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r4_que_ja_foi": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r4_o_qual_foi": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r4_que_em_2015_foi": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r4_cnpj_que_foi_vendida_a_fulana": set(),
+    "r4_cpf_que_foi_vendida_pela_ltda": set(),
+    "r4_cpf_proximo_ao_imovel_objeto": set(),
+    "r4_tem_endereco_atual": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
 }
 _PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 

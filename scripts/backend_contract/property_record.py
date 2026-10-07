@@ -276,7 +276,7 @@ _PARTY_INTRODUCERS = re.compile(
     r"(?:cuja|sua|seu)\s+(?:residencia|domicilio|endereco)|residencia\s+(?:fica|e)|"
     r"com endereco|endereco (?:residencial|comercial|profissional)|com sede|sede (?:na|no|em)|sediad\w*|"
     r"estabelecid\w*|escritorio|filial|cuja\s+sede|com\s+matriz|matriz\s+(?:na|no|em)|"
-    r"(?<!como )endereco\s+atual(?=\s*:?\s*" + _STREET_WORD + r")|"
+    r"(?<!como )(?<!tem )(?<!possui )endereco\s+atual(?=\s*:?\s*" + _STREET_WORD + r")|"
     r"trabalh(?:a|am|ava|avam)\s+(?:na|no|em)(?=\s+" + _STREET_WORD + r")|"
     r"mud(?:ou|aram|ar|ando)-se\s+(?:para|a|ao)|mud(?:ou|aram|ar|ando)\s+para|transferiu-se|"
     r"passou\s+a\s+residir|"
@@ -318,10 +318,19 @@ _ATTRIBUTIVE_AGENT = re.compile(
 # Sem o "e": no texto sem acento, "é" e a conjuncao "e" se confundem. A copula
 # de uma relativa do proprio imovel ("imovel, que foi adquirido pela autora")
 # nao conta.
-_COPULA = re.compile(r"(?<!que )\b(?:foi|foram|era|eram|sera|serao|esta|estava|seria)\b")
+_COPULA = re.compile(r"\b(?:foi|foram|era|eram|sera|serao|esta|estava|seria)\b")
 _COPULA_AGENT = re.compile(
-    r"(?<!que )\b(?:foi|foram|era|eram|sera|serao|seria)\s+(?:[a-z]+(?:ad|id)[oa]s?|entregues?)\s+(?:pel[oa]s?|por|a|ao|aos|as)\b"
+    r"\b(?:foi|foram|era|eram|sera|serao|seria)\s+(?:[a-z]+(?:ad|id)[oa]s?|entregues?)\s+(?:pel[oa]s?|por|a|ao|aos|as)\b"
 )
+_RELATIVE_OPENING = re.compile(r",\s*(?:que|o qual|a qual|os quais|as quais)\s+(?:[a-z0-9]+\s+){0,3}$")
+
+
+def _bare(pattern, text, start, stop):
+    """Ha `pattern` em [start, stop) fora de relativa aberta logo antes dele?"""
+    return any(
+        not _RELATIVE_OPENING.search(text, max(start, item.start() - 60), item.start())
+        for item in pattern.finditer(text, start, stop)
+    )
 _PARTICIPLE_REACH = 160
 # SUBJECT_LOOSE: participio ligado a um substantivo de imovel sem pista "objeto";
 # basta onde a regra anterior ja aceitava a frase, nunca onde ela bloqueava.
@@ -380,7 +389,9 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects, 
         if _PARTY_ADDRESS_BLOCKERS.search(text, start, item.start()):
             return True
         # "foi vendida a FULANA, situada na": o agente nomeado pode ser o localizado.
-        if _COPULA_AGENT.search(text, start, item.start()):
+        # A relativa do proprio imovel ("que foi adquirido pela autora") so e
+        # isenta onde a regra anterior ja aceitava a frase.
+        if (_COPULA_AGENT.search(text, start, item.start()) if strict else _bare(_COPULA_AGENT, text, start, item.start())):
             return True
         for noun in _PARTY_NOUN.finditer(text, start, item.start()):
             agrees = noun.group("both") or (noun.group("feminine") is not None) == feminine
@@ -391,8 +402,7 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects, 
                 continue
             if _POSSESSIVE_BEFORE.search(text, max(start, noun.start() - 12), noun.start()):
                 continue
-            before = text[start:noun.start()]
-            if _ATTRIBUTIVE_AGENT.search(before) and not _COPULA.search(before):
+            if _ATTRIBUTIVE_AGENT.search(text[start:noun.start()]) and not _bare(_COPULA, text, start, noun.start()):
                 continue
             if agrees:
                 return True
@@ -450,21 +460,30 @@ def _clause_markers(text):
             sentence[position] = _window(text, position, position)[0]
         return sentence[position]
 
-    for cue in _SUBJECT_CUES:
-        for item in cue.finditer(text):
-            floor = max(begin_of(item.start()), item.start() - 24)
-            before = _OTHER_UNIT_BEFORE.search(text[floor:item.start()])
-            if before is not None and before.group("neighbor") is not None and _PARTICIPLE_BEFORE.search(
-                text, max(begin_of(item.start()), floor + before.start() - 24), floor + before.start()
-            ):
-                # "situado proximo ao Conjunto X, na Rua...": referencia de localizacao do proprio imovel.
-                continue
-            neighbor = (before is not None and before.group("neighbor") is not None) or _OTHER_UNIT_AFTER.match(text, item.end())
-            # "novo imovel objeto da acao" e o objeto; "ao lado do objeto" nao.
-            kind = "OTHER" if neighbor or (before is not None and "objeto" not in item.group()) else "SUBJECT"
-            markers.append((item.start(), item.end(), kind))
+    cues = sorted((item.start(), item.end(), item.group()) for cue in _SUBJECT_CUES for item in cue.finditer(text))
+    groups = []
+    for start, end, value in cues:
+        # "imovel objeto da acao" casa duas pistas sobrepostas: um so sintagma.
+        if groups and start <= groups[-1][1] + 1:
+            groups[-1][1] = max(groups[-1][1], end)
+            groups[-1][2].append((start, end, value))
+        else:
+            groups.append([start, end, [(start, end, value)]])
+    for group_start, group_end, members in groups:
+        floor = max(begin_of(group_start), group_start - 24)
+        before = _OTHER_UNIT_BEFORE.search(text[floor:group_start])
+        neighbor = before is not None and before.group("neighbor") is not None
+        if neighbor and _PARTICIPLE_BEFORE.search(text, max(begin_of(group_start), floor + before.start() - 24), floor + before.start()):
+            # "situado proximo ao Conjunto X, na Rua...": referencia de localizacao do proprio imovel.
+            continue
+        neighbor = neighbor or _OTHER_UNIT_AFTER.match(text, group_end) is not None
+        objeto = any("objeto" in value for _start, _end, value in members)
+        # "novo imovel objeto da acao" e o objeto; "ao lado do (imovel) objeto" nao.
+        kind = "OTHER" if neighbor or (before is not None and not objeto) else "SUBJECT"
+        for start, end, _value in members:
+            markers.append((start, end, kind))
             if kind == "SUBJECT":
-                subjects.append((item.start(), item.end()))
+                subjects.append((start, end))
     for item in _OTHER_PLACE.finditer(text):
         markers.append((item.start(), item.end(), "OTHER"))
     subjects.sort()

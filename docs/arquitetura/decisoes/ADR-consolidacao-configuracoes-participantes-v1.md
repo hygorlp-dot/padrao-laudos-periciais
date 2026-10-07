@@ -132,12 +132,14 @@ conteúdo privado do workspace).
     (alcance de 160 caracteres). O vínculo cai, fail-closed, quando aparece
     entre os dois:
     - uma parte que concorda e não é só agente de um particípio atributivo
-      ("adquirida pela autora" e "que foi adquirido pela autora" mantêm o
+      ("adquirida pela autora" e a relativa "que/o qual (já) foi adquirido pela
+      autora" mantêm o
       vínculo; "foi entregue pela construtora" o tira). Onde a regra anterior
       bloqueava a frase, nenhuma isenção vale: uma parte que concorde tira a
       âncora;
     - CPF, CNPJ, OAB ou telefone;
-    - um imóvel vizinho ou outro ("ao lado do", "nova unidade").
+    - um imóvel vizinho ou outro ("ao lado do", "nova unidade"), decidido uma
+      vez para todo o sintagma da pista ("próximo ao imóvel objeto da ação").
 
     A pista "objeto" devolve o vínculo a uma unidade "nova".
   - "imóvel objeto, onde reside, …" fala do próprio imóvel só com a relativa
