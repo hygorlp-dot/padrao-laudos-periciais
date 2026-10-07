@@ -289,18 +289,35 @@ _OTHER_UNIT_BEFORE = re.compile(
     r"\b(?:outr[oa]s?|nov[oa]s?|antig[oa]s?|divers[oa]s?|segund[oa]s?|demais|"
     r"(?P<neighbor>(?:ao lado|em frente|defronte|proximo|perto|vizinh[oa]s?)(?:\s+(?:d[oa]s?|a|ao))?))\s+$"
 )
-_NEIGHBOR_WORDS = re.compile(r"\b(?:vizinh[oa]s?|ao lado|em frente|defronte|proximo|perto)\b")
-_PARTICIPLE_BEFORE = re.compile(r"\b(?:situad|localizad)[oa]s?\s+$")
-_OTHER_UNIT_AFTER = re.compile(r"\s+(?:vizinh|ao lado|em frente|defronte)")
+_NEIGHBOR_WORDS = re.compile(
+    r"\b(?:vizinh[oa]s?|ao lado|em frente|defronte|diante|proxim[oa]s?|pert[oa]|junto|atras)\b"
+)
+# Vizinhanca so torna "outra unidade" quando nao tem alvo ("o imovel vizinho") ou
+# quando o alvo e uma unidade ("vizinha ao imovel"); vizinho de um marco ("ao
+# shopping", "ao Condominio X", "ao centro") nao muda o vinculo.
+_NEIGHBOR_AFTER = re.compile(r"\s+(?:vizinh[oa]s?|ao lado|em frente|defronte)\b")
+_NEIGHBOR_TARGET = re.compile(r"\s*(?:d[aoe]s?|a|ao|aos|as)\s+")
+_UNIT_TARGET = re.compile(
+    r"(?:(?:o|a|um|uma|outr[oa]|nov[oa])\s+)?(?:imove(?:l|is)|unidades?|casas?|apartamentos?|sobrados?|lotes?|objeto)\b"
+)
 # "no bairro vizinho", "outra cidade": o endereco que segue e de outro lugar.
 _OTHER_PLACE = re.compile(
-    r"\b(?:(?:bairro|cidade|municipio|quadra|predio|edificio|condominio)\s+vizinh[oa]|"
+    r"\b(?:(?:bairro|cidade|municipio|quadra)\s+vizinh[oa]s?|"
     r"outr[oa]\s+(?:bairro|cidade|municipio|endereco|rua|estado))\b"
 )
+
+
+def _neighbor_of_unit(text, position):
+    """A vizinhanca logo em `position` aponta outra unidade (sem alvo, ou alvo unidade)?"""
+    after = _NEIGHBOR_AFTER.match(text, position)
+    if after is None:
+        return False
+    target = _NEIGHBOR_TARGET.match(text, after.end())
+    return target is None or _UNIT_TARGET.match(text, target.end()) is not None
 _PARTICIPLE = re.compile(r"\b(?:situad|localizad)(?P<gender>[oa])s?\b")
 _PROPERTY_NOUN = re.compile(
     r"\b(?:imove(?:l|is)|(?P<feminine>unidades?|casas?)|apartamentos?|terrenos?|lotes?|empreendimentos?|"
-    r"edificios?|predios?|condominios?|residencia(?:l|is)|sobrados?|bem|(?P<residence>residencias?))\b"
+    r"edificios?|predios?|condominios?|conjuntos?|residencia(?:l|is)|sobrados?|bem|(?P<residence>residencias?))\b"
 )
 # Parte entre o imovel e o participio ("entregue pela construtora, localizada"):
 # se concorda com o participio, e ela que esta localizada (fail-closed).
@@ -428,7 +445,7 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects, 
             return "OTHER"
         if not objeto and (
             _OTHER_UNIT_BEFORE.search(text[max(floor, noun.start() - 24):noun.start()])
-            or _OTHER_UNIT_AFTER.match(text, noun.end())
+            or _neighbor_of_unit(text, noun.end())
         ):
             return "OTHER"
         if interrupted(noun.end()):
@@ -481,16 +498,14 @@ def _clause_markers(text):
         floor = max(begin_of(group_start), group_start - 24)
         before = _OTHER_UNIT_BEFORE.search(text[floor:group_start])
         neighbor = before is not None and before.group("neighbor") is not None
-        if neighbor and _PARTICIPLE_BEFORE.search(text, max(begin_of(group_start), floor + before.start() - 24), floor + before.start()):
-            # "situado proximo ao Conjunto X, na Rua...": referencia de localizacao do proprio imovel.
+        if neighbor and not _UNIT_TARGET.match(text, group_start):
+            # "proximo ao Conjunto X, na Rua...": o conjunto e marco de localizacao,
+            # nem outra unidade nem pista do imovel.
             continue
         objeto = any("objeto" in value for _start, _end, value in members)
         # Vizinhanca depois da pista: "unidade habitacional vizinha ao imovel" e outra
         # unidade; quem esta "ao lado do predio" no "imovel objeto" e o proprio objeto.
-        after = _OTHER_UNIT_AFTER.match(text, group_end)
-        neighbor = neighbor or (
-            not objeto and after is not None and _PROPERTY_NOUN.search(text, after.end(), after.end() + 30) is not None
-        )
+        neighbor = neighbor or (not objeto and _neighbor_of_unit(text, group_end))
         # "novo imovel objeto da acao" e o objeto; "ao lado do (imovel) objeto" nao.
         kind = "OTHER" if neighbor or (before is not None and not objeto) else "SUBJECT"
         for start, end, _value in members:
@@ -498,6 +513,10 @@ def _clause_markers(text):
             if kind == "SUBJECT":
                 subjects.append((start, end))
     for item in _OTHER_PLACE.finditer(text):
+        target = _NEIGHBOR_TARGET.match(text, item.end()) if "vizinh" in item.group() else None
+        if target is not None and _UNIT_TARGET.match(text, target.end()) is None:
+            # "no bairro vizinho ao centro": o marco localiza, nao desloca.
+            continue
         markers.append((item.start(), item.end(), "OTHER"))
     subjects.sort()
     subject_ends = {end for _start, end in subjects}

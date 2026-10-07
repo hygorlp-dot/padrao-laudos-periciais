@@ -140,6 +140,9 @@ conteúdo privado do workspace).
     - CPF, CNPJ, OAB ou telefone;
     - um imóvel vizinho ou outro ("ao lado do", "nova unidade"), decidido uma
       vez para todo o sintagma da pista ("próximo ao imóvel objeto da ação").
+      Vizinhança só indica outra unidade sem alvo ("o imóvel vizinho") ou com
+      alvo unidade ("vizinha ao imóvel"). Vizinho de um marco ("ao shopping",
+      "ao Condomínio X", "ao centro") não muda o vínculo.
 
     A pista "objeto" devolve o vínculo a uma unidade "nova".
   - "imóvel objeto, onde reside, …" fala do próprio imóvel só com a relativa
@@ -156,6 +159,9 @@ conteúdo privado do workspace).
     - relativa colada à pista com deslocamento implícito ("onde reside hoje
       em Recife");
     - erro de gênero do OCR no particípio, que perde o endereço (fail-closed);
+    - "nova/novo/antiga unidade" sem a pista "objeto" entre ela e o particípio
+      é outra unidade, por regra da #293, mesmo quando a frase diz depois que
+      ela "é objeto da ação" (fail-closed);
     - agente atributivo seguido de particípio que concorda com os dois ("a
       unidade, vendida pela construtora, localizada na…"): o caso é lido como
       a unidade, igual à regra anterior.
