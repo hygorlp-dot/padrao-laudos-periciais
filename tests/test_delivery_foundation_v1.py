@@ -3296,6 +3296,72 @@ def test_word_text_expectation_binds_explicit_font_family() -> None:
     assert expectation.font_family == "Times New Roman"
 
 
+def _footer_page_number_and_table_cell() -> tuple[
+    list[delivery_renderer._WordTextExpectation],
+    list[delivery_renderer._PositionedText],
+]:
+    # Reproduced with Word 16 (#303): the PDF lists page 0's footer "1" before
+    # the findings table's "1" cell on page 2.
+    expectations = [
+        delivery_renderer._WordTextExpectation(
+            "1", 10, (0, 0, 0), False, False, False, "left", in_table=True,
+        ),
+        delivery_renderer._WordTextExpectation(
+            "1", 9, (0, 0, 0), False, False, False, "center",
+            expected_page=0, band="footer",
+        ),
+    ]
+    positioned = [
+        delivery_renderer._PositionedText(
+            0, "1", 300.28, 44.62, 9, 302.66, 44.62, 51.1,
+            page_width=595.4, page_height=841.8,
+        ),
+        delivery_renderer._PositionedText(
+            2, "1", 91.5, 395.4, 10, 94.2, 395.4, 401.9,
+            page_width=595.4, page_height=841.8,
+        ),
+    ]
+    return expectations, positioned
+
+
+def test_text_style_matching_keeps_footer_page_number_from_body_cell() -> None:
+    expectations, positioned = _footer_page_number_and_table_cell()
+
+    assert delivery_renderer._text_sizes_match(
+        expectations, positioned, [],
+        top_margin=(85.05, 85.05), bottom_margin=(56.7, 56.7),
+    )
+
+
+def test_text_style_matching_rejects_body_text_only_in_a_margin_band() -> None:
+    expectations, positioned = _footer_page_number_and_table_cell()
+    body_cell, _ = expectations
+    footer_copy, _ = positioned
+    header_copy = replace(footer_copy, bottom=800.0, top=806.5)
+
+    for candidate in (footer_copy, header_copy):
+        assert not delivery_renderer._text_sizes_match(
+            [body_cell], [candidate], [],
+            top_margin=(85.05, 85.05), bottom_margin=(56.7, 56.7),
+        )
+
+
+def test_text_style_matching_bounds_the_body_by_the_narrowest_section_margin() -> None:
+    expectations, positioned = _footer_page_number_and_table_cell()
+    body_cell, _ = expectations
+    _, cell = positioned
+    # Between the narrowest and the widest margin: body of the section with
+    # the narrower margins.
+    near_bottom = replace(cell, bottom=64.0, top=70.5)
+    near_top = replace(cell, bottom=730.0, top=736.5)
+
+    for candidate in (near_bottom, near_top):
+        assert delivery_renderer._text_sizes_match(
+            [body_cell], [candidate], [],
+            top_margin=(85.05, 120.0), bottom_margin=(56.7, 90.0),
+        )
+
+
 def test_text_style_matching_rejects_font_family_substitution() -> None:
     expectation = delivery_renderer._WordTextExpectation(
         "authoritative font", 11, (0, 0, 0), False, False, False, "left",
