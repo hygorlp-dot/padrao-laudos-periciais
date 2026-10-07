@@ -132,8 +132,10 @@ conteúdo privado do workspace).
     (alcance de 160 caracteres). O vínculo cai, fail-closed, quando aparece
     entre os dois:
     - uma parte que concorda e não é só agente de um particípio atributivo
-      ("adquirida pela autora" mantém o vínculo; "foi entregue pela
-      construtora" o tira);
+      ("adquirida pela autora" e "que foi adquirido pela autora" mantêm o
+      vínculo; "foi entregue pela construtora" o tira). Onde a regra anterior
+      bloqueava a frase, nenhuma isenção vale: uma parte que concorde tira a
+      âncora;
     - CPF, CNPJ, OAB ou telefone;
     - um imóvel vizinho ou outro ("ao lado do", "nova unidade").
 
@@ -151,7 +153,10 @@ conteúdo privado do workspace).
     - frase sem nenhum marcador de parte;
     - relativa colada à pista com deslocamento implícito ("onde reside hoje
       em Recife");
-    - erro de gênero do OCR no particípio, que perde o endereço (fail-closed).
+    - erro de gênero do OCR no particípio, que perde o endereço (fail-closed);
+    - agente atributivo seguido de particípio que concorda com os dois ("a
+      unidade, vendida pela construtora, localizada na…"): o caso é lido como
+      a unidade, igual à regra anterior.
   - `BACKUP_REPLAY_LEGACY = ALLOWED` e `NEW_PROPOSAL_FROM_PARTY_ADDRESS =
     PROHIBITED`: a reprodução do backup (`include_legacy_labels=True`) aceita
     a união da regra nova com a anterior. Toda proposta nova é reproduzível, e

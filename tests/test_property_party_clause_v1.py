@@ -163,6 +163,24 @@ PROBES = {
     "r2_endereco_atual": "A autora vendeu o imóvel objeto da ação, endereço atual Rua da Parte, nº 10.\n",
     "r2_imovel_ao_lado_do_objeto": "O imóvel ao lado do objeto da ação, situado na Rua da Parte, nº 10, não foi vistoriado.\n",
     "r2_novo_bairro": "O imóvel objeto da ação fica no novo bairro, na Rua do Imóvel, nº 20.\n",
+    # Rodada 3 da revisão independente da PR #294.
+    # P1-1: relativa do proprio imovel e conjuncao "e" nao sao copula de parte.
+    "r3_que_foi_adquirido": "O imóvel objeto da ação, que foi adquirido pela autora em 2015, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r3_que_foi_financiado": "O imóvel objeto da ação, que foi financiado pelo banco, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r3_que_foi_entregue": "A unidade habitacional, que foi entregue à autora em 2015, situada na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r3_adquirida_e_quitada": "A unidade habitacional adquirida e quitada pela autora, situada na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r3_financiada_e_entregue": "A unidade habitacional, financiada e entregue à autora, situada na Rua do Imóvel, nº 20, tem fissuras.\n",
+    # P2-1: onde a regra anterior bloqueava, agente que concorda tira a ancora.
+    "r3_cpf_construida_pela_incorporadora": "FULANA, CPF 000.000.000-00, comprou a unidade habitacional construída pela incorporadora, localizada na Rua da Parte, nº 10.\n",
+    "r3_cnpj_adquirida_pela_autora": "A ré, CNPJ 00.000.000/0001-00, vendeu a unidade habitacional, adquirida pela autora, localizada na Rua da Parte, nº 10.\n",
+    "r3_oab_adquirida_da_construtora": "O advogado, OAB/PE 0000, representa a autora quanto à unidade habitacional adquirida da construtora, localizada na Rua da Parte, nº 10.\n",
+    # P2-2: introdutores estreitos.
+    "r3_tem_como_endereco_atual": "LAUDO\nO imóvel objeto da ação, antiga Rua Velha, tem como endereço atual a Rua do Imóvel, nº 20.\n",
+    "r3_mudou_a_fachada": "A construtora mudou a fachada da casa da Rua do Imóvel, nº 20, objeto da ação.\n",
+    "r3_mudar_a_tubulacao": "O réu se recusou a mudar a tubulação da casa da Rua do Imóvel, nº 20, objeto da ação.\n",
+    "r3_trabalhava_na_obra": "O pedreiro que trabalhava na obra da Rua do Imóvel, nº 20, objeto da ação, relatou falhas.\n",
+    # P2-3: vizinhanca presa ao participio do imovel.
+    "r3_situado_proximo_ao_conjunto": "O imóvel objeto da ação, situado próximo ao Conjunto Habitacional Sintético, na Rua do Imóvel, nº 20, tem fissuras.\n",
 }
 
 
@@ -594,6 +612,51 @@ MAIN_8941B2C_REPLAY_IDS = {
         "153413e2e61f642762b8abbd911dfb4b15060f17b3f37c04b10ce92072676c7c",
         "9cb60d49fcf09b0d5ebab4549fbd1a969089883f2cf34c46c82f3e85bef07ed5",
     ),
+    "r3_que_foi_adquirido": (
+        "d33189754cac1b96fe2810d14a6f0024753447108909d5f113c9d6738afb918a",
+        "ef77016d0f72835ac6bba537564208613838b6d0077a1da8a570dff51e3dfc20",
+    ),
+    "r3_que_foi_financiado": (
+        "7ec19c688b6c339ec25e259255a204cfcf52231b85e6024fa155742323b44ee3",
+        "c7fc60a8134bbaa32f64663ad1981699263b6464ad177b157c3b1aa673595dfe",
+    ),
+    "r3_que_foi_entregue": (
+        "c70db56831c406fed7aee8c8fc50ea4d1c83b554453b5a2411388d2dc87c5c05",
+        "fc095dd8a54cac517ba9cfee95753c090b4a91b44ff563ff31480adc49beb688",
+    ),
+    "r3_adquirida_e_quitada": (
+        "3725bdd5ccb72fd8341b1e2f997205e46aa147b887ce4f1600cb8f4627cd3b60",
+        "8240af4faaa0b328597c66e05b65d1fca13b9a70034f444ab9a8ce2e17cbf907",
+    ),
+    "r3_financiada_e_entregue": (
+        "8ddbe3205aecc6237a81759d1ca91ba233d6df06e42ef362b1dd5b2483825405",
+        "96b62070e25b77309ed0aff1b64a462884bde3d505714389d9d7822ccd7b6466",
+    ),
+    "r3_cpf_construida_pela_incorporadora": (),
+    "r3_cnpj_adquirida_pela_autora": (),
+    "r3_oab_adquirida_da_construtora": (),
+    "r3_tem_como_endereco_atual": (
+        "1e260fca01ff7cd3cbf30efb4b8ded5ba9f364e4d3988ca611e62de259af4ce1",
+        "2109c6f95db1ab37b3f93663679d9dcd88649f53a7f7f1163d6d3011749286a8",
+        "5d403389a3286a56d4d51c47a77b46ca3c928483874beca80a7491bd900b64a8",
+    ),
+    "r3_mudou_a_fachada": (
+        "86a7ec095298f5c80d99d3965afc1d33122b078111c5d137495240a080b89621",
+        "c1ac9bb383e9ce16e2d56b6c7e7dd6a38bfbc94b296c202e8b95670a185430fd",
+    ),
+    "r3_mudar_a_tubulacao": (
+        "0767801caeec809a6176c5ca30ccd4d2387fcb57b4e65d9e63331e0eefed8ac3",
+        "11449a539326507a526df95f0e8edfca05bb97db279dd9b00d112bbbcc12822a",
+    ),
+    "r3_trabalhava_na_obra": (
+        "15861f8e21663e057e6a4153116956d3b995630f9d415d766b8d232b7611680a",
+        "3c1a66c279b4eed03b2fe262c083700f3eda7900824a74d2da86774434a974b5",
+    ),
+    "r3_situado_proximo_ao_conjunto": (
+        "29a6654713bd3cb4475cfff1d09fc58e231fac40a3df62664930c88528a7a391",
+        "499424faf0f838b64a41718f32da01b73e881f6caa1c9848192b96476861f211",
+        "905894d3531981a2229ed698d879cdd7dac6417c4536fd380502daf20dc02100",
+    ),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -694,6 +757,20 @@ EXPECTED = {
     "r2_endereco_atual": set(),
     "r2_imovel_ao_lado_do_objeto": set(),
     "r2_novo_bairro": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    # Rodada 3 da revisão independente da PR #294.
+    "r3_que_foi_adquirido": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r3_que_foi_financiado": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r3_que_foi_entregue": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r3_adquirida_e_quitada": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r3_financiada_e_entregue": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r3_cpf_construida_pela_incorporadora": set(),
+    "r3_cnpj_adquirida_pela_autora": set(),
+    "r3_oab_adquirida_da_construtora": set(),
+    "r3_tem_como_endereco_atual": {("number", "20", "POSSIBLE"), ("street", "Rua Velha", "POSSIBLE"), ("street", "Rua do Imóvel", "POSSIBLE")},
+    "r3_mudou_a_fachada": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r3_mudar_a_tubulacao": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r3_trabalhava_na_obra": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r3_situado_proximo_ao_conjunto": {("development", "Conjunto Habitacional Sintético", "STRONG"), ("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
 }
 _PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 
