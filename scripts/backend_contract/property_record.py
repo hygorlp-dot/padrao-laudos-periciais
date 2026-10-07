@@ -296,6 +296,7 @@ _NEIGHBOR_WORDS = re.compile(
 # Vizinhanca so torna "outra unidade" quando nao tem alvo ("o imovel vizinho") ou
 # quando o alvo e uma unidade ("vizinha ao imovel"); vizinho de um marco ("ao
 # shopping", "ao Condominio X", "ao centro") nao muda o vinculo.
+_JUNTO_DIANTE = re.compile(r"(?:junto|diante)\b")
 _COMMA_BEFORE = re.compile("[,(\u2013\u2014]\\s*$|\\s-\\s*$")
 _NEIGHBOR_AFTER = re.compile(r"\s+(?:vizinh[oa]s?|ao lado|em frente|defronte)\b")
 _NEIGHBOR_TARGET = re.compile(r"\s*(?:d[aoe]s?|a|ao|aos|as)\s+")
@@ -524,8 +525,15 @@ def _clause_markers(text):
             # sempre o proprio imovel. Sem nucleo antes ("a casa ao lado do imovel
             # objeto"), vale so onde a regra anterior ja aceitava a frase.
             reach = floor + before.start()
-            head = _PROPERTY_NOUN.search(text, max(begin_of(group_start), reach - 60), reach)
-            kind = "OTHER" if head is not None else "SUBJECT_LOOSE"
+            low = max(begin_of(group_start), reach - 60)
+            head = _PROPERTY_NOUN.search(text, low, reach)
+            # "junto a"/"diante de" sao idioma juridico ("no", "perante"): o imovel
+            # antes deles ("a vistoria da casa foi feita junto ao imovel objeto")
+            # nao e outro nucleo. Parte que mora/tem sede ali ("a testemunha mora
+            # ao lado do imovel objeto") continua sendo outra unidade.
+            idiom = _JUNTO_DIANTE.match(text, reach) is not None
+            party = _PARTY_INTRODUCERS.search(text, low, min(group_start, reach + 3)) is not None
+            kind = "OTHER" if (head is not None and not idiom) or party else "SUBJECT_LOOSE"
             for start, end, _value in members:
                 markers.append((start, end, kind))
             continue

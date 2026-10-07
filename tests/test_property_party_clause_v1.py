@@ -237,6 +237,13 @@ PROBES = {
     "r9_em_frente_ao_imovel": "LAUDO\nEm frente ao imóvel objeto da ação, na Rua do Imóvel, nº 20, há uma praça.\n",
     "r9_casa_ao_lado_do_imovel_objeto": "A autora mora na casa ao lado do imóvel objeto da ação, na Rua da Parte, nº 10.\n",
     "r9_travessao_ao_lado_do_predio": "O imóvel objeto da ação – ao lado do prédio da prefeitura – situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    # Rodada 10 da revisão independente da PR #294.
+    "r10_vistoria_da_casa_junto_ao_imovel": "LAUDO\nA vistoria da casa foi feita junto ao imóvel objeto da ação, na Rua do Imóvel, nº 20.\n",
+    "r10_vistoria_do_bem_junto_ao_imovel": "LAUDO\nA vistoria do bem foi realizada junto ao imóvel objeto da ação, na Rua do Imóvel, nº 20.\n",
+    "r10_conjunto_e_junto_ao_imovel": "LAUDO\nO perito foi ao conjunto habitacional e, junto ao imóvel objeto da ação, na Rua do Imóvel, nº 20, constatou fissuras.\n",
+    "r10_testemunha_reside_em_frente": "A testemunha, que reside em frente ao imóvel objeto da ação, na Rua da Parte, nº 10, depôs.\n",
+    "r10_familia_vive_junto": "A família vive junto ao imóvel objeto da ação, na Rua da Parte, nº 10.\n",
+    "r10_testemunha_mora_ao_lado": "A testemunha mora ao lado do imóvel objeto da ação, na Rua da Parte, nº 10.\n",
 }
 
 
@@ -863,6 +870,30 @@ MAIN_8941B2C_REPLAY_IDS = {
         "65d54975ad03fc9f9beee4b07651ad8ce7bc39f0fc5b75984aedfe862906194d",
         "fb90eccab1a727ad919538e161690ad87e3a0b6cb4a4738218bad092ea21abf4",
     ),
+    "r10_vistoria_da_casa_junto_ao_imovel": (
+        "8b6c763483dfa49a64c64eaed06e6378c061f6036a192787f58f57a537639345",
+        "b1fbed906bef63a5760d338bd6f1cb5e4e6c25c29917334ca6165ec2273f4c4f",
+    ),
+    "r10_vistoria_do_bem_junto_ao_imovel": (
+        "56ed49339c295e8fafebfae98e9cc0cbf197e371b5c1ce441dc1ad3e27f66072",
+        "7480bab6c13bae674e74ffef86c2ca051560dfd1290279f64a4b2f15660a5277",
+    ),
+    "r10_conjunto_e_junto_ao_imovel": (
+        "9ef261284c75e6d85289194b050a6b497c851340dcab87b688864adab48905c6",
+        "c3cebcc94f30d34f6e9a54eafa2a10f4ce44ead6c434a4c4585906ea29c0439c",
+    ),
+    "r10_testemunha_reside_em_frente": (
+        "08bb7336858beeacd8ffc75d77949dd86552db79d6ee250b8b76bf83bea7dad7",
+        "e799f12c04eec540733265b1b19b4793a6150bab709ecf7d8e5db64aac4da04f",
+    ),
+    "r10_familia_vive_junto": (
+        "559637fcbee371eba9920a9798194796c6a2ed0f470d7b6a7582c4b1fa7f2b9d",
+        "d5cc895d92b4531b03c1924fc4a81f4c91bcc45414c81e004222cecf483e594e",
+    ),
+    "r10_testemunha_mora_ao_lado": (
+        "b51a0382d876c7523d38e6e860e981e6a9741a540c558c81acc9116c066579f4",
+        "c00de6baaa3322ca1dd923618e516a6d5e84ac87b74e6aa9e498752fff226ab8",
+    ),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -1027,6 +1058,13 @@ EXPECTED = {
     "r9_em_frente_ao_imovel": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
     "r9_casa_ao_lado_do_imovel_objeto": set(),
     "r9_travessao_ao_lado_do_predio": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    # Rodada 10 da revisão independente da PR #294.
+    "r10_vistoria_da_casa_junto_ao_imovel": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r10_vistoria_do_bem_junto_ao_imovel": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r10_conjunto_e_junto_ao_imovel": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r10_testemunha_reside_em_frente": set(),
+    "r10_familia_vive_junto": set(),
+    "r10_testemunha_mora_ao_lado": set(),
 }
 _PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 
