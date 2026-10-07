@@ -1051,16 +1051,28 @@ def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
         token=TOKEN,
         config=ProductBridgeConfig(request_timeout_seconds=0.1),
     )
+    # The guard is derived from the server's existing 5 s serve-thread join
+    # bound plus the configured 0.1 s request deadline and a bounded
+    # scheduling margin; it is not a product timeout or a retry.
+    shutdown_deadline = 5.0 + runtime._bridge._config.request_timeout_seconds + 1.0
+    drip_interval = 0.04
     runtime.start()
     client = socket.create_connection(runtime.address, timeout=5)
     if slow_part == "body":
+        # Each drip waits at least `drip_interval`, so the dripper cannot send
+        # more than this many bytes before the guard expires. Declaring twice
+        # that keeps the body incomplete for the whole guard: only the request
+        # deadline, not the client finishing, can release the worker (#301).
+        drip_byte_budget = math.ceil(shutdown_deadline / drip_interval)
+        declared_body_bytes = 2 * drip_byte_budget
+        assert declared_body_bytes <= runtime._bridge._config.max_body_bytes
         request_prefix = (
             b"POST /app-api/v1/workspaces HTTP/1.1\r\n"
             + f"Host: {runtime.address[0]}:{runtime.address[1]}\r\n".encode("ascii")
             + f"Origin: {runtime.origin}\r\n".encode("ascii")
             + b"Sec-Fetch-Site: same-origin\r\n"
             + b"Content-Type: application/json\r\n"
-            + b"Content-Length: 100\r\n\r\n{"
+            + f"Content-Length: {declared_body_bytes}\r\n\r\n{{".encode("ascii")
         )
     else:
         request_prefix = b"GET / HTTP/1.1\r\n" + f"Host: {runtime.address[0]}:{runtime.address[1]}\r\n".encode("ascii") + b"X-Slow-Header:"
@@ -1068,7 +1080,7 @@ def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
     stop_drip = Event()
 
     def drip_body():
-        while not stop_drip.wait(0.04):
+        while not stop_drip.wait(drip_interval):
             try:
                 client.sendall(b" ")
             except OSError:
@@ -1086,10 +1098,6 @@ def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
     closing = Thread(target=runtime.close, daemon=True)
     closing.start()
     try:
-        # The guard is derived from the server's existing 5 s serve-thread
-        # join bound plus the configured 0.1 s request deadline and a bounded
-        # scheduling margin; it is not a product timeout or a retry.
-        shutdown_deadline = 5.0 + runtime._bridge._config.request_timeout_seconds + 1.0
         assert _wait_for_product_shutdown(runtime, closing, deadline_seconds=shutdown_deadline)
     finally:
         stop_drip.set()
