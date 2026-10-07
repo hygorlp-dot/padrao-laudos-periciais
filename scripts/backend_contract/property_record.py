@@ -203,8 +203,9 @@ _PARTY_ADDRESS_BLOCKERS = re.compile(
 # Na linha de rotulo (nivel 1) so a qualificacao e o timbre institucional pesam;
 # CPF/CNPJ na linha do proprietario ou da construtora nao sao endereco de parte.
 _LABEL_QUALIFICATION_BLOCKERS = re.compile(
-    r"\b(?:residente|domiciliad\w*|com endereco|com sede|sede (?:na|no|em)|escritorio|oab|advogad\w*|patrono|"
-    r"procurador\w*|forum|vara|juizo|tribunal|secao judiciaria|justica federal|justica estadual|poder judiciario)\b"
+    r"\b(?:residente|domiciliad\w*|morador\w*|com endereco|com sede|sede (?:na|no|em)|sediad\w*|estabelecid\w*|"
+    r"escritorio|oab|advogad\w*|patrono|procurador\w*|testemunh\w*|assistente\w*|"
+    r"forum|vara|juizo|tribunal|secao judiciaria|justica federal|justica estadual|poder judiciario)\b"
 )
 _ADDRESS_FIELDS = frozenset({"street", "number", "complement", "unit", "block", "quadra", "neighborhood", "postal_code", "city", "state"})
 _SUBJECT_PROPERTY_CUES = (
@@ -250,6 +251,117 @@ def _source_rank(kind, method, strength):
         # A inicial so pesa quando o trecho fala do imovel objeto (ou rotula o dado).
         return "E" if method.startswith(("CONTEXT_BOUND_", "LABEL_")) else "G"
     return kind or "G"
+
+
+# #293: dentro da frase, o vinculo de um endereco e decidido pela oracao. O
+# logradouro (e o numero, bairro, CEP... que o seguem na mesma cadeia) pertence
+# ao marcador mais proximo antes dele: residencia ou localizacao de parte,
+# juizo, foro, advogado, testemunha, assistente ou deslocamento nao propoem;
+# o imovel objeto propoe. Sem marcador antes, a frase inteira decide, como
+# antes (fail-closed). Precedente continua bloqueando a frase inteira: o
+# imovel citado ali e o de outro processo.
+_PRECEDENT_BLOCKERS = re.compile(
+    r"\b(?:apelacao|recurso especial|resp|agravo|julgado|rel|relator\w*|des|desembargador\w*|min|ministro|"
+    r"jurisprudencia|precedente|acordao|ementa)\b"
+)
+_PARTY_CLAUSE_MARKERS = re.compile(
+    r"\b(?:(?P<residence>residente\w*|reside|residem|residia\w*|residiu|residir|domiciliad\w*|morador\w*|"
+    r"(?:mora|moram|morava|moravam|morou|morar)\s+(?:na|no|nas|nos|em|a|ao))|"
+    r"com endereco|endereco eletronico|com sede|sede (?:na|no|em)|sediad\w*|estabelecid\w*|escritorio|oab|"
+    r"advogad\w*|patrono|procurador\w*|cpf|cnpj|forum|foro|comarca|vara|juizo|tribunal|secao judiciaria|"
+    r"subsecao judiciaria|justica federal|justica estadual|poder judiciario|ministerio publico|defensoria|"
+    r"testemunh\w*|assistente\w*|tel|telefone|fone|fax|celular|whatsapp|e-mail|email|www|"
+    r"mud(?:ou|aram|ar|ando|anca)\w*|transferi\w*|removid\w*|realocad\w*|deslocad\w*|vive|vivem|vivia\w*)\b|@"
+)
+# Uma expressao por pista: "imovel objeto da acao" casa "imovel objeto" e "objeto da acao".
+_SUBJECT_CUES = tuple(re.compile(r"\b" + re.escape(cue) + r"\b") for cue in _SUBJECT_PROPERTY_CUES)
+# "outra unidade habitacional", "novo imovel": outra unidade, nunca a do objeto.
+_OTHER_UNIT_BEFORE = re.compile(r"\b(?:outr[oa]s?|nov[oa]s?|antig[oa]s?|divers[oa]s?|segund[oa]s?|demais)\s+$")
+_PARTICIPLE = re.compile(r"\b(?:situad|localizad)(?P<gender>[oa])s?\b")
+_PROPERTY_NOUN = re.compile(
+    r"\b(?:imove(?:l|is)|(?P<feminine>unidades?|casas?)|apartamentos?|terrenos?|lotes?|empreendimentos?|"
+    r"edificios?|predios?|condominios?|residencia(?:l|is))\b"
+)
+_PARTICIPLE_REACH = 80
+# "imovel objeto, onde reside, ..." fala do proprio imovel: a relativa tem de
+# vir colada a pista do imovel, com no maximo um parentetico participial
+# controlado ("financiada em 2015"); deslocamento, cidade ou outra unidade
+# entre eles mantem o marcador de residencia (fail-closed).
+_ONDE_BEFORE = re.compile(r",\s*onde\s+(?:[a-z]+\s+){0,3}$")
+_CONTROLLED_PARENTHETICAL = re.compile(
+    r",\s*(?!(?:transferi|removid|realocad|deslocad|mudad))[a-z]+(?:ad|id)[oa]s?"
+    r"(?:\s+(?:em|no ano de)\s+[\d/]+|\s+pel[oa]s?\s+(?:autor\w*|re|reu|parte autora|construtora|vendedor\w*))?\s*$"
+)
+
+
+def _clause_markers(folded):
+    """(inicio, tipo) de cada marcador da pagina: PARTY, SUBJECT ou OTHER.
+
+    Calculado uma vez por pagina; cada marcador so olha para tras ate o inicio
+    da propria frase, com alcance fixo (custo linear no texto).
+    """
+    markers = []
+    subjects = set()
+    sentence = {}
+
+    def begin_of(position):
+        if position not in sentence:
+            sentence[position] = _window(folded, position, position)[0]
+        return sentence[position]
+
+    for cue in _SUBJECT_CUES:
+        for item in cue.finditer(folded):
+            floor = max(begin_of(item.start()), item.start() - 20)
+            kind = "OTHER" if _OTHER_UNIT_BEFORE.search(folded[floor:item.start()]) else "SUBJECT"
+            markers.append((item.start(), kind))
+            if kind == "SUBJECT":
+                subjects.add(item.end())
+    for item in _PARTY_CLAUSE_MARKERS.finditer(folded):
+        if item.group("residence") and _onde_of_subject(folded, begin_of(item.start()), item.start(), subjects):
+            continue
+        markers.append((item.start(), "PARTY"))
+    party_starts = sorted(start for start, kind in markers if kind == "PARTY")
+    for item in _PARTICIPLE.finditer(folded):
+        floor = max(begin_of(item.start()), item.start() - _PARTICIPLE_REACH)
+        nouns = list(_PROPERTY_NOUN.finditer(folded, floor, item.start()))
+        if not nouns and not folded[begin_of(item.start()):item.start()].strip(" \t\n,.;:-"):
+            # "Situado na Rua X, o imovel objeto..." abre a frase: nada a
+            # qualificar antes dele, a frase inteira decide (como antes).
+            continue
+        if not nouns:
+            kind = "PARTY"
+        else:
+            noun = nouns[-1]
+            position = bisect_right(party_starts, noun.end())
+            interrupted = position < len(party_starts) and party_starts[position] < item.start()
+            agrees = (noun.group("feminine") is not None) == (item.group("gender") == "a")
+            if _OTHER_UNIT_BEFORE.search(folded[max(floor, noun.start() - 20):noun.start()]):
+                kind = "OTHER"
+            elif interrupted or not agrees:
+                kind = "PARTY"
+            else:
+                kind = "SUBJECT"
+        markers.append((item.start(), kind))
+    markers.sort()
+    return markers
+
+
+def _onde_of_subject(folded, begin, start, subject_ends):
+    onde = _ONDE_BEFORE.search(folded, max(begin, start - _PARTICIPLE_REACH), start)
+    if onde is None:
+        return False
+    floor = max(begin, onde.start() - _PARTICIPLE_REACH)
+    before = folded[floor:onde.start()]
+    parenthetical = _CONTROLLED_PARENTHETICAL.search(before)
+    if parenthetical is not None:
+        before = before[:parenthetical.start()]
+    return floor + len(before.rstrip()) in subject_ends
+
+
+def _clause_kind(markers, begin, reference):
+    """Tipo do marcador mais proximo antes do endereco, na mesma frase (None: nenhum)."""
+    position = bisect_right(markers, (reference, "~")) - 1
+    return markers[position][1] if position >= 0 and markers[position][0] >= begin else None
 
 
 _INTRINSIC_FIELDS = {"development", "private_area_m2", "constructed_area_m2", "program", "habite_se_date", "contract_number", "contractual_value"}
@@ -373,7 +485,100 @@ def _window(folded, start, end):
     return begin, stop
 
 
-def _context_proposals(page, document_kind, folded, indices, label_spans=()):
+def _context_proposals(page, document_kind, folded, indices, label_spans=(), *, legacy=False):
+    found = _clause_rule_proposals(page, document_kind, folded, indices, label_spans)
+    if legacy:
+        # A reproducao do backup aceita tambem o que a regra anterior propunha:
+        # evidencia confirmada antes do #293 continua conferivel nos bytes.
+        found.extend(_sentence_rule_proposals(page, document_kind, folded, indices, label_spans))
+    found.extend(_city_state_proposals(page, document_kind, folded, indices, label_spans, legacy=legacy))
+    return found
+
+
+def _clause_rule_proposals(page, document_kind, folded, indices, label_spans=()):
+    text = page.text
+    mode = page.extraction_mode.value
+    label_starts = [start for start, _end in label_spans]
+    markers = _clause_markers(folded)
+    marker_starts = [start for start, _kind in markers]
+    streets = list(_STREET.finditer(folded))
+    street_ends = [item.end() for item in streets]
+    precedents = [item.start() for item in _PRECEDENT_BLOCKERS.finditer(folded)]
+    parties = [item.start() for item in _PARTY_CLAUSE_MARKERS.finditer(folded)]
+
+    def within(starts, begin, stop):
+        return bisect_right(starts, stop - 1) > bisect_right(starts, begin - 1)
+
+    candidates = []
+    for field, pattern, group in _PATTERNS:
+        for match in pattern.finditer(folded):
+            # Linha "Rotulo: valor" ja e evidencia de nivel 1; nao vira segunda proposta.
+            source = indices[match.start()]
+            position = bisect_right(label_starts, source) - 1
+            if position >= 0 and source < label_spans[position][1]:
+                continue
+            begin, stop = _window(folded, match.start(), match.end())
+            context = folded[begin:stop]
+            if within(precedents, begin, stop):
+                continue
+            if field in _ADDRESS_FIELDS:
+                reference = match.start()
+                if field != "street":
+                    # Numero, bairro, CEP... seguem o logradouro da mesma cadeia.
+                    position = bisect_right(street_ends, match.start()) - 1
+                    if position >= 0 and streets[position].start() >= begin:
+                        street = streets[position]
+                        between = bisect_right(marker_starts, match.start() - 1) - bisect_right(marker_starts, street.end() - 1)
+                        if not between:
+                            reference = street.start()
+                kind = _clause_kind(markers, begin, reference)
+                if kind is None:
+                    if within(parties, begin, stop) or _PARTY_ADDRESS_BLOCKERS.search(context):
+                        continue
+                    bound = any(cue in context for cue in _SUBJECT_PROPERTY_CUES)
+                elif kind == "SUBJECT":
+                    bound = True
+                else:
+                    continue
+            else:
+                if _PARTY_ADDRESS_BLOCKERS.search(context):
+                    continue
+                bound = any(cue in context for cue in _SUBJECT_PROPERTY_CUES)
+            value = _original(text, indices, match.start(group), match.end(group))
+            if not value:
+                continue
+            # "residencial" adjetivo ("uso residencial") nao e nome de empreendimento.
+            if field == "development" and not _proper_name_follows(value):
+                continue
+            candidates.append((field, match.start(), begin, stop, value, bound))
+    starts = {}
+    for field, start, *_rest in candidates:
+        starts.setdefault(field, []).append(start)
+    found = []
+    for field, start, begin, stop, value, bound in candidates:
+        # Mais de uma unidade (ou numero) do imovel na mesma frase: o trecho nao
+        # diz qual e a do imovel. O que pertence a parte ja ficou de fora.
+        ambiguous = field in {"unit", "block", "quadra", "number"} and (
+            bisect_right(starts[field], stop - 1) - bisect_right(starts[field], begin - 1)
+        ) > 1
+        if bound and not ambiguous:
+            strength, method = "STRONG", f"CONTEXT_BOUND_{mode}_V2"
+        elif field in _INTRINSIC_FIELDS and document_kind and not ambiguous:
+            strength, method = "STRONG", f"DOCUMENT_PATTERN_{mode}_V2"
+        elif document_kind or bound or field in _INTRINSIC_FIELDS:
+            strength = "POSSIBLE"
+            method = f"CONTEXT_BOUND_{mode}_V2" if bound else f"DOCUMENT_PATTERN_{mode}_V2"
+        else:
+            continue
+        excerpt = text[indices[begin]:indices[stop - 1] + 1].strip() if stop > begin else ""
+        if value not in excerpt or len(excerpt) > 2000:
+            continue
+        found.append((field, value, excerpt, method, strength))
+    return found
+
+
+def _sentence_rule_proposals(page, document_kind, folded, indices, label_spans=()):
+    """Regra anterior ao #293 (frase inteira), so para reproduzir backup antigo."""
     text = page.text
     mode = page.extraction_mode.value
     found = []
@@ -411,11 +616,10 @@ def _context_proposals(page, document_kind, folded, indices, label_spans=()):
             if value not in excerpt or len(excerpt) > 2000:
                 continue
             found.append((field, value, excerpt, method, strength))
-    found.extend(_city_state_proposals(page, document_kind, folded, indices, label_spans))
     return found
 
 
-def _city_state_proposals(page, document_kind, folded, indices, label_spans):
+def _city_state_proposals(page, document_kind, folded, indices, label_spans, *, legacy=False):
     text = page.text
     mode = page.extraction_mode.value
     found = []
@@ -428,6 +632,9 @@ def _city_state_proposals(page, document_kind, folded, indices, label_spans):
         begin, stop = _window(folded, match.start(), match.end())
         context = folded[begin:stop]
         if _PARTY_ADDRESS_BLOCKERS.search(context) or _CITY_BLOCKERS.search(context):
+            continue
+        # Municipio/UF seguem a frase inteira (fail-closed): uma parte na frase basta.
+        if not legacy and _PARTY_CLAUSE_MARKERS.search(context):
             continue
         if not _ADDRESS_ANCHOR.search(folded, max(begin, match.start() - _ANCHOR_REACH), match.start()):
             continue
@@ -459,7 +666,8 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
     evidencia para conferi-la. Endereco de parte, de advogado, de juizo ou de
     precedente nunca vira endereco do imovel. `include_legacy_labels` existe so
     para a verificacao de backup: aceita a evidencia de rotulo confirmada antes
-    do filtro de endereco de parte, sem oferece-la de novo como proposta.
+    do filtro de endereco de parte, e a de contexto da regra anterior a #293
+    (frase inteira), sem oferece-las de novo como proposta.
     `logical_document_for(pagina)` delimita a peca do export PJe: o tipo de
     peca pertinente (contrato, matricula, laudo) nao vaza para a peca seguinte.
     """
@@ -525,6 +733,6 @@ def property_proposals(workspace_id, document_id, checksum, filename, pages, *, 
                 if _LABEL_QUALIFICATION_BLOCKERS.search(nearby):
                     continue
             add(field, match[2].strip(), line.strip(), f"LABEL_{mode}_V1", "STRONG", page, rank_kind, current_piece)
-        for field, value, excerpt, method, strength in _context_proposals(page, document_kind, folded_page, page_indices, tuple(label_spans)):
+        for field, value, excerpt, method, strength in _context_proposals(page, document_kind, folded_page, page_indices, tuple(label_spans), legacy=include_legacy_labels):
             add(field, value, excerpt, method, strength, page, rank_kind, current_piece)
     return tuple(proposals)

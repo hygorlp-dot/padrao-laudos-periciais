@@ -110,6 +110,29 @@ conteúdo privado do workspace).
   jurisprudencial bloqueiam a proposta. Os bloqueadores são avaliados na frase
   inteira, com limite de palavra; abreviações ("Av.", "Dr.", "Rel.", "Des.", "nº")
   não terminam a frase. Contatos de timbre (telefone, e-mail) também bloqueiam.
+- Desde a #293, o vínculo de um endereço é decidido pela **oração**, não pela
+  frase inteira. Um logradouro, e o número, bairro e CEP que o seguem na mesma
+  cadeia, pertence ao marcador mais próximo antes dele. Marcadores de parte:
+  residência (morador, mora na, reside), localização ou sede (estabelecida,
+  sediada, "localizada" qualificando parte), juízo, foro, comarca, advogado,
+  testemunha, assistente e deslocamento (mudou-se, vive). Esses não propõem.
+  Pista do imóvel objeto propõe.
+  - "situado/localizado" segue o substantivo de imóvel logo antes dele, com
+    concordância de gênero; sem esse substantivo, qualifica a parte.
+  - "outra/nova unidade" nunca é a do objeto.
+  - "imóvel objeto, onde reside, …" fala do próprio imóvel só com a relativa
+    colada à pista do imóvel e no máximo um parentético participial
+    controlado. Deslocamento, cidade ou outra unidade no meio mantêm o
+    bloqueio.
+  - Sem marcador antes, a frase inteira decide, como antes.
+  - Precedente continua bloqueando a frase inteira.
+  - Município/UF seguem a frase inteira (fail-closed).
+  - Mais de um número ou unidade do imóvel na mesma frase continua "possível";
+    o que pertence à parte não conta.
+  - `BACKUP_REPLAY_LEGACY = ALLOWED` e `NEW_PROPOSAL_FROM_PARTY_ADDRESS =
+    PROHIBITED`: a reprodução do backup (`include_legacy_labels=True`) aceita
+    a união da regra nova com a anterior. Toda proposta nova é reproduzível, e
+    a evidência confirmada antes da #293 continua conferível.
 - No nível 1, só rótulo de endereço genérico ("Logradouro:", "CEP:") depois de
   qualificação de parte ou timbre institucional deixa de ser proposto. Rótulo que
   nomeia o imóvel ("Logradouro do imóvel:") e rótulos que não são endereço
