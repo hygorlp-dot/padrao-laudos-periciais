@@ -34,6 +34,7 @@ from ..application.models import (
     WorkspaceId,
     thaw_payload,
 )
+from ..application.workflow_status import workflow_status_to_mapping
 from ..application.ports import (
     ArtifactRevisionNotFound,
     InvalidCaseDocument,
@@ -247,6 +248,7 @@ class LocalApiServices:
     promote_workspace_recovery: object | None = None
     discard_workspace_recovery: object | None = None
     abandon_workspace_recovery: object | None = None
+    get_workflow_status: object | None = None
 
 
 def _workspace_dto(record: PericiaWorkspace) -> dict:
@@ -1330,6 +1332,15 @@ class LocalApi:
                     raise ValueError("Report draft amendment request is invalid")
                 record, snapshot = self._services.amend_report_draft.execute(workspace_id, **dto)
                 return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "workflow-status":
+                # Projecao somente leitura (#291): nenhum outro metodo existe aqui.
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.get_workflow_status is None:
+                    return _error(503, "WORKFLOW_STATUS_UNAVAILABLE")
+                status = self._services.get_workflow_status.execute(self._workspace_id(raw_segments[2]))
+                return _json_response(200, workflow_status_to_mapping(status))
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "budget-snapshot":
                 workspace_id = self._workspace_id(raw_segments[2])

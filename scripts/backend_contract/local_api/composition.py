@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import secrets
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,6 +83,7 @@ from ..infrastructure.sqlite import SQLiteApplicationStore
 from ..infrastructure.field_mobile import DeviceOfflineVaultRegistry
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
+from ..application.workflow_status import GetWorkflowStatus
 from ..application.case_analysis import AddCaseAnalysisItem, GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis, StartCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning, StartSuccessorPericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession, ConfirmInspectionVisit, InspectionReuseCandidates, ReuseInspectionRecords, StartSuccessorInspectionSession
@@ -693,6 +694,33 @@ def build_local_api(
         )
     get_budget_snapshot = GetBudgetSnapshot(get_latest_artifact)
     save_budget_snapshot = SaveBudgetSnapshot(store.revisions, get_latest_artifact, local_clock, local_ids)
+
+    @contextmanager
+    def workflow_status_reads():
+        # Mesma ordem de toda gravacao: autoridade privada (bytes e comandos de
+        # autoridade) e depois a conexao SQLite (todas as revisoes). Dentro das
+        # duas, nenhuma revisao concorrente e confirmada no meio da projecao.
+        with (private_store.authority_guard() if private_store is not None else nullcontext()):
+            with store.consistent_reads():
+                yield
+
+    # Situacao do fluxo (#291): somente leitura sobre as autoridades acima.
+    get_workflow_status = GetWorkflowStatus(
+        get_workspace=GetWorkspace(store.workspaces),
+        revisions=store.revisions,
+        consistent_reads=workflow_status_reads,
+        get_process_case=get_process_case,
+        get_case_analysis=get_case_analysis,
+        get_pericial_planning=get_pericial_planning,
+        get_inspection_session=get_inspection_session,
+        get_technical_snapshot=get_technical_snapshot,
+        get_construction_defect_analysis=get_construction_defect_analysis,
+        get_report_snapshot=get_report_snapshot,
+        get_budget_snapshot=get_budget_snapshot,
+        get_process_metadata_review=get_process_metadata_review,
+        ingestion=case_document_ingestion,
+        get_delivery_snapshot=get_delivery_snapshot,
+    )
     # Backup e recuperação alcançáveis pelo produto (#183). A raiz de staging é
     # IRMÃ da base viva, nunca ancestral: o marcador RECOVERY_NOT_PROMOTABLE de
     # um staging jamais pode quarentenar o armazenamento ativo.
@@ -960,6 +988,7 @@ def build_local_api(
         abandon_workspace_recovery=abandon_workspace_recovery,
         read_case_document=read_case_document,
         import_inspection_photo=import_inspection_photo,
+        get_workflow_status=get_workflow_status,
     )
     api = LocalApi(
         services,

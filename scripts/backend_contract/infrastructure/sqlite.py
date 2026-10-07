@@ -837,6 +837,16 @@ class SQLiteApplicationStore:
                     pass
             raise RepositoryError("falha ao abrir armazenamento SQLite") from exc
 
+    @contextmanager
+    def consistent_reads(self):
+        """Leituras seguidas sem gravacao no meio.
+
+        Toda gravacao desta sessao passa por esta mesma trava (conexao unica),
+        entao o que for lido aqui dentro pertence ao mesmo estado persistido.
+        """
+        with self._lock:
+            yield
+
     def snapshot(self) -> bytes:
         with self._lock:
             self._state_guard.validate()
