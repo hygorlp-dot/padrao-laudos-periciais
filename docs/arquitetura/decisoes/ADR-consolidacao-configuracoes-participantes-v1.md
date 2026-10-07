@@ -142,7 +142,9 @@ conteúdo privado do workspace).
       vez para todo o sintagma da pista ("próximo ao imóvel objeto da ação").
       Vizinhança só indica outra unidade sem alvo ("o imóvel vizinho") ou com
       alvo unidade ("vizinha ao imóvel"). Vizinho de um marco ("ao shopping",
-      "ao Condomínio X", "ao centro") não muda o vínculo.
+      "ao Condomínio X", "ao centro") não muda o vínculo, e o marco num
+      parentético (", ao lado do prédio X, situado") não é o substantivo do
+      particípio.
 
     A pista "objeto" devolve o vínculo a uma unidade "nova".
   - "imóvel objeto, onde reside, …" fala do próprio imóvel só com a relativa
@@ -159,6 +161,8 @@ conteúdo privado do workspace).
     - relativa colada à pista com deslocamento implícito ("onde reside hoje
       em Recife");
     - erro de gênero do OCR no particípio, que perde o endereço (fail-closed);
+    - "no bairro vizinho" sem alvo é outro lugar, mesmo depois do imóvel objeto
+      (troca de desenho contra "onde reside, no bairro vizinho, na Rua...");
     - "nova/novo/antiga unidade" sem a pista "objeto" entre ela e o particípio
       é outra unidade, por regra da #293, mesmo quando a frase diz depois que
       ela "é objeto da ação" (fail-closed);

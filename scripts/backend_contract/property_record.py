@@ -287,7 +287,8 @@ _SUBJECT_CUES = tuple(re.compile(r"\b" + re.escape(cue) + r"\b") for cue in _SUB
 # "outra unidade habitacional", "o predio ao lado": outra unidade, nunca a do objeto.
 _OTHER_UNIT_BEFORE = re.compile(
     r"\b(?:outr[oa]s?|nov[oa]s?|antig[oa]s?|divers[oa]s?|segund[oa]s?|demais|"
-    r"(?P<neighbor>(?:ao lado|em frente|defronte|proximo|perto|vizinh[oa]s?)(?:\s+(?:d[oa]s?|a|ao))?))\s+$"
+    r"(?P<neighbor>(?:ao lado|em frente|defronte|diante|proxim[oa]s?|pert[oa]|junto|atras|vizinh[oa]s?)"
+    r"(?:\s+(?:d[oa]s?|a|ao|as|aos))?))\s+$"
 )
 _NEIGHBOR_WORDS = re.compile(
     r"\b(?:vizinh[oa]s?|ao lado|em frente|defronte|diante|proxim[oa]s?|pert[oa]|junto|atras)\b"
@@ -295,6 +296,7 @@ _NEIGHBOR_WORDS = re.compile(
 # Vizinhanca so torna "outra unidade" quando nao tem alvo ("o imovel vizinho") ou
 # quando o alvo e uma unidade ("vizinha ao imovel"); vizinho de um marco ("ao
 # shopping", "ao Condominio X", "ao centro") nao muda o vinculo.
+_COMMA_BEFORE = re.compile(r",\s*$")
 _NEIGHBOR_AFTER = re.compile(r"\s+(?:vizinh[oa]s?|ao lado|em frente|defronte)\b")
 _NEIGHBOR_TARGET = re.compile(r"\s*(?:d[aoe]s?|a|ao|aos|as)\s+")
 _UNIT_TARGET = re.compile(
@@ -428,6 +430,20 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects, 
 
     nouns = list(_PROPERTY_NOUN.finditer(text, floor, item.start()))
     agreeing = [noun for noun in nouns if (noun.group("feminine") is not None or noun.group("residence") is not None) == feminine]
+
+    def landmark(noun):
+        # ", ao lado do predio X, situado": parentetico de localizacao, o marco nao e
+        # a unidade. Sem a virgula ("fica ao lado do predio, situado") o participio
+        # pode ser do predio e o caso continua com ele.
+        low = max(floor, noun.start() - 24)
+        before = _OTHER_UNIT_BEFORE.search(text[low:noun.start()])
+        return (
+            before is not None and before.group("neighbor") is not None
+            and not _UNIT_TARGET.match(text, noun.start())
+            and _COMMA_BEFORE.search(text, max(floor, low + before.start() - 4), low + before.start()) is not None
+        )
+
+    agreeing = [noun for noun in agreeing if not landmark(noun)]
     if agreeing:
         noun = agreeing[-1]
         position = bisect_right(introducers, noun.start()) - 1
@@ -455,7 +471,7 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects, 
         anchored = any(end <= item.start() for _start, end in subjects[low:bisect_left(subjects, (item.start(), -1))])
         # Onde a regra anterior bloqueava, "objeto da acao ao lado da praca, situada"
         # e ambiguo (o participio pode ser do marco): sem ancora estrita.
-        nearby = _NEIGHBOR_WORDS.search(text, noun.end(), item.start()) is not None
+        nearby = _NEIGHBOR_WORDS.search(text, max(floor, noun.start() - 24), item.start()) is not None
         return "SUBJECT" if anchored and not nearby and not interrupted(noun.end(), strict=True) else "SUBJECT_LOOSE"
     if nouns:
         return "PARTY"

@@ -221,6 +221,13 @@ PROBES = {
     "r7_cpf_proxima_a_escola": "FULANA, CPF 000.000.000-00, comprou a casa objeto da ação próxima à escola, situada na Rua da Parte, nº 10.\n",
     "r7_cpf_junto_a_escola": "FULANA, CPF 000.000.000-00, comprou a casa objeto da ação junto à escola, situada na Rua da Parte, nº 10.\n",
     "r7_cpf_atras_da_escola": "FULANA, CPF 000.000.000-00, comprou a casa objeto da ação atrás da escola, situada na Rua da Parte, nº 10.\n",
+    # Rodada 8 da revisão independente da PR #294.
+    "r8_ao_lado_do_predio_situado": "O imóvel objeto da ação, ao lado do prédio da prefeitura, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r8_proximo_ao_conjunto_situado": "O imóvel objeto da ação, próximo ao conjunto habitacional, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r8_proximo_ao_residencial_situado": "O imóvel objeto da ação, próximo ao Residencial Sintético, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r8_perto_do_condominio_situado": "O imóvel objeto da ação, perto do condomínio, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r8_cpf_proxima_a_unidade_objeto": "FULANA, CPF 000.000.000-00, tem casa próxima à unidade habitacional objeto da ação, situada na Rua da Parte, nº 10.\n",
+    "r8_cpf_vizinha_da_casa_objeto": "FULANA, CPF 000.000.000-00, comprou a unidade habitacional vizinha da casa objeto da ação, situada na Rua da Parte, nº 10.\n",
 }
 
 
@@ -796,6 +803,25 @@ MAIN_8941B2C_REPLAY_IDS = {
     "r7_cpf_proxima_a_escola": (),
     "r7_cpf_junto_a_escola": (),
     "r7_cpf_atras_da_escola": (),
+    "r8_ao_lado_do_predio_situado": (
+        "21b3125b7394846b87dd0a260a46f50f2c6fbabddc6d12c247fbd0799f77e685",
+        "f48a1ee39d7dde5548adeda66b1deec88a1901848affa5725c5dcc199b33afa7",
+    ),
+    "r8_proximo_ao_conjunto_situado": (
+        "1c481322dfcea64fcc3044b638c3a6bcd73c9151bc5eee413ee869007369111c",
+        "3815c4f5ddeb6934129a177c3a34b0b63356ea07fcb96985e0e1d9461ab5cdb1",
+    ),
+    "r8_proximo_ao_residencial_situado": (
+        "b95e68888fdaf0b2071620203bdbeaf4813e0b42d94d62e13cfbfe78a8eef808",
+        "db210d2e654ca178415f4ed5e0d93db494bdf1b84f1e157d82c94560663100cc",
+        "ff59c13f423ae6319ae356ad428e15eb35414da046ad4f5c4035028211e4046f",
+    ),
+    "r8_perto_do_condominio_situado": (
+        "5488faa3956b06732044921323ea2b540b4ef61bbf64652d5479768ce47c2d68",
+        "d9c9dab78418590566144771488c7d0ee435da2fd9aab38ed15391e8af8c5986",
+    ),
+    "r8_cpf_proxima_a_unidade_objeto": (),
+    "r8_cpf_vizinha_da_casa_objeto": (),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -944,6 +970,13 @@ EXPECTED = {
     "r7_cpf_proxima_a_escola": set(),
     "r7_cpf_junto_a_escola": set(),
     "r7_cpf_atras_da_escola": set(),
+    # Rodada 8 da revisão independente da PR #294.
+    "r8_ao_lado_do_predio_situado": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r8_proximo_ao_conjunto_situado": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r8_proximo_ao_residencial_situado": {("development", "Residencial Sintético", "STRONG"), ("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r8_perto_do_condominio_situado": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r8_cpf_proxima_a_unidade_objeto": set(),
+    "r8_cpf_vizinha_da_casa_objeto": set(),
 }
 _PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 
