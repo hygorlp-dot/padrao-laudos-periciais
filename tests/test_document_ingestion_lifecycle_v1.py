@@ -75,31 +75,87 @@ def _import(runtime, workspace_id, content, filename="autos.pdf"):
 
 
 def _materials(runtime, workspace_id):
+    """Listagem PELA PONTE: e o comportamento sob teste onde ela e usada."""
     status, _, body = request(runtime, "GET", f"/app-api/v1/workspaces/{workspace_id}/materials")
     assert status == 200, body
     return json.loads(body)["items"]
 
 
-def test_red_slow_derivation_over_bridge_timeout_is_not_a_terminal_failure(tmp_path):
-    """RED de #266: bytes aceitos + derivacao mais longa que o timeout do bridge."""
+def _persisted_materials(runtime, workspace_id):
+    """Consulta AUXILIAR de persistencia, direto na Local API (#296).
+
+    Onde a listagem nao e o que o teste prova, ela nao pode depender do prazo
+    curto (1,5 s) da ponte: a derivacao ainda escreve na mesma conexao SQLite
+    (RLock compartilhado) e, num runner lento, a leitura atravessava o prazo e
+    a ponte respondia 503 sem relacao com o contrato do teste.
+    """
+    from tests.test_local_api_v1 import http_request
+
+    status, _, body = http_request(
+        runtime._local_api.server, "GET", f"/v1/workspaces/{workspace_id}/materials",
+        headers={"X-Local-API-Token": TOKEN},
+    )
+    assert status == 200, body
+    return json.loads(body)["items"]
+
+
+def _hold_store(runtime, seconds):
+    """Ocupa a conexao SQLite real por um tempo finito (escrita concorrente simulada)."""
+    ready, release = threading.Event(), threading.Event()
+
+    def hold():
+        with runtime._local_api._store._lock:
+            ready.set()
+            release.wait(seconds)
+
+    thread = threading.Thread(target=hold, name="busy-store", daemon=True)
+    thread.start()
+    assert ready.wait(5), "a conexao SQLite nunca foi ocupada"
+    return thread, release
+
+
+def _red_slow_derivation(tmp_path, *, busy_store_seconds=0.0):
     slow = SlowPjeIntake(delay=3.0)
     runtime = build_product_runtime(
         tmp_path / "product.db", frontend_build(tmp_path), token=TOKEN, private_root=tmp_path / "private",
         pje_intake=slow, config=ProductBridgeConfig(upstream_timeout_seconds=1.5),
     )
     runtime.start()
+    holder = None
     try:
         workspace_id = _workspace(runtime)
         content = _synthetic_pje(tmp_path)
+        # A importacao continua passando pela ponte: e ela que o RED prova.
         status, _, body = _import(runtime, workspace_id, content)
         assert slow.finished.wait(30), "a derivacao nunca terminou"
+        if busy_store_seconds:
+            holder = _hold_store(runtime, busy_store_seconds)
         # A ordem causal do finding: a fonte foi persistida e a derivacao terminou.
-        materials = _materials(runtime, workspace_id)
+        materials = _persisted_materials(runtime, workspace_id)
         assert len(materials) == 1
         # Contrato: se a fonte foi aceita, a resposta nao pode ser falha terminal.
         assert status < 500, f"falso erro terminal {status} sobre fonte ja persistida: {body[:200]!r}"
     finally:
+        if holder is not None:
+            thread, release = holder
+            release.set()
+            thread.join(10)
         runtime.close()
+
+
+def test_red_slow_derivation_over_bridge_timeout_is_not_a_terminal_failure(tmp_path):
+    """RED de #266: bytes aceitos + derivacao mais longa que o timeout do bridge."""
+    _red_slow_derivation(tmp_path)
+
+
+def test_red_auxiliary_read_does_not_depend_on_the_bridge_deadline(tmp_path):
+    """#296: banco ocupado alem do prazo da ponte na conferencia de persistencia.
+
+    Reproducao controlada da fragilidade: com a listagem PELA PONTE, o mesmo
+    cenario respondia 503 LOCAL_API_UNAVAILABLE na conferencia, e nao na
+    importacao que o teste prova.
+    """
+    _red_slow_derivation(tmp_path, busy_store_seconds=2.0)
 
 
 # ----------------------------------------------------------------- T1-T10 (#266)
