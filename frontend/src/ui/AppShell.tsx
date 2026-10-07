@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 import type { ShellRoute } from "../routes/routeCatalog";
-import { Sidebar } from "./Sidebar";
+import { Sidebar, type SidebarStageStatus } from "./Sidebar";
 import { TopBar } from "./TopBar";
 
 type AppShellProps = {
@@ -9,6 +9,7 @@ type AppShellProps = {
   currentRoute?: ShellRoute;
   workspaceId?: string;
   workspaceName?: string;
+  stageStatus?: SidebarStageStatus;
   children: ReactNode;
 };
 
@@ -17,6 +18,7 @@ export function AppShell({
   currentRoute,
   workspaceId,
   workspaceName,
+  stageStatus,
   children,
 }: AppShellProps) {
   const routeLabel = currentRoute?.label ?? "Página não encontrada";
@@ -30,7 +32,7 @@ export function AppShell({
         <p className="visually-hidden" aria-live="polite" aria-atomic="true">
           Rota atual: {routeLabel}
         </p>
-        <Sidebar currentPath={currentPath} workspaceId={workspaceId} workspaceName={workspaceName} />
+        <Sidebar currentPath={currentPath} workspaceId={workspaceId} workspaceName={workspaceName} stageStatus={stageStatus} />
         <div className="workspace-shell">
           <TopBar currentRoute={currentRoute} workspaceName={workspaceName} />
           <main id="main-content" tabIndex={-1}>
