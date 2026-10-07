@@ -289,6 +289,7 @@ _OTHER_UNIT_BEFORE = re.compile(
     r"\b(?:outr[oa]s?|nov[oa]s?|antig[oa]s?|divers[oa]s?|segund[oa]s?|demais|"
     r"(?P<neighbor>(?:ao lado|em frente|defronte|proximo|perto|vizinh[oa]s?)(?:\s+(?:d[oa]s?|a|ao))?))\s+$"
 )
+_NEIGHBOR_WORDS = re.compile(r"\b(?:vizinh[oa]s?|ao lado|em frente|defronte|proximo|perto)\b")
 _PARTICIPLE_BEFORE = re.compile(r"\b(?:situad|localizad)[oa]s?\s+$")
 _OTHER_UNIT_AFTER = re.compile(r"\s+(?:vizinh|ao lado|em frente|defronte)")
 # "no bairro vizinho", "outra cidade": o endereco que segue e de outro lugar.
@@ -415,12 +416,16 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects, 
         position = bisect_right(introducers, noun.start()) - 1
         if position >= 0 and introducer_ends[position] >= noun.end():
             return "PARTY"
+        # "novo imovel objeto da acao": a pista "objeto" entre eles diz que e o objeto.
+        objeto = _OBJECT.search(text, noun.end(), item.start()) is not None
+        # "unidade habitacional vizinha ao imovel, situada": a propria pista e outra unidade.
+        position = bisect_left(others, noun.start())
+        if not objeto and position < len(others) and others[position] < noun.end():
+            return "OTHER"
         # "imovel ao lado do objeto da acao": a unidade vizinha no meio.
         position = bisect_right(others, noun.end() - 1)
         if position < len(others) and others[position] < item.start():
             return "OTHER"
-        # "novo imovel objeto da acao": a pista "objeto" entre eles diz que e o objeto.
-        objeto = _OBJECT.search(text, noun.end(), item.start()) is not None
         if not objeto and (
             _OTHER_UNIT_BEFORE.search(text[max(floor, noun.start() - 24):noun.start()])
             or _OTHER_UNIT_AFTER.match(text, noun.end())
@@ -431,7 +436,10 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects, 
         # Ancorado: uma pista do imovel objeto entre o substantivo e o participio.
         low = bisect_left(subjects, (noun.start(), -1))
         anchored = any(end <= item.start() for _start, end in subjects[low:bisect_left(subjects, (item.start(), -1))])
-        return "SUBJECT" if anchored and not interrupted(noun.end(), strict=True) else "SUBJECT_LOOSE"
+        # Onde a regra anterior bloqueava, "objeto da acao ao lado da praca, situada"
+        # e ambiguo (o participio pode ser do marco): sem ancora estrita.
+        nearby = _NEIGHBOR_WORDS.search(text, noun.end(), item.start()) is not None
+        return "SUBJECT" if anchored and not nearby and not interrupted(noun.end(), strict=True) else "SUBJECT_LOOSE"
     if nouns:
         return "PARTY"
     if not text[begin:item.start()].strip(" \t\n,.;:-"):
@@ -476,10 +484,13 @@ def _clause_markers(text):
         if neighbor and _PARTICIPLE_BEFORE.search(text, max(begin_of(group_start), floor + before.start() - 24), floor + before.start()):
             # "situado proximo ao Conjunto X, na Rua...": referencia de localizacao do proprio imovel.
             continue
-        # "objeto da acao vizinho a escola" segue sendo o objeto; "objeto ... vizinho ao imovel" nao.
-        after = _OTHER_UNIT_AFTER.match(text, group_end)
-        neighbor = neighbor or (after is not None and _PROPERTY_NOUN.search(text, after.end(), after.end() + 30) is not None)
         objeto = any("objeto" in value for _start, _end, value in members)
+        # Vizinhanca depois da pista: "unidade habitacional vizinha ao imovel" e outra
+        # unidade; quem esta "ao lado do predio" no "imovel objeto" e o proprio objeto.
+        after = _OTHER_UNIT_AFTER.match(text, group_end)
+        neighbor = neighbor or (
+            not objeto and after is not None and _PROPERTY_NOUN.search(text, after.end(), after.end() + 30) is not None
+        )
         # "novo imovel objeto da acao" e o objeto; "ao lado do (imovel) objeto" nao.
         kind = "OTHER" if neighbor or (before is not None and not objeto) else "SUBJECT"
         for start, end, _value in members:

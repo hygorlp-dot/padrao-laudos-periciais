@@ -205,6 +205,13 @@ PROBES = {
     "r5_financiado_e_que_foi": "O imóvel objeto da ação, financiado e que foi entregue à autora, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
     # Vizinhanca que aponta para um marco, nao para outro imovel.
     "r5_vizinho_a_escola": "O imóvel objeto da ação vizinho à escola fica na Rua do Imóvel, nº 20.\n",
+    # Rodada 6 da revisão independente da PR #294.
+    "r6_objeto_ao_lado_do_predio": "O imóvel objeto da ação ao lado do prédio da prefeitura fica na Rua do Imóvel, nº 20.\n",
+    "r6_objeto_vizinho_condominio": "O imóvel objeto da ação vizinho à escola do condomínio fica na Rua do Imóvel, nº 20.\n",
+    "r6_unidade_vizinha_ao_imovel": "A unidade habitacional vizinha ao imóvel, situada na Rua da Parte, nº 10, não foi vistoriada.\n",
+    "r6_cpf_vizinha_a_creche": "FULANA, CPF 000.000.000-00, comprou a unidade habitacional objeto da ação vizinha à creche, situada na Rua da Parte, nº 10.\n",
+    "r6_cpf_ao_lado_da_praca": "FULANA, CPF 000.000.000-00, comprou a casa objeto da ação ao lado da praça, situada na Rua da Parte, nº 10.\n",
+    "r6_em_frente_ao_apartamento": "A unidade habitacional em frente ao apartamento 302, na Rua da Parte, nº 10, foi vistoriada.\n",
 }
 
 
@@ -736,6 +743,25 @@ MAIN_8941B2C_REPLAY_IDS = {
         "213fb20820582b1083a8f2bdabf099e6af58a57e72552d02d89b2dffdaf4fa03",
         "2f9b3387ac57943d240d2a33eb872a1a9d0df6d038e73a761a41423ed8d78604",
     ),
+    "r6_objeto_ao_lado_do_predio": (
+        "5e3bb2a7e49989a6828654b4b7d174b2c2d5e4379873a63a417411944673884a",
+        "7672db6235f3d38377f71532c74c66ffc52fdd4798985eb84cc02b9f5b31dda4",
+    ),
+    "r6_objeto_vizinho_condominio": (
+        "901abb6932b163193ec38c6447d3adf36f5ebd8bf59c44ed3281f84b0e49f8f6",
+        "f3e6d476a8d98ebfb888aee8cc37bb010a70e474234da30c8dda217dd3e50a7e",
+    ),
+    "r6_unidade_vizinha_ao_imovel": (
+        "351978a4bdc376f447401e3261799fde3050cd4a28f1cc7211feef9d4846efdd",
+        "ca3bfa484a63b40815969cf19390aea2398c9415017e3e9bb199d2bef1dcb927",
+    ),
+    "r6_cpf_vizinha_a_creche": (),
+    "r6_cpf_ao_lado_da_praca": (),
+    "r6_em_frente_ao_apartamento": (
+        "1ca4ac61f6df43251d3eae0cee41ad4f83ee94cae2a55023d9eb6f675b7ca1b9",
+        "50b63da9d2eadb18f876a0e252d3e9c9d3eca17bc721bd579f929d773e9a0df7",
+        "fa9c3a8974a9690dabcb537ec9af2f98a89a555f3f9db8286c4d37ec60eff60c",
+    ),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -868,6 +894,13 @@ EXPECTED = {
     "r5_que_entre_travessoes": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
     "r5_financiado_e_que_foi": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
     "r5_vizinho_a_escola": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    # Rodada 6 da revisão independente da PR #294.
+    "r6_objeto_ao_lado_do_predio": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r6_objeto_vizinho_condominio": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r6_unidade_vizinha_ao_imovel": set(),
+    "r6_cpf_vizinha_a_creche": set(),
+    "r6_cpf_ao_lado_da_praca": set(),
+    "r6_em_frente_ao_apartamento": set(),
 }
 _PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 
