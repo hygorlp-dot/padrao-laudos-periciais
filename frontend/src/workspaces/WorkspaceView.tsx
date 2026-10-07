@@ -1,7 +1,11 @@
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 
 import { ExpertIdentityProvider } from "../data/expertIdentity";
 import { getWorkspace, WorkspaceApiError, type Workspace } from "../data/workspaces";
+import { getWorkflowStatus } from "../data/workflowStatus";
+import { WORKSPACE_MUTATED } from "../data/mutationSignal";
+import type { SidebarStageStatus } from "../ui/Sidebar";
+import { WorkspaceHome, type WorkflowStatusView } from "./WorkspaceHome";
 import { navigate } from "../app/router";
 import { workspacePath, type ShellRoute } from "../routes/routeCatalog";
 import { AppShell } from "../ui/AppShell";
@@ -85,6 +89,49 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
     return () => controller.abort();
   }, [workspaceId]);
 
+  // Situação das etapas (#291): consultada de novo a cada troca de rota, para
+  // refletir o que acabou de ser feito. O componente é recriado por perícia
+  // (`key`), então uma resposta nunca chega a outra perícia; a resposta de
+  // uma requisição abortada é descartada.
+  const [workflow, setWorkflow] = useState<WorkflowStatusView>({ kind: "loading" });
+  const [workflowAttempt, setWorkflowAttempt] = useState(0);
+  // Uma gravação concluída nesta perícia torna a situação lida antes possivelmente
+  // antiga: relê (sem voltar a "carregando"), agrupando gravações em sequência.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onMutated = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== workspaceId) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => setWorkflowAttempt((value) => value + 1), 150);
+    };
+    window.addEventListener(WORKSPACE_MUTATED, onMutated);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener(WORKSPACE_MUTATED, onMutated);
+    };
+  }, [workspaceId]);
+  useEffect(() => {
+    const controller = new AbortController();
+    getWorkflowStatus(workspaceId, controller.signal).then(
+      (value) => setWorkflow({ kind: "ready", value }),
+      () => {
+        if (!controller.signal.aborted) setWorkflow({ kind: "unavailable" });
+      },
+    );
+    return () => controller.abort();
+  }, [workspaceId, currentPath, workflowAttempt]);
+  const retryWorkflow = useCallback(() => {
+    setWorkflow({ kind: "loading" });
+    setWorkflowAttempt((value) => value + 1);
+  }, []);
+  const stageStatus = useMemo<SidebarStageStatus>(
+    () =>
+      workflow.kind === "ready"
+        ? { kind: "ready", stages: new Map(workflow.value.stages.map((item) => [item.stage, item])) }
+        : workflow,
+    [workflow],
+  );
+
   useLayoutEffect(() => {
     if (state.kind === "not-found") {
       document.title = "Sistema Pericial — Perícia não encontrada";
@@ -125,6 +172,7 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
       currentRoute={route}
       workspaceId={workspaceId}
       workspaceName={workspace?.name}
+      stageStatus={stageStatus}
     >
       <ExpertIdentityProvider workspaceId={workspaceId}>
       <article className="route-view" aria-labelledby="page-title">
@@ -151,16 +199,7 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
           </section>
         ) : null}
         {state.kind === "ready" && route.kind === "home" ? (
-          <section className="workspace-ready" aria-labelledby="active-workspace-name">
-            <span className="state-mark" aria-hidden="true">✓</span>
-            <div>
-              <h2 id="active-workspace-name">{state.workspace.name}</h2>
-              <p>Esta perícia está pronta para percorrer o fluxo técnico.</p>
-              <time dateTime={state.workspace.created_at}>
-                Criada em {new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium" }).format(new Date(state.workspace.created_at))}
-              </time>
-            </div>
-          </section>
+          <WorkspaceHome workspace={state.workspace} status={workflow} onRetry={retryWorkflow} />
         ) : null}
         {state.kind === "ready" && route.kind === "home" ? <WorkspaceSettingsPanel workspaceId={workspaceId} /> : null}
         {state.kind === "ready" && route.path === "/processo" ? (

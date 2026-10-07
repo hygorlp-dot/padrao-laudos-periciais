@@ -210,6 +210,9 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-snapshot" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
+        # #291: situacao do fluxo, somente leitura.
+        if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "workflow-status" and method == "GET":
+            return f"/v1/workspaces/{remainder[0]}/workflow-status"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "budget-snapshot" and method in {"GET", "POST"}:
             return f"/v1/workspaces/{remainder[0]}/{remainder[1]}"
         if len(remainder) == 2 and _CANONICAL_UUID.fullmatch(remainder[0]) and remainder[1] == "delivery-templates" and method == "POST":

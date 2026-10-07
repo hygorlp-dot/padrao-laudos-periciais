@@ -87,6 +87,7 @@ def test_openapi_component_reuses_canonical_schema_and_declares_semantic_boundar
         "/v1/workspaces/{workspace_id}/delivery-snapshot/reissue",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/history",
         "/v1/workspaces/{workspace_id}/delivery-snapshot/artifacts/{content_id}",
+        "/v1/workspaces/{workspace_id}/workflow-status",
         "/v1/workspaces/{workspace_id}/budget-snapshot",
         "/v1/workspaces/{workspace_id}/budget-snapshot/history",
         "/v1/workspaces/{workspace_id}/budget-snapshot/items",
