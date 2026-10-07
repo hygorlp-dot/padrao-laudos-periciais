@@ -69,6 +69,8 @@ def test_frontend_production_source_has_no_secret_or_unbounded_network_capabilit
             "frontend/src/data/reportSnapshot.ts",
             "frontend/src/data/siteLocation.ts",
             "frontend/src/data/technicalSnapshot.ts",
+        # #291: situação do fluxo, só GET same-origin /app-api (projeção somente leitura).
+        "frontend/src/data/workflowStatus.ts",
         "frontend/src/data/workspaceRecovery.ts",
         "frontend/src/data/workspaces.ts",
     ]
