@@ -8,6 +8,7 @@ import pytest
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
 from scripts.backend_contract.product_bridge.server import ProductBridgeConfig
 
+from request_worker_probe import live_request_workers
 from test_product_bridge_v1 import TOKEN, _wait_for_product_shutdown, frontend_build
 
 
@@ -53,9 +54,8 @@ def test_controlled_shutdown_delay_exposes_fixed_wall_clock_assertion(
     dripper = Thread(target=drip_body, daemon=True)
     dripper.start()
     try:
-        request_threads = runtime._bridge._server._threads
         for _ in range(50):
-            if any(thread.is_alive() for thread in request_threads):
+            if live_request_workers(runtime._bridge._server):
                 break
             Event().wait(0.01)
         else:
@@ -84,7 +84,7 @@ def test_controlled_shutdown_delay_exposes_fixed_wall_clock_assertion(
         assert runtime._bridge._thread is not None
         assert not runtime._bridge._thread.is_alive()
         assert runtime._bridge._server.socket.fileno() == -1
-        assert all(not thread.is_alive() for thread in runtime._bridge._server._threads)
+        assert not live_request_workers(runtime._bridge._server)
     finally:
         release_shutdown.set()
         stop_drip.set()

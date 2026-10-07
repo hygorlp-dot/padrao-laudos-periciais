@@ -21,6 +21,8 @@ from scripts.backend_contract.product_bridge.server import (
     ProductBridgeServerStartError,
 )
 
+from request_worker_probe import live_request_workers
+
 
 TOKEN = "product-bridge-test-token-with-sufficient-entropy"
 
@@ -1024,10 +1026,7 @@ def _product_shutdown_completed(runtime) -> bool:
     bridge = runtime._bridge
     server = bridge._server
     bridge_thread = bridge._thread
-    try:
-        request_workers_dead = all(not thread.is_alive() for thread in server._threads)
-    except TypeError:
-        request_workers_dead = True
+    request_workers_dead = not live_request_workers(server)
     return (
         runtime._closed
         and bridge_thread is not None
@@ -1078,8 +1077,7 @@ def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
     dripper = Thread(target=drip_body)
     dripper.start()
     for _ in range(50):
-        request_threads = getattr(runtime._bridge._server, "_threads", ())
-        if any(thread.is_alive() for thread in request_threads):
+        if live_request_workers(runtime._bridge._server):
             break
         Event().wait(0.01)
     else:
