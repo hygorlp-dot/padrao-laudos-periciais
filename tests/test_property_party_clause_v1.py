@@ -84,6 +84,55 @@ PROBES = {
     "situado_abre_a_frase": "O laudo descreve o caso. Situado na Rua do Imóvel, nº 20, o imóvel objeto da ação apresenta fissuras.\n",
     # Quebra de linha do PDF não abre frase: "localizada" ainda qualifica a vendedora.
     "quebra_de_linha_vendedora": "A VENDEDORA,\nlocalizada na Rua da Parte, nº 10, vende o imóvel objeto deste contrato.\n",
+    # Reproduções da revisão independente da PR #294.
+    # P1-1: endereco de parte que a main bloqueava nao pode virar proposta.
+    "r_telefone_depois": "FULANA, proprietária do imóvel objeto da ação, na Rua da Parte, nº 10, telefone (81) 0000-0000.\n",
+    "r_email_depois": "FULANA, proprietária do imóvel objeto da ação, Rua da Parte, nº 10, e-mail fulana@x.com.\n",
+    "r_oab_depois": "O imóvel objeto da ação, situado na Rua da Parte, nº 10, Dr. Fulano, OAB/PE 0000.\n",
+    "r_construtora_situada_cnpj": "A unidade habitacional foi vendida pela construtora, situada na Rua da Parte, nº 10, CNPJ 00.000.000/0001-00.\n",
+    "r_re_localizada_cnpj": "A casa foi construída pela ré, localizada na Rua da Parte, nº 10, inscrita no CNPJ 00.000.000/0001-00.\n",
+    "r_onde_residia_para": "A autora, CPF 000.000.000-00, deixou o imóvel objeto da ação, onde residia, para a Rua da Parte, nº 10.\n",
+    "r_onde_nao_mais_reside": "A autora, CPF 000.000.000-00, deixou o imóvel objeto da ação, onde não mais reside, na Rua da Parte, nº 10.\n",
+    "r_filial": "O réu, CNPJ 00.000.000/0001-00, construiu o imóvel objeto da ação e mantém filial na Rua da Parte, nº 10.\n",
+    "r_endereco_rotulo": "FULANA, CPF 000.000.000-00, proprietária do imóvel objeto da ação, endereço: Rua da Parte, nº 10.\n",
+    # P1-2: participio feminino qualificando parte feminina.
+    "r_entregue_pela_construtora": "A unidade habitacional foi entregue pela construtora, localizada na Rua da Parte, nº 10.\n",
+    "r_construida_pela_vendedora": "A casa objeto da ação foi construída pela vendedora, situada na Rua da Parte, nº 10.\n",
+    # P1-3: endereco do imovel que a main achava continua achado.
+    "r_unidade_apartamento_situada": "CONTRATO DE COMPRA E VENDA\nA unidade habitacional, apartamento nº 302, situada na Rua do Imóvel, nº 20, Bairro Imóvel Sintético.\n",
+    "r_apartamento_unidade_autonoma": "O apartamento nº 302, unidade autônoma do Bloco B, situado na Rua do Imóvel, nº 20.\n",
+    "r_bem_objeto": "O bem objeto da ação, situado na Rua do Imóvel, nº 20, apresenta fissuras.\n",
+    "r_sobrado_objeto": "O sobrado objeto da ação, situado na Rua do Imóvel, nº 20, apresenta fissuras.\n",
+    "r_objeto_da_lide": "Trata-se do objeto da lide, situado na Rua do Imóvel, nº 20.\n",
+    "r_alcance_longo": "A unidade habitacional objeto desta ação, construída no âmbito do programa habitacional federal em 2014, situada na Rua do Imóvel, nº 20.\n",
+    "r_nesta_comarca": "O imóvel objeto da ação, situado nesta Comarca, na Rua do Imóvel, nº 20, apresenta fissuras.\n",
+    "r_municipio_e_comarca": "O imóvel objeto da ação, localizado no Município e Comarca de Recife, na Rua do Imóvel, nº 20, apresenta fissuras.\n",
+    "r_matricula_cidade_comarca": "MATRÍCULA 12345\nIMÓVEL: casa residencial, situada nesta cidade e comarca, na Rua do Imóvel, nº 20.\n",
+    # P2-1: marcadores de narrativa nao apagam o endereco do imovel.
+    "r_assistentes_vistoria": "LAUDO\nA vistoria, acompanhada pelos assistentes técnicos, ocorreu na Rua do Imóvel, nº 20, imóvel objeto da ação.\n",
+    "r_onde_vive": "A autora é proprietária do imóvel objeto da ação, onde vive, na Rua do Imóvel, nº 20.\n",
+    "r_apos_a_mudanca": "Após a mudança, a autora notou fissuras na casa da Rua do Imóvel, nº 20, objeto da ação.\n",
+    "r_transferiu_a_posse": "A construtora transferiu à autora a posse da casa da Rua do Imóvel, nº 20, objeto da ação.\n",
+    # P2-3: outras formas de domicilio e hifenizacao do PDF.
+    "r_com_domicilio": "FULANA, com domicílio na Rua da Parte, nº 10, proprietária do imóvel objeto da ação situado na Rua do Imóvel, nº 20.\n",
+    "r_cuja_residencia": "FULANA, cuja residência fica na Rua da Parte, nº 10, é proprietária do imóvel objeto da ação situado na Rua do Imóvel, nº 20.\n",
+    "r_habita": "FULANA, que habita na Rua da Parte, nº 10, é proprietária do imóvel objeto da ação situado na Rua do Imóvel, nº 20.\n",
+    "r_hifenizacao": "FULANA, mora-\ndora da Rua da Parte, nº 10, proprietária do imóvel objeto da ação situado na Rua do Imóvel, nº 20.\n",
+    # Demais sondas adversariais da revisao.
+    "r_endereco_antes_reside": "Na Rua da Parte, nº 10, reside a autora, proprietária do imóvel objeto da ação situado na Rua do Imóvel, nº 20.\n",
+    "r_endereco_antes_moradora": "Rua da Parte, nº 10, é o endereço de FULANA, moradora, proprietária do imóvel objeto da ação.\n",
+    "r_onde_bairro_vizinho": "A autora é proprietária do imóvel objeto da ação, onde reside, no bairro vizinho, na Rua da Parte, nº 10.\n",
+    "r_parentetico_abandonado": "A autora possuía o imóvel objeto da ação, abandonado em 2019, onde reside, na Rua da Parte, nº 10.\n",
+    "r_parentetico_vendido": "A autora vendeu o imóvel objeto da ação, vendido em 2019, onde reside, na Rua da Parte, nº 10.\n",
+    "r_onde_residia_no_imovel": "A autora vendeu o imóvel objeto da ação, onde residia na Rua do Imóvel, nº 20.\n",
+    "r_predio_ao_lado": "O imóvel objeto da ação fica ao lado do prédio, situado na Rua da Parte, nº 10.\n",
+    "r_transferida_para": "A autora foi transferida para a Rua da Parte, nº 10, e o imóvel objeto da ação, situado na Rua do Imóvel, nº 20, ficou vazio.\n",
+    "r_realocada": "A família foi realocada na Rua da Parte, nº 10, e o imóvel objeto da ação, situado na Rua do Imóvel, nº 20, foi interditado.\n",
+    "r_mora_no_imovel": "A autora, que mora no imóvel desde 2015, aponta vícios na casa da Rua do Imóvel, nº 20, objeto da ação.\n",
+    "r_novo_imovel_objeto": "A autora recebeu as chaves do novo imóvel objeto da ação, situado na Rua do Imóvel, nº 20, em 2015.\n",
+    "r_nova_unidade_objeto": "A autora adquiriu nova unidade habitacional, objeto da ação, situada na Rua do Imóvel, nº 20.\n",
+    "r_residencia_objeto": "A residência da autora, imóvel objeto da ação, situada na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r_dois_enderecos_mesma_pista": "O imóvel objeto da ação, situado na Rua do Imóvel, nº 20, e a casa de FULANA, na Rua da Parte, nº 10.\n",
 }
 
 
@@ -267,6 +316,168 @@ MAIN_8941B2C_REPLAY_IDS = {
         "7576af8d93a517be3eeb90d845c5f36b2e57724367106b2e54b854c4d9ca8042",
         "f5afbc605f4e469cb726d61d9e206d51746ac85a5a1109f4d4def0c7e96169e0",
     ),
+    "r_telefone_depois": (),
+    "r_email_depois": (),
+    "r_oab_depois": (),
+    "r_construtora_situada_cnpj": (),
+    "r_re_localizada_cnpj": (),
+    "r_onde_residia_para": (),
+    "r_onde_nao_mais_reside": (),
+    "r_filial": (),
+    "r_endereco_rotulo": (),
+    "r_entregue_pela_construtora": (
+        "46859bec846cbde103494270c07cbecf894aef1811e4a737ee5bb26b61ac25d6",
+        "6a5ab10b3fbb5a7eb33280adba43c704fa5e3cb9c112cb342f7e4d74076ad8de",
+    ),
+    "r_construida_pela_vendedora": (
+        "26048a26776383cac169d5cb9061df77434dacd3e8fc6c6ab2ba54161390c05f",
+        "4ede6ad8d5502bd3e6fe83e5b76121948cc2085bb06559324922528e23c162cb",
+    ),
+    "r_unidade_apartamento_situada": (
+        "004403aa34d7b850b6c3c3f35c1479876a58eb0f03305a14a7c8adf8afb8982f",
+        "0fa2b2f5267c4b2f4668f5c3c0d746a33e5846187bc8537debe8c7eb2b9487f8",
+        "babe9721de9258dacccc3b68149d59ea41c4e6db0ca81adb4772e3bc13d2bb96",
+        "cdc30571dbf42dd4a0df77a1fc8b1652135ce1d675cf4d604b99a3584db89014",
+    ),
+    "r_apartamento_unidade_autonoma": (
+        "173e87af0a8714f4cb84124f30192e713fd6d15aeec85973fb9cf85174c182f1",
+        "3eef45ed68486499656932881c2f962f460e4095bbe5f23f5b8bbbbd3b84d5e0",
+        "4c9d022c68af77fe4d86a95df803e7cf92c9ee2132eff0106b3aa99ec83ef998",
+        "c55d84b7709241480ff44a3b9a32e95874974f8358ee665ad4eb4b2592377625",
+    ),
+    "r_bem_objeto": (
+        "ab0df8c97c703a684ba9d7e6622e86d5b70e125d58c4c87e323633873d75191f",
+        "e6e7ef9a49b6b47b8da3a23d714b9f0caf38540a3df0d8ad2af5b2021ecd4792",
+    ),
+    "r_sobrado_objeto": (
+        "1157c53f6a7f55cac9537f68900cec0c1b084c6501dbe91c9cb8b77eb3cc9eda",
+        "60c490054810452ae4a4def457edfb2097ed455a1b0fc94123fd38d44aa12c5e",
+    ),
+    "r_objeto_da_lide": (
+        "08bf7da8dfdeb482d34f9e9cb4bb31408083c67b029cb9a7211583a6ba885320",
+        "55cb9bebdfb4075b03722398623c6f9115db983e98022f74e41bce1f824a3b3c",
+    ),
+    "r_alcance_longo": (
+        "bb2bc4416ef098354fde4889ebc4bbc91a6caad40b052d1ddbeabaabf50fd7ab",
+        "dd1ae80f36b80ebc6a6474b9f02d4f836e19b9dc9334a4be5c6ee98bca40fdd3",
+    ),
+    "r_nesta_comarca": (
+        "047996c1991ad0ed1de46049da88c9cafeaa4cbdea5637ec63068085b00a38d7",
+        "44c467e8f6ff3163e631ab43bfa3b510191ecffbf1d8b98122f29e9e00711841",
+    ),
+    "r_municipio_e_comarca": (
+        "3754768b8436e069eae52efd1500409f445de38853a9480f6ffe045ea881a974",
+        "6842537e61307b5724e819d6272970e928a16fed10e6fe711979d67b2d8caf62",
+    ),
+    "r_matricula_cidade_comarca": (
+        "2bd2051fbaf7fa67a291343627ca0724bff826c736743014a506b96eb466690c",
+        "5299b5612ffc08f7c6c0a9dc207aa4a03553a86365e7fe703558d4dac4da7923",
+    ),
+    "r_assistentes_vistoria": (
+        "236239fb3f699cd928e7f517e496b27f16453b53d019c885edc0991793b34dbb",
+        "62bf234e50551727eff263c599405019a53b05b22e3a55d93643cd7ed6c5a76f",
+    ),
+    "r_onde_vive": (
+        "58b544151ea8c157deb8c227093e214b1910d41e994b5c2fb4c27d118cad1f93",
+        "93fb12598a6b78d81e351469334eef4c336fd4d2da0435ab67f5255f53a5ccb8",
+    ),
+    "r_apos_a_mudanca": (
+        "9013b8a11fa00900d72c083ac9855f4db3e7ca7d11fec0fc3a556e96e3acb219",
+        "966f70605b9df590674d72911d2df609419cbfb62bda6ca36bf47d2539ad2af0",
+    ),
+    "r_transferiu_a_posse": (
+        "9de9dece97e1aea09d3f497ac511ee982a38e33437779134dff7e4c75d49a4a8",
+        "c95151e85de4a5cf97b6265a0b055a1160459da0c0dbe47789df1ee6e5633edf",
+    ),
+    "r_com_domicilio": (
+        "1487c34bf23d534d69fd9fd1376be104291f163f357c2121490839d36457a5c6",
+        "2b861fc96316e26c3dc4b05c00482a5a6f648e6cfc179775d9893e616023260c",
+        "490ec4d5fb1567726cd6e61cf5aa204b643ed0b00a785fe8e9da2cb117a4f44c",
+        "b6c2f83e84df583001202cda7e63e2d557de334a0af910777d0cfc5b6db8df9e",
+    ),
+    "r_cuja_residencia": (
+        "0ace770a84040e94482cd679fb2759ec730c4562c13ad56d4d715762376faa20",
+        "9265fbbb8c85e14ebdb9aa352f6dc6c89f85559fad19b0d1225a8b920e72c50c",
+        "c4151957efb7a55274338d08f158747607120f17d4d2af2362783b7df4c471b9",
+        "ed95c7b467aa09fe16c1286d48c939650c3a4c1ef767784aa7de665e38394f2f",
+    ),
+    "r_habita": (
+        "318e7bc3b67e748564af3a86942cfe68863bb7a9edd42eeb75a005d82c6779c0",
+        "5687c44063ef9153ac1e2cebe03002372c8f17e17b395e65854dd1b89b15f423",
+        "5b0d8f523b0f3bdfbdf36c44b3842bb8d3365cebf290cd8bc6e9503e982d0150",
+        "aab1265f953d2eb54f119af952efb124f654bff198b1ab598007abc43abb5167",
+    ),
+    "r_hifenizacao": (
+        "1cfbb8a8a1d8aa88f11be44d1d39bc10d0b52437df09388d5aa6b2cf696db85b",
+        "2dcf6d69110254e49234f87304f103e219124f9d952032e88a05bf73be5ecc44",
+        "47334936f9591aaf103e5846b8e9ed735ec0b8aa0bb882e633331ab858c8f46f",
+        "84fd9aad366e82e443ea11f5c8326738c006ac3b7b2592243defe854602c3c55",
+    ),
+    "r_endereco_antes_reside": (
+        "1d2876750046064273da8aa67d5d70d9e35b095a238c79f9b26556cbd4b3542a",
+        "3b27d31aa1ba5ec0392d9177f935f5b0745f9b76e1221ee83921a43c90d01a95",
+        "80c07622805af335ac89339e88aa48406a239e519bde45c23622f13d1ad3907a",
+        "bcf9e39e0e17a57568b19b52cc0b20863a3d9a05b16c361ed44db4ac2dc180b3",
+    ),
+    "r_endereco_antes_moradora": (
+        "524c689786d2cbe435d3b0c828fcf34332b37dec74b82354b17805618e37411d",
+        "ba6ef5aa81600f0c509c31e1dcd7589dd0c6ce425364e73ceff668c29907a3b1",
+    ),
+    "r_onde_bairro_vizinho": (
+        "e5bef7b4e7bdea9264365ec425763595e3129383696e6a4d00bf52ab041e8302",
+        "ea1bcce89d1b68843b50b9bb9528e5cad8bf049ca8560fd925119b6436f07e45",
+        "ef4713490fe8fff1bfcdcee392c8072253435182adb71a2d6660ae6fa15c3d1a",
+    ),
+    "r_parentetico_abandonado": (
+        "656477ced3bacb7fe430c62608183fc97eb6f3923526c6947effe4c3208a1f2e",
+        "c3d802417f924b052fbb7100884ef8e192e566f48bce1b6a978b7cebc3deb425",
+    ),
+    "r_parentetico_vendido": (
+        "9095fccacaaf42ec762bfdf4632f2ece9b7088450245ed6a42ffd35bc4dca925",
+        "e82f03458f94673e5590ffdd3c9b383360ba23132836fa70d6fe2988013c1bfb",
+    ),
+    "r_onde_residia_no_imovel": (
+        "39a7171752b16c97791d5a5396c31dee3ef47edae4fbcaa5fd024b8d784c3e29",
+        "b7eaef91c5efac5758589def17a78736aa5aac12c8ea0266cc9446fb08f3bf51",
+    ),
+    "r_predio_ao_lado": (
+        "6c933f1e892f66ab0a30ba0c7be69d905faa4d40665f5516c8bb26ef98e8b188",
+        "c0a897bfca3dfa1acd95d085fdaf327e8dad5ead095bca8dd3deb4f5cf8ec109",
+    ),
+    "r_transferida_para": (
+        "23bb764cc8713eab9714dc46eec951fdf8a5c5a5f9c8ea05afe9425610c8ec89",
+        "3c15e492108ba76ed89d0c1548023c8a23451c31b0f404b5affe3aaa1fddd5f6",
+        "5a378fcc3e86129736fa0e68fa5ac768f4a87d30e03197ae4b55f22ff3429b2e",
+        "d15145a74c9d57364ed25a286c5677a35c39488be489c57827336aa926f01085",
+    ),
+    "r_realocada": (
+        "4a58b803a7aec877bcd4a3412e08ac41b204f9e4d5115f831f2481bbea4d2717",
+        "5f757387c2a97e2024cb4a3c4ad770cf5e7bf5f1bda8be65945962f518fa6cd8",
+        "acbd561d591a0436800b9200870f536ae7ed7e17eb9638a214907a215196de09",
+        "cc89a617e50591d790bc842920210ab63e54c124d377b5ee0efdb152ea21c400",
+    ),
+    "r_mora_no_imovel": (
+        "7b11249a2e83ac2edccf8f99b579d940def581cd01b00ee1d2c2e3fcf8dc8ac2",
+        "a85190ba0e7002deb555b0221e171b1b901eb5969441631555ffb29042d5dada",
+    ),
+    "r_novo_imovel_objeto": (
+        "65ee92a63b01cbb1202255a514993465d860c585b001e037a99fed61c76d219b",
+        "fb89de5f1b8df5ae90123384c46ad74f49967e7faab8a48a75c7673381091b68",
+    ),
+    "r_nova_unidade_objeto": (
+        "43eab2cbf833b1b946a4b869f063e8f0dcff206a5f0155f3b2f9cb5da9340579",
+        "6551d718e933a37bd1b4f35b5bf05c16c1072de59fe97d5fb89a28dbfdc449ec",
+    ),
+    "r_residencia_objeto": (
+        "21dab0c5e012bb03dba6c44d2bd4f7ee1decec6a1062ea07ca590be266fc8666",
+        "37657c5fa37a06abc0a8de1a1a70559d67da7c3f47343a6518f5a409afd34dce",
+    ),
+    "r_dois_enderecos_mesma_pista": (
+        "74494eedd297b63325f43e1b11d8dbd55c7d785d174f83bbaea4c716ad1c1dc0",
+        "c4c57e39caff4dd076d4d9b76b3f94c4e4c6112355ff3a76250a14153b97bcff",
+        "d1cf0925974b1041e664bfa5090c02e01301b1c48a23a8019d4c9f8649e524fa",
+        "e6b9d8bd014ac86adab95dd38399932c19983bce37d87139dd284c69c5731525",
+    ),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -296,11 +507,55 @@ EXPECTED = {
         ("street", "Avenida Sintética", "STRONG"), ("number", "5", "STRONG"), ("neighborhood", "Centro Sintético", "STRONG"),
         ("postal_code", "50000-000", "STRONG"), ("city", "Recife", "STRONG"), ("state", "PE", "STRONG"),
     },
-    "rua_com_nome_de_forum": {("street", "Rua do Fórum Velho Sintético", "STRONG"), ("number", "20", "STRONG")},
+    # "Fórum" no próprio logradouro: a frase continua bloqueada como na main (fail-closed).
+    "rua_com_nome_de_forum": set(),
     "contrato_qualificacao": _ROAD | {("city", "Caruaru", "STRONG"), ("state", "PE", "STRONG"), ("private_area_m2", "41,85", "STRONG")},
     "quadra_lote": {("street", "Rua do Loteamento Sintético", "STRONG"), ("number", "15", "STRONG"), ("quadra", "3", "STRONG")},
+    # Revisão independente da PR #294 (resultado conferido caso a caso).
+    "r_telefone_depois": set(),
+    "r_email_depois": set(),
+    "r_oab_depois": set(),
+    "r_construtora_situada_cnpj": set(),
+    "r_re_localizada_cnpj": set(),
+    "r_onde_residia_para": set(),
+    "r_onde_nao_mais_reside": set(),
+    "r_filial": set(),
+    "r_endereco_rotulo": set(),
+    "r_entregue_pela_construtora": set(),
+    "r_construida_pela_vendedora": set(),
+    "r_unidade_apartamento_situada": {("neighborhood", "Imóvel Sintético", "STRONG"), ("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG"), ("unit", "302", "STRONG")},
+    "r_apartamento_unidade_autonoma": {("block", "B", "STRONG"), ("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG"), ("unit", "302", "STRONG")},
+    "r_bem_objeto": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_sobrado_objeto": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_objeto_da_lide": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_alcance_longo": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_nesta_comarca": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_municipio_e_comarca": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_matricula_cidade_comarca": {("number", "20", "POSSIBLE"), ("street", "Rua do Imóvel", "POSSIBLE")},
+    "r_assistentes_vistoria": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_onde_vive": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_apos_a_mudanca": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_transferiu_a_posse": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_com_domicilio": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_cuja_residencia": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_habita": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_hifenizacao": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_endereco_antes_reside": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_endereco_antes_moradora": set(),
+    "r_onde_bairro_vizinho": set(),
+    "r_parentetico_abandonado": set(),
+    "r_parentetico_vendido": set(),
+    "r_onde_residia_no_imovel": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_predio_ao_lado": set(),
+    "r_transferida_para": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_realocada": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_mora_no_imovel": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_novo_imovel_objeto": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_nova_unidade_objeto": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_residencia_objeto": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r_dois_enderecos_mesma_pista": {("number", "10", "POSSIBLE"), ("number", "20", "POSSIBLE"), ("street", "Rua da Parte", "POSSIBLE"), ("street", "Rua do Imóvel", "POSSIBLE")},
 }
-_PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900"}
+_PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 
 
 def test_every_probe_has_an_expected_result():
@@ -312,9 +567,28 @@ def test_search_result_is_exact(name):
     assert _found(PROBES[name]) == EXPECTED[name]
 
 
-@pytest.mark.parametrize("name", sorted(PROBES))
+# Resíduo conhecido: sem marcador nenhum ("e a casa de FULANA, na Rua..."), o
+# texto não diz qual dos dois logradouros presos à mesma pista é o do imóvel.
+# Os dois ficam só "possíveis" (a main propunha o da parte como forte).
+_AMBIGUOUS_WITHOUT_MARKER = {"r_dois_enderecos_mesma_pista"}
+
+
+@pytest.mark.parametrize("name", sorted(set(PROBES) - _AMBIGUOUS_WITHOUT_MARKER))
 def test_party_address_is_never_a_new_proposal(name):
     assert not {value for _field, value, _strength in _found(PROBES[name])} & _PARTY_VALUES
+
+
+def test_two_streets_bound_to_the_same_cue_are_never_strong():
+    found = _found(PROBES["r_dois_enderecos_mesma_pista"])
+    assert {strength for field, _value, strength in found if field in {"street", "number"}} == {"POSSIBLE"}
+
+
+@pytest.mark.parametrize("text", [
+    "LAUDO\nAssistente técnico da ré: Eng. Sintético\nLogradouro: Rua do Imóvel\nNúmero: 20\n",
+    "TERMO DE VISTORIA\nTestemunha: Beltrano Sintético\nLogradouro: Rua do Imóvel\nNúmero: 20\n",
+])
+def test_witness_or_assistant_label_does_not_hide_the_property_label(text):
+    assert ("street", "Rua do Imóvel", "STRONG") in _found(text)
 
 
 @pytest.mark.parametrize("name", sorted(PROBES))

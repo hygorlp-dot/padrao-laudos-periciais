@@ -1,6 +1,6 @@
 """Confirmed property facts; proposals never become facts merely by extraction."""
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -204,7 +204,7 @@ _PARTY_ADDRESS_BLOCKERS = re.compile(
 # CPF/CNPJ na linha do proprietario ou da construtora nao sao endereco de parte.
 _LABEL_QUALIFICATION_BLOCKERS = re.compile(
     r"\b(?:residente|domiciliad\w*|morador\w*|com endereco|com sede|sede (?:na|no|em)|sediad\w*|estabelecid\w*|"
-    r"escritorio|oab|advogad\w*|patrono|procurador\w*|testemunh\w*|assistente\w*|"
+    r"escritorio|oab|advogad\w*|patrono|procurador\w*|"
     r"forum|vara|juizo|tribunal|secao judiciaria|justica federal|justica estadual|poder judiciario)\b"
 )
 _ADDRESS_FIELDS = frozenset({"street", "number", "complement", "unit", "block", "quadra", "neighborhood", "postal_code", "city", "state"})
@@ -255,113 +255,199 @@ def _source_rank(kind, method, strength):
 
 # #293: dentro da frase, o vinculo de um endereco e decidido pela oracao. O
 # logradouro (e o numero, bairro, CEP... que o seguem na mesma cadeia) pertence
-# ao marcador mais proximo antes dele: residencia ou localizacao de parte,
-# juizo, foro, advogado, testemunha, assistente ou deslocamento nao propoem;
-# o imovel objeto propoe. Sem marcador antes, a frase inteira decide, como
-# antes (fail-closed). Precedente continua bloqueando a frase inteira: o
-# imovel citado ali e o de outro processo.
+# ao marcador mais proximo antes dele. Dois regimes, para nunca propor mais
+# endereco de parte do que antes:
+# - frase que a regra anterior ja aceitava: so sai o endereco que um verbo de
+#   residencia/sede/deslocamento ("mora na", "estabelecida", "filial") ou um
+#   participio de parte ("a vendedora, localizada na") introduz;
+# - frase que a regra anterior bloqueava inteira (CPF, telefone, advogado,
+#   juizo...): so entra o endereco ligado diretamente ao imovel objeto
+#   ("imovel objeto da acao, situado na"), sem bloqueador depois dele.
+# Precedente continua bloqueando a frase inteira: o imovel ali e de outro caso.
 _PRECEDENT_BLOCKERS = re.compile(
     r"\b(?:apelacao|recurso especial|resp|agravo|julgado|rel|relator\w*|des|desembargador\w*|min|ministro|"
     r"jurisprudencia|precedente|acordao|ementa)\b"
 )
-_PARTY_CLAUSE_MARKERS = re.compile(
-    r"\b(?:(?P<residence>residente\w*|reside|residem|residia\w*|residiu|residir|domiciliad\w*|morador\w*|"
-    r"(?:mora|moram|morava|moravam|morou|morar)\s+(?:na|no|nas|nos|em|a|ao))|"
-    r"com endereco|endereco eletronico|com sede|sede (?:na|no|em)|sediad\w*|estabelecid\w*|escritorio|oab|"
-    r"advogad\w*|patrono|procurador\w*|cpf|cnpj|forum|foro|comarca|vara|juizo|tribunal|secao judiciaria|"
-    r"subsecao judiciaria|justica federal|justica estadual|poder judiciario|ministerio publico|defensoria|"
-    r"testemunh\w*|assistente\w*|tel|telefone|fone|fax|celular|whatsapp|e-mail|email|www|"
-    r"mud(?:ou|aram|ar|ando|anca)\w*|transferi\w*|removid\w*|realocad\w*|deslocad\w*|vive|vivem|vivia\w*)\b|@"
+_PARTY_INTRODUCERS = re.compile(
+    r"\b(?:(?P<verb>reside|residem|residia\w*|residiu|vive|vivem|vivia\w*|viveu|habita|habitam|habitav\w*|habitou|"
+    r"(?:mora|moram|morava|moravam|morou)\s+(?:na|no|nas|nos|em|a|ao))|"
+    r"residente\w*|residir|domiciliad\w*|com domicilio|domicilio (?:na|no|em)|morador\w*|morar\s+(?:na|no|em)|"
+    r"(?:cuja|sua|seu)\s+(?:residencia|domicilio|endereco)|residencia\s+(?:fica|e)|"
+    r"com endereco|endereco (?:residencial|comercial|profissional)|com sede|sede (?:na|no|em)|sediad\w*|"
+    r"estabelecid\w*|escritorio|filial|mud(?:ou|aram|ar|ando)(?:-se)?\s+para|transferiu-se|foi\s+para|foram\s+para|"
+    r"(?:transferid|removid|deslocad)[oa]s?\s+para|realocad[oa]s?)\b"
 )
 # Uma expressao por pista: "imovel objeto da acao" casa "imovel objeto" e "objeto da acao".
 _SUBJECT_CUES = tuple(re.compile(r"\b" + re.escape(cue) + r"\b") for cue in _SUBJECT_PROPERTY_CUES)
-# "outra unidade habitacional", "novo imovel": outra unidade, nunca a do objeto.
-_OTHER_UNIT_BEFORE = re.compile(r"\b(?:outr[oa]s?|nov[oa]s?|antig[oa]s?|divers[oa]s?|segund[oa]s?|demais)\s+$")
+# "outra unidade habitacional", "o predio ao lado": outra unidade, nunca a do objeto.
+_OTHER_UNIT_BEFORE = re.compile(
+    r"\b(?:outr[oa]s?|nov[oa]s?|antig[oa]s?|divers[oa]s?|segund[oa]s?|demais|"
+    r"(?:ao lado|em frente|defronte|proximo|perto|vizinh[oa]s?)(?:\s+(?:d[oa]s?|a|ao))?)\s+$"
+)
+_OTHER_UNIT_AFTER = re.compile(r"\s+(?:vizinh|ao lado|em frente|defronte)")
+# "no bairro vizinho", "outra cidade": o endereco que segue e de outro lugar.
+_OTHER_PLACE = re.compile(
+    r"\b(?:(?:bairro|cidade|municipio|rua|quadra|predio|edificio|condominio)\s+vizinh[oa]|"
+    r"(?:outr[oa]|nov[oa])\s+(?:bairro|cidade|municipio|endereco|rua|estado))\b"
+)
 _PARTICIPLE = re.compile(r"\b(?:situad|localizad)(?P<gender>[oa])s?\b")
 _PROPERTY_NOUN = re.compile(
     r"\b(?:imove(?:l|is)|(?P<feminine>unidades?|casas?)|apartamentos?|terrenos?|lotes?|empreendimentos?|"
-    r"edificios?|predios?|condominios?|residencia(?:l|is))\b"
+    r"edificios?|predios?|condominios?|residencia(?:l|is)|sobrados?|bem|(?P<residence>residencias?))\b"
 )
-_PARTICIPLE_REACH = 80
+# Parte entre o imovel e o participio ("entregue pela construtora, localizada"):
+# se concorda com o participio, e ela que esta localizada (fail-closed).
+_PARTY_NOUN = re.compile(
+    r"\b(?:(?P<feminine>re|autora|construtora|vendedora|compradora|incorporadora|empresa|requerida|empreiteira|"
+    r"imobiliaria|cooperativa|parte|testemunha)|(?P<both>requerente)|reu|autor|vendedor|comprador|requerido|"
+    r"banco|agente financeiro)\b"
+)
+# "imovel da parte autora" e posse, nao a parte qualificada.
+_POSSESSIVE_BEFORE = re.compile(r"\bd[aoe]s?\s+(?:parte\s+)?$")
+_PARTICIPLE_REACH = 160
+_OBJECT = re.compile(r"\bobjeto\b")
+# "mora no imovel", "reside na unidade": o verbo fala de morar num imovel, nao apresenta endereco.
+_DWELLING_AHEAD = re.compile(
+    r"\s*(?:(?:na|no|nas|nos|em)\s+)?(?:(?:o|a|os|as|um|uma|este|esta|neste|nesta|referid[oa])\s+)?"
+    r"(?:imove(?:l|is)|unidades?|casas?|apartamentos?|sobrados?)\b"
+)
 # "imovel objeto, onde reside, ..." fala do proprio imovel: a relativa tem de
-# vir colada a pista do imovel, com no maximo um parentetico participial
-# controlado ("financiada em 2015"); deslocamento, cidade ou outra unidade
-# entre eles mantem o marcador de residencia (fail-closed).
-_ONDE_BEFORE = re.compile(r",\s*onde\s+(?:[a-z]+\s+){0,3}$")
+# vir colada a pista do imovel, no presente e sem negacao, com no maximo um
+# parentetico participial controlado ("financiada em 2015"); deslocamento,
+# cidade ou outra unidade entre eles mantem o marcador de residencia.
+_RELATIVE_BEFORE = re.compile(r",\s*(?:onde|que|no qual|na qual|em que)\s+(?:[a-z]+\s+){0,3}$")
+_NEGATION = re.compile(r"\b(?:nao|mais|nunca|ja|antes|anteriormente)\b")
+_DISPLACEMENT_AFTER = re.compile(r"[\s,]*(?:para|ate)\b")
 _CONTROLLED_PARENTHETICAL = re.compile(
-    r",\s*(?!(?:transferi|removid|realocad|deslocad|mudad))[a-z]+(?:ad|id)[oa]s?"
+    r",\s*(?:(?:adquirid|financiad|construid|comprad|recebid|quitad)[oa]s?|entregues?)"
     r"(?:\s+(?:em|no ano de)\s+[\d/]+|\s+pel[oa]s?\s+(?:autor\w*|re|reu|parte autora|construtora|vendedor\w*))?\s*$"
 )
+# Ligacao direta da pista do imovel ao endereco, exigida onde a regra anterior bloqueava.
+_DIRECT_LINK = re.compile(
+    r"[\s,]*(?:(?:que\s+)?(?:fica|esta|situa-se|localiza-se|encontra-se|se\s+situa|se\s+localiza)\s+)?"
+    r"(?:(?:situad|localizad)[oa]s?\s+)?(?:na|no|em|a|ao)?[\s,]*"
+)
+# "mora-\ndora": hifenizacao de quebra de linha do PDF nao esconde o marcador.
+_HYPHEN_BREAK = re.compile(r"(?<=[a-z])-[ \t]*\r?\n[ \t]*(?=[a-z])")
 
 
-def _clause_markers(folded):
-    """(inicio, tipo) de cada marcador da pagina: PARTY, SUBJECT ou OTHER.
+def _joined(folded):
+    """Texto sem hifenizacao de quebra de linha e, para cada posicao, a posicao nele."""
+    pieces, forward, cursor, length = [], [], 0, 0
+    for item in _HYPHEN_BREAK.finditer(folded):
+        piece = folded[cursor:item.start()]
+        forward.extend(range(length, length + len(piece)))
+        length += len(piece)
+        pieces.append(piece)
+        forward.extend([length] * (item.end() - item.start()))
+        cursor = item.end()
+    piece = folded[cursor:]
+    forward.extend(range(length, length + len(piece) + 1))
+    pieces.append(piece)
+    return "".join(pieces), forward
+
+
+def _participle_kind(text, begin, item, introducers, introducer_ends, subjects):
+    floor = max(begin, item.start() - _PARTICIPLE_REACH)
+    feminine = item.group("gender") == "a"
+
+    def interrupted(start):
+        position = bisect_right(introducers, start - 1)
+        if position < len(introducers) and introducers[position] < item.start():
+            return True
+        for noun in _PARTY_NOUN.finditer(text, start, item.start()):
+            if _POSSESSIVE_BEFORE.search(text, max(start, noun.start() - 12), noun.start()):
+                continue
+            if noun.group("both") or (noun.group("feminine") is not None) == feminine:
+                return True
+        return False
+
+    nouns = list(_PROPERTY_NOUN.finditer(text, floor, item.start()))
+    agreeing = [noun for noun in nouns if (noun.group("feminine") is not None or noun.group("residence") is not None) == feminine]
+    if agreeing:
+        noun = agreeing[-1]
+        position = bisect_right(introducers, noun.start()) - 1
+        if position >= 0 and introducer_ends[position] >= noun.end():
+            return "PARTY"
+        # "novo imovel objeto da acao": a pista "objeto" entre eles diz que e o objeto.
+        objeto = _OBJECT.search(text, noun.end(), item.start()) is not None
+        if not objeto and (
+            _OTHER_UNIT_BEFORE.search(text[max(floor, noun.start() - 24):noun.start()])
+            or _OTHER_UNIT_AFTER.match(text, noun.end())
+        ):
+            return "OTHER"
+        return "PARTY" if interrupted(noun.end()) else "SUBJECT"
+    if nouns:
+        return "PARTY"
+    if not text[begin:item.start()].strip(" \t\n,.;:-"):
+        # "Situado na Rua X, o imovel objeto..." abre a frase: nada a qualificar.
+        return None
+    low, high = bisect_left(subjects, (floor, -1)), bisect_left(subjects, (item.start(), -1))
+    cues = [(start, end) for start, end in subjects[low:high] if end <= item.start()]
+    if cues and not interrupted(cues[-1][1]):
+        # "O bem objeto da acao, situado na": a pista do imovel e o sujeito.
+        return "SUBJECT"
+    return "PARTY"
+
+
+def _clause_markers(text):
+    """(inicio, fim, tipo) de cada marcador da pagina: PARTY, SUBJECT ou OTHER.
 
     Calculado uma vez por pagina; cada marcador so olha para tras ate o inicio
     da propria frase, com alcance fixo (custo linear no texto).
     """
     markers = []
-    subjects = set()
+    subjects = []
     sentence = {}
 
     def begin_of(position):
         if position not in sentence:
-            sentence[position] = _window(folded, position, position)[0]
+            sentence[position] = _window(text, position, position)[0]
         return sentence[position]
 
     for cue in _SUBJECT_CUES:
-        for item in cue.finditer(folded):
-            floor = max(begin_of(item.start()), item.start() - 20)
-            kind = "OTHER" if _OTHER_UNIT_BEFORE.search(folded[floor:item.start()]) else "SUBJECT"
-            markers.append((item.start(), kind))
+        for item in cue.finditer(text):
+            floor = max(begin_of(item.start()), item.start() - 24)
+            other = _OTHER_UNIT_BEFORE.search(text[floor:item.start()]) or _OTHER_UNIT_AFTER.match(text, item.end())
+            kind = "OTHER" if other and "objeto" not in item.group() else "SUBJECT"
+            markers.append((item.start(), item.end(), kind))
             if kind == "SUBJECT":
-                subjects.add(item.end())
-    for item in _PARTY_CLAUSE_MARKERS.finditer(folded):
-        if item.group("residence") and _onde_of_subject(folded, begin_of(item.start()), item.start(), subjects):
+                subjects.append((item.start(), item.end()))
+    for item in _OTHER_PLACE.finditer(text):
+        markers.append((item.start(), item.end(), "OTHER"))
+    subjects.sort()
+    subject_ends = {end for _start, end in subjects}
+    introducers = []
+    for item in _PARTY_INTRODUCERS.finditer(text):
+        if item.group("verb") and (
+            _relative_of_subject(text, begin_of(item.start()), item.start(), subject_ends, item.end())
+            or _DWELLING_AHEAD.match(text, item.end())
+        ):
+            # "imovel objeto, onde reside, ..." ou "mora no imovel": nao e endereco de parte.
             continue
-        markers.append((item.start(), "PARTY"))
-    party_starts = sorted(start for start, kind in markers if kind == "PARTY")
-    for item in _PARTICIPLE.finditer(folded):
-        floor = max(begin_of(item.start()), item.start() - _PARTICIPLE_REACH)
-        nouns = list(_PROPERTY_NOUN.finditer(folded, floor, item.start()))
-        if not nouns and not folded[begin_of(item.start()):item.start()].strip(" \t\n,.;:-"):
-            # "Situado na Rua X, o imovel objeto..." abre a frase: nada a
-            # qualificar antes dele, a frase inteira decide (como antes).
-            continue
-        if not nouns:
-            kind = "PARTY"
-        else:
-            noun = nouns[-1]
-            position = bisect_right(party_starts, noun.end())
-            interrupted = position < len(party_starts) and party_starts[position] < item.start()
-            agrees = (noun.group("feminine") is not None) == (item.group("gender") == "a")
-            if _OTHER_UNIT_BEFORE.search(folded[max(floor, noun.start() - 20):noun.start()]):
-                kind = "OTHER"
-            elif interrupted or not agrees:
-                kind = "PARTY"
-            else:
-                kind = "SUBJECT"
-        markers.append((item.start(), kind))
+        markers.append((item.start(), item.end(), "PARTY"))
+        introducers.append((item.start(), item.end()))
+    introducers.sort()
+    starts = [start for start, _end in introducers]
+    ends = [end for _start, end in introducers]
+    for item in _PARTICIPLE.finditer(text):
+        kind = _participle_kind(text, begin_of(item.start()), item, starts, ends, subjects)
+        if kind is not None:
+            markers.append((item.start(), item.end(), kind))
     markers.sort()
     return markers
 
 
-def _onde_of_subject(folded, begin, start, subject_ends):
-    onde = _ONDE_BEFORE.search(folded, max(begin, start - _PARTICIPLE_REACH), start)
-    if onde is None:
+def _relative_of_subject(text, begin, start, subject_ends, end):
+    relative = _RELATIVE_BEFORE.search(text, max(begin, start - _PARTICIPLE_REACH), start)
+    if relative is None or _NEGATION.search(text, relative.start(), start) or _DISPLACEMENT_AFTER.match(text, end):
         return False
-    floor = max(begin, onde.start() - _PARTICIPLE_REACH)
-    before = folded[floor:onde.start()]
+    floor = max(begin, relative.start() - _PARTICIPLE_REACH)
+    before = text[floor:relative.start()]
     parenthetical = _CONTROLLED_PARENTHETICAL.search(before)
     if parenthetical is not None:
         before = before[:parenthetical.start()]
     return floor + len(before.rstrip()) in subject_ends
-
-
-def _clause_kind(markers, begin, reference):
-    """Tipo do marcador mais proximo antes do endereco, na mesma frase (None: nenhum)."""
-    position = bisect_right(markers, (reference, "~")) - 1
-    return markers[position][1] if position >= 0 and markers[position][0] >= begin else None
 
 
 _INTRINSIC_FIELDS = {"development", "private_area_m2", "constructed_area_m2", "program", "habite_se_date", "contract_number", "contractual_value"}
@@ -499,16 +585,13 @@ def _clause_rule_proposals(page, document_kind, folded, indices, label_spans=())
     text = page.text
     mode = page.extraction_mode.value
     label_starts = [start for start, _end in label_spans]
-    markers = _clause_markers(folded)
-    marker_starts = [start for start, _kind in markers]
-    streets = list(_STREET.finditer(folded))
+    joined, forward = _joined(folded)
+    markers = _clause_markers(joined)
+    marker_starts = [start for start, _end, _kind in markers]
+    streets = list(_STREET.finditer(joined))
     street_ends = [item.end() for item in streets]
+    street_starts = [item.start() for item in streets]
     precedents = [item.start() for item in _PRECEDENT_BLOCKERS.finditer(folded)]
-    parties = [item.start() for item in _PARTY_CLAUSE_MARKERS.finditer(folded)]
-
-    def within(starts, begin, stop):
-        return bisect_right(starts, stop - 1) > bisect_right(starts, begin - 1)
-
     candidates = []
     for field, pattern, group in _PATTERNS:
         for match in pattern.finditer(folded):
@@ -519,29 +602,45 @@ def _clause_rule_proposals(page, document_kind, folded, indices, label_spans=())
                 continue
             begin, stop = _window(folded, match.start(), match.end())
             context = folded[begin:stop]
-            if within(precedents, begin, stop):
+            if bisect_right(precedents, stop - 1) > bisect_right(precedents, begin - 1):
                 continue
+            # A regra anterior (frase inteira) decide qual dos dois regimes vale.
+            blocked = _PARTY_ADDRESS_BLOCKERS.search(context) is not None
             if field in _ADDRESS_FIELDS:
-                reference = match.start()
+                low, reference = forward[begin], forward[match.start()]
                 if field != "street":
                     # Numero, bairro, CEP... seguem o logradouro da mesma cadeia.
-                    position = bisect_right(street_ends, match.start()) - 1
-                    if position >= 0 and streets[position].start() >= begin:
+                    position = bisect_right(street_ends, reference) - 1
+                    if position >= 0 and streets[position].start() >= low:
                         street = streets[position]
-                        between = bisect_right(marker_starts, match.start() - 1) - bisect_right(marker_starts, street.end() - 1)
-                        if not between:
+                        if bisect_right(marker_starts, reference - 1) == bisect_right(marker_starts, street.end() - 1):
                             reference = street.start()
-                kind = _clause_kind(markers, begin, reference)
-                if kind is None:
-                    if within(parties, begin, stop) or _PARTY_ADDRESS_BLOCKERS.search(context):
+                position = bisect_right(marker_starts, reference) - 1
+                nearest = markers[position] if position >= 0 and markers[position][0] >= low else None
+                if not blocked:
+                    if nearest is not None and nearest[2] != "SUBJECT":
                         continue
+                    if nearest is None:
+                        # "Na Rua X, nº 10, reside a autora": sem marcador antes,
+                        # o primeiro depois da cadeia (antes do proximo logradouro) decide.
+                        following = position + 1
+                        limit = forward[stop]
+                        later = bisect_right(street_starts, reference)
+                        if later < len(street_starts):
+                            limit = min(limit, street_starts[later])
+                        if following < len(markers) and markers[following][0] < limit and markers[following][2] != "SUBJECT":
+                            continue
                     bound = any(cue in context for cue in _SUBJECT_PROPERTY_CUES)
-                elif kind == "SUBJECT":
-                    bound = True
                 else:
-                    continue
+                    if nearest is None or nearest[2] != "SUBJECT":
+                        continue
+                    if nearest[1] < reference and not _DIRECT_LINK.fullmatch(joined, nearest[1], reference):
+                        continue
+                    if _PARTY_ADDRESS_BLOCKERS.search(joined, reference, forward[stop]):
+                        continue
+                    bound = True
             else:
-                if _PARTY_ADDRESS_BLOCKERS.search(context):
+                if blocked:
                     continue
                 bound = any(cue in context for cue in _SUBJECT_PROPERTY_CUES)
             value = _original(text, indices, match.start(group), match.end(group))
@@ -550,17 +649,23 @@ def _clause_rule_proposals(page, document_kind, folded, indices, label_spans=())
             # "residencial" adjetivo ("uso residencial") nao e nome de empreendimento.
             if field == "development" and not _proper_name_follows(value):
                 continue
-            candidates.append((field, match.start(), begin, stop, value, bound))
+            binding = nearest[0] if field in _ADDRESS_FIELDS and nearest is not None else None
+            candidates.append((field, match.start(), begin, stop, value, bound, binding))
     starts = {}
-    for field, start, *_rest in candidates:
+    streets_by_cue = {}
+    for field, start, _begin, _stop, value, _bound, binding in candidates:
         starts.setdefault(field, []).append(start)
+        if field == "street" and binding is not None:
+            streets_by_cue.setdefault(binding, set()).add(value)
     found = []
-    for field, start, begin, stop, value, bound in candidates:
-        # Mais de uma unidade (ou numero) do imovel na mesma frase: o trecho nao
-        # diz qual e a do imovel. O que pertence a parte ja ficou de fora.
+    for field, start, begin, stop, value, bound, binding in candidates:
+        # Mais de uma unidade (ou numero) do imovel na mesma frase, ou dois
+        # logradouros presos a mesma pista: o trecho nao diz qual e o do imovel.
+        # O que pertence a parte ja ficou de fora.
         ambiguous = field in {"unit", "block", "quadra", "number"} and (
             bisect_right(starts[field], stop - 1) - bisect_right(starts[field], begin - 1)
         ) > 1
+        ambiguous = ambiguous or (binding is not None and len(streets_by_cue.get(binding, ())) > 1)
         if bound and not ambiguous:
             strength, method = "STRONG", f"CONTEXT_BOUND_{mode}_V2"
         elif field in _INTRINSIC_FIELDS and document_kind and not ambiguous:
@@ -633,8 +738,8 @@ def _city_state_proposals(page, document_kind, folded, indices, label_spans, *, 
         context = folded[begin:stop]
         if _PARTY_ADDRESS_BLOCKERS.search(context) or _CITY_BLOCKERS.search(context):
             continue
-        # Municipio/UF seguem a frase inteira (fail-closed): uma parte na frase basta.
-        if not legacy and _PARTY_CLAUSE_MARKERS.search(context):
+        # Municipio/UF seguem a frase inteira (fail-closed): residencia ou sede de parte na frase basta.
+        if not legacy and _PARTY_INTRODUCERS.search(context):
             continue
         if not _ADDRESS_ANCHOR.search(folded, max(begin, match.start() - _ANCHOR_REACH), match.start()):
             continue

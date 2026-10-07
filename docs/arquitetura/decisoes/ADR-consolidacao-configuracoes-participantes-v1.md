@@ -110,25 +110,34 @@ conteúdo privado do workspace).
   jurisprudencial bloqueiam a proposta. Os bloqueadores são avaliados na frase
   inteira, com limite de palavra; abreviações ("Av.", "Dr.", "Rel.", "Des.", "nº")
   não terminam a frase. Contatos de timbre (telefone, e-mail) também bloqueiam.
-- Desde a #293, o vínculo de um endereço é decidido pela **oração**, não pela
-  frase inteira. Um logradouro, e o número, bairro e CEP que o seguem na mesma
-  cadeia, pertence ao marcador mais próximo antes dele. Marcadores de parte:
-  residência (morador, mora na, reside), localização ou sede (estabelecida,
-  sediada, "localizada" qualificando parte), juízo, foro, comarca, advogado,
-  testemunha, assistente e deslocamento (mudou-se, vive). Esses não propõem.
-  Pista do imóvel objeto propõe.
-  - "situado/localizado" segue o substantivo de imóvel logo antes dele, com
-    concordância de gênero; sem esse substantivo, qualifica a parte.
-  - "outra/nova unidade" nunca é a do objeto.
+- Desde a #293, o vínculo de um endereço é decidido pela **oração**. O
+  logradouro, e o número, bairro e CEP que o seguem na mesma cadeia, pertence ao
+  marcador mais próximo antes dele. Há dois regimes, para nunca propor mais
+  endereço de parte do que antes:
+  - **Frase que a regra anterior aceitava.** Só sai o endereço introduzido por
+    um verbo de residência, sede ou deslocamento ("moradora da", "mora na",
+    "estabelecida", "com domicílio", "filial", "transferida para") ou por um
+    particípio de parte ("a vendedora, localizada na"). Comarca, testemunha,
+    assistente e mudança, citados na narrativa, não apagam o endereço do imóvel.
+    Sem marcador antes, decide o primeiro marcador depois da cadeia.
+  - **Frase que a regra anterior bloqueava inteira** (CPF, telefone, advogado,
+    juízo…). Só entra o endereço ligado diretamente à pista do imóvel
+    ("imóvel objeto da ação, situado na", "fica na"), e sem nenhum bloqueador
+    depois dele.
+  - "situado/localizado" segue o substantivo de imóvel que concorda com ele
+    (alcance de 160 caracteres). Parte que concorda e está entre os dois (o
+    agente "pela construtora"), ou imóvel vizinho ou outro ("ao lado do
+    prédio", "nova unidade"), tira o vínculo. A pista "objeto" entre eles o
+    devolve.
   - "imóvel objeto, onde reside, …" fala do próprio imóvel só com a relativa
-    colada à pista do imóvel e no máximo um parentético participial
-    controlado. Deslocamento, cidade ou outra unidade no meio mantêm o
-    bloqueio.
-  - Sem marcador antes, a frase inteira decide, como antes.
+    colada à pista do imóvel, sem negação e sem deslocamento depois do verbo,
+    e com no máximo um parentético de lista fechada ("financiada em 2015").
+    "Mora no imóvel" também não apresenta endereço de parte.
+  - Dois logradouros diferentes presos à mesma pista ficam "possíveis".
   - Precedente continua bloqueando a frase inteira.
   - Município/UF seguem a frase inteira (fail-closed).
-  - Mais de um número ou unidade do imóvel na mesma frase continua "possível";
-    o que pertence à parte não conta.
+  - A hifenização de quebra de linha do PDF ("mora-\ndora") não esconde o
+    marcador.
   - `BACKUP_REPLAY_LEGACY = ALLOWED` e `NEW_PROPOSAL_FROM_PARTY_ADDRESS =
     PROHIBITED`: a reprodução do backup (`include_legacy_labels=True`) aceita
     a união da regra nova com a anterior. Toda proposta nova é reproduzível, e
