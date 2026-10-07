@@ -86,8 +86,10 @@ def _persisted_materials(runtime, workspace_id):
 
     Onde a listagem nao e o que o teste prova, ela nao pode depender do prazo
     curto (1,5 s) da ponte: a derivacao ainda escreve na mesma conexao SQLite
-    (RLock compartilhado) e, num runner lento, a leitura atravessava o prazo e
-    a ponte respondia 503 sem relacao com o contrato do teste.
+    (RLock compartilhado) e a leitura pode atravessar esse prazo, com 503 da
+    ponte sem relacao com o contrato do teste. Que isso ocorreu no runner
+    Windows e hipotese da #296, nao fato provado; a reproducao controlada do
+    mecanismo esta em `test_red_auxiliary_read_does_not_depend_on_the_bridge_deadline`.
     """
     from tests.test_local_api_v1 import http_request
 
@@ -110,7 +112,7 @@ def _hold_store(runtime, seconds):
 
     thread = threading.Thread(target=hold, name="busy-store", daemon=True)
     thread.start()
-    assert ready.wait(5), "a conexao SQLite nunca foi ocupada"
+    assert ready.wait(30), "nao foi possivel ocupar a conexao SQLite em 30 s"
     return thread, release
 
 
@@ -131,7 +133,13 @@ def _red_slow_derivation(tmp_path, *, busy_store_seconds=0.0):
         if busy_store_seconds:
             holder = _hold_store(runtime, busy_store_seconds)
         # A ordem causal do finding: a fonte foi persistida e a derivacao terminou.
+        started = time.monotonic()
         materials = _persisted_materials(runtime, workspace_id)
+        if holder is not None:
+            # Sem esta prova, o teste passaria mesmo que a listagem deixasse de
+            # usar a conexao ocupada: a leitura TEM de ter esperado alem do
+            # prazo da ponte (1,5 s) e, ainda assim, responder.
+            assert time.monotonic() - started >= 1.5, "a conexao ocupada nao alcancou a leitura auxiliar"
         assert len(materials) == 1
         # Contrato: se a fonte foi aceita, a resposta nao pode ser falha terminal.
         assert status < 500, f"falso erro terminal {status} sobre fonte ja persistida: {body[:200]!r}"
@@ -155,7 +163,7 @@ def test_red_auxiliary_read_does_not_depend_on_the_bridge_deadline(tmp_path):
     cenario respondia 503 LOCAL_API_UNAVAILABLE na conferencia, e nao na
     importacao que o teste prova.
     """
-    _red_slow_derivation(tmp_path, busy_store_seconds=2.0)
+    _red_slow_derivation(tmp_path, busy_store_seconds=3.0)
 
 
 # ----------------------------------------------------------------- T1-T10 (#266)
