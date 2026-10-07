@@ -274,7 +274,9 @@ _PARTY_INTRODUCERS = re.compile(
     r"residente\w*|residir|domiciliad\w*|com domicilio|domicilio (?:na|no|em)|morador\w*|morar\s+(?:na|no|em)|"
     r"(?:cuja|sua|seu)\s+(?:residencia|domicilio|endereco)|residencia\s+(?:fica|e)|"
     r"com endereco|endereco (?:residencial|comercial|profissional)|com sede|sede (?:na|no|em)|sediad\w*|"
-    r"estabelecid\w*|escritorio|filial|mud(?:ou|aram|ar|ando)(?:-se)?\s+para|transferiu-se|foi\s+para|foram\s+para|"
+    r"estabelecid\w*|escritorio|filial|cuja\s+sede|com\s+matriz|matriz\s+(?:na|no|em)|endereco\s+atual|"
+    r"trabalh(?:a|am|ava|avam)\s+(?:na|no|em)|mud(?:ou|aram|ar|ando)(?:-se)?\s+(?:para|a|ao)|transferiu-se|"
+    r"passou\s+a\s+residir|"
     r"(?:transferid|removid|deslocad)[oa]s?\s+para|realocad[oa]s?)\b"
 )
 # Uma expressao por pista: "imovel objeto da acao" casa "imovel objeto" e "objeto da acao".
@@ -282,13 +284,13 @@ _SUBJECT_CUES = tuple(re.compile(r"\b" + re.escape(cue) + r"\b") for cue in _SUB
 # "outra unidade habitacional", "o predio ao lado": outra unidade, nunca a do objeto.
 _OTHER_UNIT_BEFORE = re.compile(
     r"\b(?:outr[oa]s?|nov[oa]s?|antig[oa]s?|divers[oa]s?|segund[oa]s?|demais|"
-    r"(?:ao lado|em frente|defronte|proximo|perto|vizinh[oa]s?)(?:\s+(?:d[oa]s?|a|ao))?)\s+$"
+    r"(?P<neighbor>(?:ao lado|em frente|defronte|proximo|perto|vizinh[oa]s?)(?:\s+(?:d[oa]s?|a|ao))?))\s+$"
 )
 _OTHER_UNIT_AFTER = re.compile(r"\s+(?:vizinh|ao lado|em frente|defronte)")
 # "no bairro vizinho", "outra cidade": o endereco que segue e de outro lugar.
 _OTHER_PLACE = re.compile(
-    r"\b(?:(?:bairro|cidade|municipio|rua|quadra|predio|edificio|condominio)\s+vizinh[oa]|"
-    r"(?:outr[oa]|nov[oa])\s+(?:bairro|cidade|municipio|endereco|rua|estado))\b"
+    r"\b(?:(?:bairro|cidade|municipio|quadra|predio|edificio|condominio)\s+vizinh[oa]|"
+    r"outr[oa]\s+(?:bairro|cidade|municipio|endereco|rua|estado))\b"
 )
 _PARTICIPLE = re.compile(r"\b(?:situad|localizad)(?P<gender>[oa])s?\b")
 _PROPERTY_NOUN = re.compile(
@@ -298,13 +300,25 @@ _PROPERTY_NOUN = re.compile(
 # Parte entre o imovel e o participio ("entregue pela construtora, localizada"):
 # se concorda com o participio, e ela que esta localizada (fail-closed).
 _PARTY_NOUN = re.compile(
-    r"\b(?:(?P<feminine>re|autora|construtora|vendedora|compradora|incorporadora|empresa|requerida|empreiteira|"
-    r"imobiliaria|cooperativa|parte|testemunha)|(?P<both>requerente)|reu|autor|vendedor|comprador|requerido|"
-    r"banco|agente financeiro)\b"
+    r"\b(?:(?P<feminine>parte\s+(?:autora|re|requerente|requerida|adversa|contraria)|re|autora|construtora|vendedora|"
+    r"compradora|incorporadora|empresa|requerida|empreiteira|imobiliaria|cooperativa|testemunha)|(?P<both>requerente)|"
+    r"reu|autor|vendedor|comprador|requerido|banco|agente financeiro)\b"
 )
 # "imovel da parte autora" e posse, nao a parte qualificada.
 _POSSESSIVE_BEFORE = re.compile(r"\bd[aoe]s?\s+(?:parte\s+)?$")
+# "adquirida pela autora", "entregue a autora em 2015": agente de um participio
+# atributivo do proprio imovel (sem copula), nao a parte que esta localizada.
+_ATTRIBUTIVE_AGENT = re.compile(
+    r"\b(?:[a-z]+(?:ad|id)[oa]s?|entregues?)\s+(?:pel[oa]s?|por|a|ao|aos|as)\s+(?:[a-z]+\s+){0,2}$"
+)
+_COPULA = re.compile(r"\b(?:foi|foram|e|era|eram|sera|serao|esta|estava|seria)\b")
+_COPULA_AGENT = re.compile(
+    r"\b(?:foi|foram|era|eram|sera|serao|seria)\s+(?:[a-z]+(?:ad|id)[oa]s?|entregues?)\s+(?:pel[oa]s?|por|a|ao|aos|as)\b"
+)
 _PARTICIPLE_REACH = 160
+# SUBJECT_LOOSE: participio ligado a um substantivo de imovel sem pista "objeto";
+# basta onde a regra anterior ja aceitava a frase, nunca onde ela bloqueava.
+_SUBJECT_KINDS = frozenset({"SUBJECT", "SUBJECT_LOOSE"})
 _OBJECT = re.compile(r"\bobjeto\b")
 # "mora no imovel", "reside na unidade": o verbo fala de morar num imovel, nao apresenta endereco.
 _DWELLING_AHEAD = re.compile(
@@ -327,8 +341,8 @@ _DIRECT_LINK = re.compile(
     r"[\s,]*(?:(?:que\s+)?(?:fica|esta|situa-se|localiza-se|encontra-se|se\s+situa|se\s+localiza)\s+)?"
     r"(?:(?:situad|localizad)[oa]s?\s+)?(?:na|no|em|a|ao)?[\s,]*"
 )
-# "mora-\ndora": hifenizacao de quebra de linha do PDF nao esconde o marcador.
-_HYPHEN_BREAK = re.compile(r"(?<=[a-z])-[ \t]*\r?\n[ \t]*(?=[a-z])")
+# "mora-\ndora", "resi- dente": hifenizacao do PDF nao esconde o marcador.
+_HYPHEN_BREAK = re.compile(r"(?<=[a-z])-(?:[ \t]*\r?\n[ \t]*|[ \t]+)(?=[a-z])")
 
 
 def _joined(folded):
@@ -347,7 +361,7 @@ def _joined(folded):
     return "".join(pieces), forward
 
 
-def _participle_kind(text, begin, item, introducers, introducer_ends, subjects):
+def _participle_kind(text, begin, item, introducers, introducer_ends, subjects, others):
     floor = max(begin, item.start() - _PARTICIPLE_REACH)
     feminine = item.group("gender") == "a"
 
@@ -355,8 +369,17 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects):
         position = bisect_right(introducers, start - 1)
         if position < len(introducers) and introducers[position] < item.start():
             return True
+        # CPF, CNPJ, OAB, telefone... entre o imovel e o participio: a parte esta no meio.
+        if _PARTY_ADDRESS_BLOCKERS.search(text, start, item.start()):
+            return True
+        # "foi vendida a FULANA, situada na": o agente nomeado pode ser o localizado.
+        if _COPULA_AGENT.search(text, start, item.start()):
+            return True
         for noun in _PARTY_NOUN.finditer(text, start, item.start()):
             if _POSSESSIVE_BEFORE.search(text, max(start, noun.start() - 12), noun.start()):
+                continue
+            before = text[start:noun.start()]
+            if _ATTRIBUTIVE_AGENT.search(before) and not _COPULA.search(before):
                 continue
             if noun.group("both") or (noun.group("feminine") is not None) == feminine:
                 return True
@@ -369,6 +392,10 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects):
         position = bisect_right(introducers, noun.start()) - 1
         if position >= 0 and introducer_ends[position] >= noun.end():
             return "PARTY"
+        # "imovel ao lado do objeto da acao": a unidade vizinha no meio.
+        position = bisect_right(others, noun.end() - 1)
+        if position < len(others) and others[position] < item.start():
+            return "OTHER"
         # "novo imovel objeto da acao": a pista "objeto" entre eles diz que e o objeto.
         objeto = _OBJECT.search(text, noun.end(), item.start()) is not None
         if not objeto and (
@@ -376,7 +403,12 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects):
             or _OTHER_UNIT_AFTER.match(text, noun.end())
         ):
             return "OTHER"
-        return "PARTY" if interrupted(noun.end()) else "SUBJECT"
+        if interrupted(noun.end()):
+            return "PARTY"
+        # Ancorado: uma pista do imovel objeto entre o substantivo e o participio.
+        low = bisect_left(subjects, (noun.start(), -1))
+        anchored = any(end <= item.start() for _start, end in subjects[low:bisect_left(subjects, (item.start(), -1))])
+        return "SUBJECT" if anchored else "SUBJECT_LOOSE"
     if nouns:
         return "PARTY"
     if not text[begin:item.start()].strip(" \t\n,.;:-"):
@@ -391,7 +423,7 @@ def _participle_kind(text, begin, item, introducers, introducer_ends, subjects):
 
 
 def _clause_markers(text):
-    """(inicio, fim, tipo) de cada marcador da pagina: PARTY, SUBJECT ou OTHER.
+    """(inicio, fim, tipo) de cada marcador da pagina: PARTY, SUBJECT(_LOOSE) ou OTHER.
 
     Calculado uma vez por pagina; cada marcador so olha para tras ate o inicio
     da propria frase, com alcance fixo (custo linear no texto).
@@ -408,8 +440,10 @@ def _clause_markers(text):
     for cue in _SUBJECT_CUES:
         for item in cue.finditer(text):
             floor = max(begin_of(item.start()), item.start() - 24)
-            other = _OTHER_UNIT_BEFORE.search(text[floor:item.start()]) or _OTHER_UNIT_AFTER.match(text, item.end())
-            kind = "OTHER" if other and "objeto" not in item.group() else "SUBJECT"
+            before = _OTHER_UNIT_BEFORE.search(text[floor:item.start()])
+            neighbor = (before is not None and before.group("neighbor") is not None) or _OTHER_UNIT_AFTER.match(text, item.end())
+            # "novo imovel objeto da acao" e o objeto; "ao lado do objeto" nao.
+            kind = "OTHER" if neighbor or (before is not None and "objeto" not in item.group()) else "SUBJECT"
             markers.append((item.start(), item.end(), kind))
             if kind == "SUBJECT":
                 subjects.append((item.start(), item.end()))
@@ -430,8 +464,9 @@ def _clause_markers(text):
     introducers.sort()
     starts = [start for start, _end in introducers]
     ends = [end for _start, end in introducers]
+    others = sorted(start for start, _end, kind in markers if kind == "OTHER")
     for item in _PARTICIPLE.finditer(text):
-        kind = _participle_kind(text, begin_of(item.start()), item, starts, ends, subjects)
+        kind = _participle_kind(text, begin_of(item.start()), item, starts, ends, subjects, others)
         if kind is not None:
             markers.append((item.start(), item.end(), kind))
     markers.sort()
@@ -618,7 +653,7 @@ def _clause_rule_proposals(page, document_kind, folded, indices, label_spans=())
                 position = bisect_right(marker_starts, reference) - 1
                 nearest = markers[position] if position >= 0 and markers[position][0] >= low else None
                 if not blocked:
-                    if nearest is not None and nearest[2] != "SUBJECT":
+                    if nearest is not None and nearest[2] not in _SUBJECT_KINDS:
                         continue
                     if nearest is None:
                         # "Na Rua X, nº 10, reside a autora": sem marcador antes,
@@ -628,10 +663,11 @@ def _clause_rule_proposals(page, document_kind, folded, indices, label_spans=())
                         later = bisect_right(street_starts, reference)
                         if later < len(street_starts):
                             limit = min(limit, street_starts[later])
-                        if following < len(markers) and markers[following][0] < limit and markers[following][2] != "SUBJECT":
+                        if following < len(markers) and markers[following][0] < limit and markers[following][2] not in _SUBJECT_KINDS:
                             continue
                     bound = any(cue in context for cue in _SUBJECT_PROPERTY_CUES)
                 else:
+                    # Aqui so vale a pista do imovel objeto (ou participio ancorado nela).
                     if nearest is None or nearest[2] != "SUBJECT":
                         continue
                     if nearest[1] < reference and not _DIRECT_LINK.fullmatch(joined, nearest[1], reference):

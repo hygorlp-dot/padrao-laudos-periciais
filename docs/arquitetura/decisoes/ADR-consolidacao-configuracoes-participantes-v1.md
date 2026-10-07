@@ -115,20 +115,29 @@ conteúdo privado do workspace).
   marcador mais próximo antes dele. Há dois regimes, para nunca propor mais
   endereço de parte do que antes:
   - **Frase que a regra anterior aceitava.** Só sai o endereço introduzido por
-    um verbo de residência, sede ou deslocamento ("moradora da", "mora na",
-    "estabelecida", "com domicílio", "filial", "transferida para") ou por um
-    particípio de parte ("a vendedora, localizada na"). Comarca, testemunha,
-    assistente e mudança, citados na narrativa, não apagam o endereço do imóvel.
-    Sem marcador antes, decide o primeiro marcador depois da cadeia.
+    um verbo de residência, sede, trabalho ou deslocamento ("moradora da", "mora
+    na", "estabelecida", "com domicílio", "cuja sede", "com matriz", "filial",
+    "trabalha na", "mudou-se para/à", "transferida para"). Também sai o
+    endereço introduzido por um particípio de parte ("a vendedora, localizada
+    na"; "foi vendida a FULANA, situada na"). Comarca, testemunha, assistente
+    e mudança, citados na narrativa, não apagam o endereço do imóvel; "foi
+    para" também não. Sem marcador antes, decide o primeiro marcador depois da
+    cadeia.
   - **Frase que a regra anterior bloqueava inteira** (CPF, telefone, advogado,
-    juízo…). Só entra o endereço ligado diretamente à pista do imóvel
-    ("imóvel objeto da ação, situado na", "fica na"), e sem nenhum bloqueador
-    depois dele.
+    juízo…). Só entra o endereço ligado diretamente a uma pista do imóvel
+    objeto ("imóvel objeto da ação, situado na", "fica na"). Se o vínculo vem
+    por particípio, ele precisa estar ancorado nessa pista. E não pode haver
+    bloqueador depois do endereço.
   - "situado/localizado" segue o substantivo de imóvel que concorda com ele
-    (alcance de 160 caracteres). Parte que concorda e está entre os dois (o
-    agente "pela construtora"), ou imóvel vizinho ou outro ("ao lado do
-    prédio", "nova unidade"), tira o vínculo. A pista "objeto" entre eles o
-    devolve.
+    (alcance de 160 caracteres). O vínculo cai, fail-closed, quando aparece
+    entre os dois:
+    - uma parte que concorda e não é só agente de um particípio atributivo
+      ("adquirida pela autora" mantém o vínculo; "foi entregue pela
+      construtora" o tira);
+    - CPF, CNPJ, OAB ou telefone;
+    - um imóvel vizinho ou outro ("ao lado do", "nova unidade").
+
+    A pista "objeto" devolve o vínculo a uma unidade "nova".
   - "imóvel objeto, onde reside, …" fala do próprio imóvel só com a relativa
     colada à pista do imóvel, sem negação e sem deslocamento depois do verbo,
     e com no máximo um parentético de lista fechada ("financiada em 2015").
@@ -136,8 +145,13 @@ conteúdo privado do workspace).
   - Dois logradouros diferentes presos à mesma pista ficam "possíveis".
   - Precedente continua bloqueando a frase inteira.
   - Município/UF seguem a frase inteira (fail-closed).
-  - A hifenização de quebra de linha do PDF ("mora-\ndora") não esconde o
+  - A hifenização do PDF ("mora-\ndora", "resi- dente") não esconde o
     marcador.
+  - Resíduos conhecidos:
+    - frase sem nenhum marcador de parte;
+    - relativa colada à pista com deslocamento implícito ("onde reside hoje
+      em Recife");
+    - erro de gênero do OCR no particípio, que perde o endereço (fail-closed).
   - `BACKUP_REPLAY_LEGACY = ALLOWED` e `NEW_PROPOSAL_FROM_PARTY_ADDRESS =
     PROHIBITED`: a reprodução do backup (`include_legacy_labels=True`) aceita
     a união da regra nova com a anterior. Toda proposta nova é reproduzível, e

@@ -133,6 +133,36 @@ PROBES = {
     "r_nova_unidade_objeto": "A autora adquiriu nova unidade habitacional, objeto da ação, situada na Rua do Imóvel, nº 20.\n",
     "r_residencia_objeto": "A residência da autora, imóvel objeto da ação, situada na Rua do Imóvel, nº 20, tem fissuras.\n",
     "r_dois_enderecos_mesma_pista": "O imóvel objeto da ação, situado na Rua do Imóvel, nº 20, e a casa de FULANA, na Rua da Parte, nº 10.\n",
+    # Rodada 2 da revisão independente da PR #294.
+    # P1-1: agente de participio atributivo e "parte" comum nao apagam o endereco do imovel.
+    "r2_adquirida_pela_autora": "A unidade habitacional adquirida pela autora, situada na Rua do Imóvel, nº 20, apresenta fissuras.\n",
+    "r2_faz_parte": "A unidade habitacional, que faz parte do Residencial Sintético, situada na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r2_parte_integrante": "A unidade habitacional, parte integrante do conjunto, situada na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r2_financiado_pelo_banco": "O imóvel objeto da ação, financiado pelo banco, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r2_construida_pela_construtora_re": "A casa construída pela construtora ré, situada na Rua do Imóvel, nº 20, é objeto da ação.\n",
+    "r2_entregue_a_autora": "A unidade habitacional entregue à autora em 2015, situada na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r2_adquirido_pelo_requerente": "O imóvel adquirido pelo requerente, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    # P1-2: CPF/CNPJ entre o imovel e o participio.
+    "r2_vendida_a_fulana_cpf": "A unidade habitacional foi vendida a FULANA, CPF 000.000.000-00, situada na Rua da Parte, nº 10.\n",
+    "r2_vendida_pela_ltda_cnpj": "A unidade habitacional foi vendida pela SINTÉTICA LTDA, CNPJ 00.000.000/0001-00, situada na Rua da Parte, nº 10.\n",
+    # P2-1: onde a regra anterior bloqueava, so a pista do imovel objeto liga.
+    "r2_casa_sem_pista_com_cnpj": "O réu, CNPJ 00.000.000/0001-00, construiu a casa, situada na Rua da Parte, nº 10, onde mantém filial.\n",
+    # P2-2: "foi para" na narrativa do laudo nao e endereco de parte.
+    "r2_perito_foi_para": "LAUDO\nO perito foi para a Rua do Imóvel, nº 20, imóvel objeto da ação, em 10/05/2024.\n",
+    "r2_autos_foram_para": "LAUDO\nOs autos foram para vistoria na Rua do Imóvel, nº 20, imóvel objeto da ação.\n",
+    # P3: "Vizinha" no nome da rua.
+    "r2_rua_vizinha": "O imóvel objeto da ação, situado na Rua Vizinha Sintética, nº 20, tem fissuras.\n",
+    # Sondas adversariais da rodada 2 que a main também errava.
+    "r2_vendida_a_fulana": "A unidade habitacional foi vendida a FULANA, situada na Rua da Parte, nº 10.\n",
+    "r2_vendida_pela_ltda": "A unidade habitacional foi vendida pela SINTÉTICA LTDA, localizada na Rua da Parte, nº 10.\n",
+    "r2_hifen_com_espaco": "A autora, resi- dente na Rua da Parte, nº 10, é proprietária do imóvel objeto da ação, situado na Rua do Imóvel, nº 20.\n",
+    "r2_cuja_sede": "A construtora, cuja sede fica na Rua da Parte, nº 10, entregou o imóvel objeto da ação.\n",
+    "r2_com_matriz": "A construtora, com matriz na Rua da Parte, nº 10, entregou o imóvel objeto da ação.\n",
+    "r2_trabalha_na": "A autora, proprietária do imóvel objeto da ação, trabalha na Rua da Parte, nº 10.\n",
+    "r2_mudou_se_a": "A autora vendeu o imóvel objeto da ação e mudou-se à Rua da Parte, nº 10.\n",
+    "r2_endereco_atual": "A autora vendeu o imóvel objeto da ação, endereço atual Rua da Parte, nº 10.\n",
+    "r2_imovel_ao_lado_do_objeto": "O imóvel ao lado do objeto da ação, situado na Rua da Parte, nº 10, não foi vistoriado.\n",
+    "r2_novo_bairro": "O imóvel objeto da ação fica no novo bairro, na Rua do Imóvel, nº 20.\n",
 }
 
 
@@ -478,6 +508,92 @@ MAIN_8941B2C_REPLAY_IDS = {
         "d1cf0925974b1041e664bfa5090c02e01301b1c48a23a8019d4c9f8649e524fa",
         "e6b9d8bd014ac86adab95dd38399932c19983bce37d87139dd284c69c5731525",
     ),
+    "r2_adquirida_pela_autora": (
+        "4730aad40ad89590e8ec34e22dadeee75afda1d73b066f21f02b0f6424fe8af7",
+        "d4aa776ceabbeaa119c8336893c7e8d1564be9026d2fce5452a46ae8a962c323",
+    ),
+    "r2_faz_parte": (
+        "7e6220fbc55c2f122f356bc872f99e5ee6f115c6b986f1666bce0eca614be448",
+        "7fb60eea3e8d211d281cfe14c73f0abbc3f8691f3409d59d8c91753c494c986a",
+        "87bc2dde624c8bbda3cd449b2bcc5591143019b21f61c3e195ee9adc043057fe",
+    ),
+    "r2_parte_integrante": (
+        "7a988fadb653855fa79b2941a1fbe81d219052a5e4c2923a84c76e1e69252f76",
+        "7eeeae09dd4ad18f0b0e0fd4590f86d8f01673e01371c56bb7ed78102a242c3f",
+    ),
+    "r2_financiado_pelo_banco": (
+        "08f198ce144accf4c28ba34aaffed92749fb096935458ff999f9313f1495d76d",
+        "d1cfaa706a8fc3d14edf1ab83c0b6f6b4c6cc7417af5f06c331d5f6dba415832",
+    ),
+    "r2_construida_pela_construtora_re": (
+        "3484eb1b3d507b803c7f98e4415ad00f21e4b91dc896329229c27a54925cb995",
+        "cbcae90a57001428c85cffcab95b307e399d7b878cc12898e839a8cb64194ab2",
+    ),
+    "r2_entregue_a_autora": (
+        "5c71afaf44f54e0ec88b5a5259e0a64ec8d25e08616efd85eb2fd8117dd478fc",
+        "8080291ebfbce1b11663f5ac2f867aa0a83c295c166bd718fe51011616a54337",
+    ),
+    "r2_adquirido_pelo_requerente": (
+        "785330969ce709de89e3b404f9f51e342b99bce1b45d25906934ff31ba593cc9",
+        "e0c5f48afe92237d346f2319a3850ae878a2baadcdd03c55632072d2578d1435",
+    ),
+    "r2_vendida_a_fulana_cpf": (),
+    "r2_vendida_pela_ltda_cnpj": (),
+    "r2_casa_sem_pista_com_cnpj": (),
+    "r2_perito_foi_para": (
+        "73bc503b8f18959c9dce389c2e62c6cbc510b47565fb7896a2d2a4b8dd65a84f",
+        "f245e24a37ec0afa64880d49c09050cfab25a4c16a234ea79b8353c25c6b4901",
+    ),
+    "r2_autos_foram_para": (
+        "60db0bd3538a4f673fe4a67aa6b7980eed7e967acfe2aaff4ddcd9cc0e39117a",
+        "747978ee302b0c6b012abee9e4511bf782e6893eedefdd71803cc5d17628f61d",
+    ),
+    "r2_rua_vizinha": (
+        "b27a2adcdbb2db1aeebc1f9770635bbd6c9c05b929e09c13638f76021f3905f0",
+        "f268cdaeea3aea2d857410e10a470f5ef87d8663cf9fc24d5bba3ac4d12b1573",
+    ),
+    "r2_vendida_a_fulana": (
+        "0a74eb5a96ee92d0c7c6cedebc2a139b2a4b6b125a8e6878019de7e2a653e56f",
+        "9927c497f88f4f8b7250a19fb1824f2705368ebbc00eb703cf5e6ca134f9cd2c",
+    ),
+    "r2_vendida_pela_ltda": (
+        "8f03854c947f20f8d24eb1d5be974de8f2d9022ccd41d8889ed8a71b1d549369",
+        "f630acbb2405f68a6bf152e03d42b07ea826595c63640e1de2c2a83444c3c487",
+    ),
+    "r2_hifen_com_espaco": (
+        "7c1c7c4721144577d02ea9fe9bec53bd117dac0041d5a68fa9d8c952c2f288b9",
+        "807fc94b6c0a7bc56eb4c1aa85c99397339ed67032af601d1e1f8c635614017c",
+        "d29f0205cbbe1a06eda0325c4b4d7187e0b9a21c3dd0e81e065c977976dfca7d",
+        "f49661b84eb61a2eb15cdb3094d6c533925a85423d910240ae0f475569cef0c5",
+    ),
+    "r2_cuja_sede": (
+        "0ad109211f66bb5958a1147d409291223060a3c7f9c0f71923a920c30195eb6d",
+        "3950cbc555215abffd0edd9941a74ad70071465dda63085772045753193e5be8",
+    ),
+    "r2_com_matriz": (
+        "a87e14516abc14a7a52e00b0df8becf26a78dd4eebee56bda25f4c6c794744e0",
+        "f297fde246ded9a967c9e8a6aa2dff8137823f311d9ff7f421e8eca8c03371a5",
+    ),
+    "r2_trabalha_na": (
+        "05f3551f69d0d462f3a903760edac7a807ad5cc2ec37b2664ac8c30620de728d",
+        "c3f63b4f627f9d9dda384e75d1197bc76ed23956cb1ee3c7e1917bf7807bc221",
+    ),
+    "r2_mudou_se_a": (
+        "aa432a79523e9cbd79ad30859dc71474b37263558ad08acf8a135358a44e5258",
+        "c46726614feb9ad980a74673e8aa7884ffcbfdfa43d087608cb2e7b0cbdbe833",
+    ),
+    "r2_endereco_atual": (
+        "9ec428e096ce810a88f1fce6127897d9fad4e66fb8984e7b83f26213cd469974",
+        "dbe26fb2b3ec3c73779b3652338b32d7ad4954362dff6596f4dfd68da00ba3f1",
+    ),
+    "r2_imovel_ao_lado_do_objeto": (
+        "4bb9209184bbb15742aa00dbc3d2d84935e2cae97b97a44d5ce36eb5ab891d6d",
+        "fd1976bb833a5d2854697d260246deff28be273c1ba8eae4deae85cf14dd4655",
+    ),
+    "r2_novo_bairro": (
+        "153413e2e61f642762b8abbd911dfb4b15060f17b3f37c04b10ce92072676c7c",
+        "9cb60d49fcf09b0d5ebab4549fbd1a969089883f2cf34c46c82f3e85bef07ed5",
+    ),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -554,6 +670,30 @@ EXPECTED = {
     "r_nova_unidade_objeto": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
     "r_residencia_objeto": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
     "r_dois_enderecos_mesma_pista": {("number", "10", "POSSIBLE"), ("number", "20", "POSSIBLE"), ("street", "Rua da Parte", "POSSIBLE"), ("street", "Rua do Imóvel", "POSSIBLE")},
+    # Rodada 2 da revisão independente da PR #294.
+    "r2_adquirida_pela_autora": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_faz_parte": {("development", "Residencial Sintético", "STRONG"), ("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_parte_integrante": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_financiado_pelo_banco": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_construida_pela_construtora_re": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_entregue_a_autora": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_adquirido_pelo_requerente": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_vendida_a_fulana_cpf": set(),
+    "r2_vendida_pela_ltda_cnpj": set(),
+    "r2_casa_sem_pista_com_cnpj": set(),
+    "r2_perito_foi_para": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_autos_foram_para": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_rua_vizinha": {("number", "20", "STRONG"), ("street", "Rua Vizinha Sintética", "STRONG")},
+    "r2_vendida_a_fulana": set(),
+    "r2_vendida_pela_ltda": set(),
+    "r2_hifen_com_espaco": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r2_cuja_sede": set(),
+    "r2_com_matriz": set(),
+    "r2_trabalha_na": set(),
+    "r2_mudou_se_a": set(),
+    "r2_endereco_atual": set(),
+    "r2_imovel_ao_lado_do_objeto": set(),
+    "r2_novo_bairro": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
 }
 _PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 
