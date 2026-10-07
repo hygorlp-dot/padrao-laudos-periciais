@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { App } from "../app/App";
 import { navigateTo } from "../app/router";
 import { WORKFLOW_ROUTES } from "../routes/routeCatalog";
+import { installMutationSignal } from "../data/mutationSignal";
 
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "22222222-2222-4222-8222-222222222222";
@@ -198,5 +199,45 @@ describe("Início da perícia (#291)", () => {
     expect(sidebarLink("Processo")).not.toHaveAttribute("aria-current");
     await waitFor(() => expect(calls.filter((call) => call === statusRoute(A)).length).toBeGreaterThanOrEqual(2));
     expect(calls.every((call) => !call.startsWith("POST") && !call.startsWith("PUT"))).toBe(true);
+  });
+});
+
+describe("situação depois de uma gravação (#291)", () => {
+  test("a write in this perícia makes the navigation re-read the status, without stale approval", async () => {
+    window.history.replaceState(null, "", `/pericias/${A}/analise`);
+    let report = { state: "APPROVED", currency: "CURRENT", decision: "APPROVED", reasons: [{ code: "REPORT_APPROVED" }], revision: 4 } as Stage;
+    const { calls } = routeFetch({
+      [workspaceRoute(A)]: () => json(200, workspace(A, "Perícia Alfa")),
+      [statusRoute(A)]: () => json(200, workflow(A, { laudo: report, revisao: report })),
+      [`POST /app-api/v1/workspaces/${A}/case-analysis/items`]: () => json(200, {}),
+    });
+    installMutationSignal(window);
+    render(<App />);
+    await waitFor(() => expect(sidebarLink("Laudo")).toHaveAccessibleDescription(/^Aprovada/));
+
+    report = { state: "REVIEW_REQUIRED", currency: "STALE", decision: "APPROVED", reasons: [{ code: "UPSTREAM_CHANGED", count: 1 }, { code: "REPORT_APPROVED" }], revision: 4 };
+    await act(async () => {
+      await window.fetch(`/app-api/v1/workspaces/${A}/case-analysis/items`, { method: "POST", body: "{}" });
+    });
+    await waitFor(() => expect(sidebarLink("Laudo")).toHaveAccessibleDescription(/^Revisão necessária.*Antes da mudança: laudo aprovado/));
+    expect(calls.filter((call) => call === statusRoute(A)).length).toBeGreaterThanOrEqual(2);
+  });
+
+  test("a write in another perícia does not trigger a re-read here", async () => {
+    window.history.replaceState(null, "", `/pericias/${A}`);
+    const { calls } = routeFetch({
+      [workspaceRoute(A)]: () => json(200, workspace(A, "Perícia Alfa")),
+      [statusRoute(A)]: () => json(200, workflow(A)),
+      [`POST /app-api/v1/workspaces/${B}/process-case`]: () => json(200, {}),
+    });
+    installMutationSignal(window);
+    render(<App />);
+    await screen.findByRole("link", { name: "Abrir Processo" });
+    const before = calls.filter((call) => call === statusRoute(A)).length;
+    await act(async () => {
+      await window.fetch(`/app-api/v1/workspaces/${B}/process-case`, { method: "POST", body: "{}" });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(calls.filter((call) => call === statusRoute(A)).length).toBe(before);
   });
 });

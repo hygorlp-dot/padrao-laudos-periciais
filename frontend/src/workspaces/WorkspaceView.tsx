@@ -3,6 +3,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "reac
 import { ExpertIdentityProvider } from "../data/expertIdentity";
 import { getWorkspace, WorkspaceApiError, type Workspace } from "../data/workspaces";
 import { getWorkflowStatus } from "../data/workflowStatus";
+import { WORKSPACE_MUTATED } from "../data/mutationSignal";
 import type { SidebarStageStatus } from "../ui/Sidebar";
 import { WorkspaceHome, type WorkflowStatusView } from "./WorkspaceHome";
 import { navigate } from "../app/router";
@@ -94,6 +95,21 @@ export function WorkspaceView({ currentPath, workspaceId, route }: WorkspaceView
   // uma requisição abortada é descartada.
   const [workflow, setWorkflow] = useState<WorkflowStatusView>({ kind: "loading" });
   const [workflowAttempt, setWorkflowAttempt] = useState(0);
+  // Uma gravação concluída nesta perícia torna a situação lida antes possivelmente
+  // antiga: relê (sem voltar a "carregando"), agrupando gravações em sequência.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onMutated = (event: Event) => {
+      if ((event as CustomEvent<string>).detail !== workspaceId) return;
+      clearTimeout(timer);
+      timer = setTimeout(() => setWorkflowAttempt((value) => value + 1), 150);
+    };
+    window.addEventListener(WORKSPACE_MUTATED, onMutated);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener(WORKSPACE_MUTATED, onMutated);
+    };
+  }, [workspaceId]);
   useEffect(() => {
     const controller = new AbortController();
     getWorkflowStatus(workspaceId, controller.signal).then(

@@ -9,6 +9,7 @@ Dois niveis:
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -242,6 +243,8 @@ def test_stale_planning_is_review_required_and_keeps_partial_decisions():
         ("CONFIRMED", (READY,), True, "RECORDED", "METADATA_CONFIRMED"),
         ("EXTRACTED", (READY,), True, "REVIEW_REQUIRED", "METADATA_CONFIRMATION_OUTDATED"),
         ("CONFLICT", (READY,), False, "ATTENTION", "METADATA_CONFLICT"),
+        # Precedencia: conflito atual vence a confirmacao desatualizada (que fica como motivo).
+        ("CONFLICT", (READY,), True, "ATTENTION", "METADATA_CONFIRMATION_OUTDATED"),
         # Extracao ausente durante a derivacao NAO e erro: ainda esta processando.
         ("ERROR", (PROCESSING,), False, "PROCESSING", "MATERIALS_PROCESSING"),
         ("ERROR", (FAILED,), False, "ATTENTION", "METADATA_EXTRACTION_FAILED"),
@@ -405,6 +408,141 @@ def test_budget_is_optional_management_fact():
     assert stage.state == "RECORDED" and {"FINANCIAL_PARTIALLY_RECEIVED", "OPTIONAL_STAGE"} <= set(_codes(stage))
 
 
+def test_reviewed_report_awaits_approval_and_is_never_approved():
+    persisted = _fixture("report-snapshot-v1")
+    persisted |= {
+        "state": "REVIEWED", "review_decisions": persisted["review_decisions"][:1],
+        "coverage": persisted["coverage"] | {"complete": False},
+    }
+    report = report_snapshot_from_mapping(persisted)
+    record = _record(5, persisted)
+    service, _ = _service(present={REPORT_SNAPSHOT_ARTIFACT_KIND: record}, getters={"laudo": (record, report)})
+    stages = _by_stage(service.execute(WS))
+    assert stages["laudo"].state == stages["revisao"].state == "AWAITING_REVIEW"
+    assert stages["laudo"].decision == "REVIEWED"
+    assert "REPORT_AWAITING_APPROVAL" in _codes(stages["revisao"])
+
+
+def _ns(**values):
+    return SimpleNamespace(**values)
+
+
+@pytest.mark.parametrize(
+    ("readiness", "pending", "expected"),
+    [("PARTIAL", 0, "IN_PROGRESS"), ("BLOCKED", 0, "ATTENTION"), ("PARTIAL", 3, "AWAITING_REVIEW")],
+)
+def test_planning_without_domain_readiness_is_never_ready(readiness, pending, expected):
+    from scripts.backend_contract.pericial_planning import ReadinessStatus
+
+    coverage = _ns(pending_items=pending, reviewed_items=2, readiness=ReadinessStatus(readiness), readiness_reasons=("x",), deferred_items=1)
+    snapshot = _ns(coverage=coverage, upstream_stale=False, upstream_stale_reasons=())
+    service, _ = _service(present={PERICIAL_PLANNING_ARTIFACT_KIND: _record(2)}, getters={"planejamento": (_record(2), snapshot)})
+    assert _by_stage(service.execute(WS))["planejamento"].state == expected
+
+
+def test_inspection_with_pending_items_is_in_progress():
+    coverage = _ns(total_items=3, pending_items=1, completed_items=2, partial_items=0, not_executed_items=0,
+                   not_applicable_items=0, blocked_items=0)
+    session = _ns(coverage=coverage, upstream_stale=False, upstream_stale_reasons=())
+    service, _ = _service(present={INSPECTION_SESSION_ARTIFACT_KIND: _record(2)}, getters={"vistoria": (_record(2), session)})
+    stage = _by_stage(service.execute(WS))["vistoria"]
+    assert stage.state == "IN_PROGRESS" and _codes(stage)["ITEMS_PENDING"] == 1
+
+
+def _technical(**changes):
+    from scripts.backend_contract.technical_findings import EvidenceReviewState
+
+    base = dict(
+        evidence_items=(1,), evidence_assessments=(_ns(review_state=EvidenceReviewState.PENDING),),
+        finding_proposals=(), decisions=(), conflicts=(), findings=(), upstream_stale=False, upstream_stale_reasons=(),
+    )
+    return _ns(**(base | changes))
+
+
+def test_pending_evidence_awaits_review_and_no_proposal_is_not_started():
+    service, _ = _service(present={TECHNICAL_SNAPSHOT_ARTIFACT_KIND: _record(3)}, getters={"tecnico": (_record(3), _technical())})
+    stages = _by_stage(service.execute(WS))
+    assert stages["evidencias"].state == "AWAITING_REVIEW"
+    assert stages["constatacoes"].state == "NOT_STARTED" and "NO_PROPOSALS" in _codes(stages["constatacoes"])
+
+
+def test_finding_proposal_without_decision_awaits_review():
+    technical = _technical(finding_proposals=(_ns(proposal_id="P1"), _ns(proposal_id="P2")), decisions=(_ns(proposal_id="P1"),))
+    service, _ = _service(present={TECHNICAL_SNAPSHOT_ARTIFACT_KIND: _record(3)}, getters={"tecnico": (_record(3), technical)})
+    stage = _by_stage(service.execute(WS))["constatacoes"]
+    assert stage.state == "AWAITING_REVIEW" and _codes(stage)["PROPOSALS_AWAITING_DECISION"] == 1
+
+
+def test_blocked_drafting_gate_needs_attention():
+    analysis = _ns(gate="BLOQUEADO_PARA_REDACAO", reviews=(), upstream_stale=False, upstream_stale_reasons=())
+    service, _ = _service(present={CONSTRUCTION_DEFECT_ANALYSIS_ARTIFACT_KIND: _record(2)},
+                          getters={"analise-tecnica": (_record(2), analysis)})
+    stage = _by_stage(service.execute(WS))["analise-tecnica"]
+    assert stage.state == "ATTENTION" and "GATE_BLOQUEADO_PARA_REDACAO" in _codes(stage)
+
+
+def test_superseded_delivery_needs_attention_and_is_not_approved():
+    snapshot = _ns(state=DeliveryState.SUPERSEDED, artifacts=(), stale_reasons=(), stale_origin_state=None)
+    service, _ = _service(present={DELIVERY_SNAPSHOT_ARTIFACT_KIND: _record(2)}, getters={"exportar": (_record(2), snapshot)})
+    stage = _by_stage(service.execute(WS))["exportar"]
+    assert stage.state == "ATTENTION" and "DELIVERY_SUPERSEDED" in _codes(stage)
+
+
+def test_case_items_made_stale_by_professional_exclusion_require_review():
+    case = case_analysis_from_mapping(_fixture("case-analysis-snapshot-v1"))
+    stale = replace(case, claims=(replace(case.claims[0], stale=True), *case.claims[1:]))
+    service, _ = _service(present={CASE_ANALYSIS_ARTIFACT_KIND: _record(2)}, getters={"analise": (_record(2), stale)})
+    stage = _by_stage(service.execute(WS))["analise"]
+    assert (stage.state, stage.currency) == ("REVIEW_REQUIRED", "STALE")
+    assert _codes(stage)["ITEMS_STALE"] == 1
+
+
+def test_projection_window_reads_each_authority_once_and_keeps_nothing_outside():
+    from scripts.backend_contract.application.workflow_status import (
+        ProjectionWindow, WindowedAuthority, WindowedPrivateListing,
+    )
+
+    window = ProjectionWindow()
+    calls = {"list_all": 0, "upstream": 0}
+
+    class Contents:
+        def list_all(self, workspace_id):
+            calls["list_all"] += 1
+            return ("bytes-verified",)
+
+    listing = WindowedPrivateListing(Contents(), window)
+
+    class Upstream:
+        def execute(self, workspace_id):
+            calls["upstream"] += 1
+            listing.list_all(workspace_id)
+            return "upstream"
+
+    upstream = WindowedAuthority(Upstream(), window)
+
+    class Downstream:
+        def execute(self, workspace_id):
+            upstream.execute(workspace_id)
+            listing.list_all(workspace_id)
+            return "downstream"
+
+    downstream = [WindowedAuthority(Downstream(), window) for _ in range(5)]
+    with window.open():
+        for item in downstream:
+            item.execute(WS)
+        listing.list_all("33333333-3333-4333-8333-333333333333")
+    # Uma leitura por perícia dentro da janela, mesmo com cinco consumidores em cascata.
+    assert calls == {"list_all": 2, "upstream": 1}
+    # Fora da janela nada é reaproveitado: cada chamada vai à autoridade.
+    downstream[0].execute(WS)
+    downstream[0].execute(WS)
+    assert calls == {"list_all": 6, "upstream": 3}
+    with pytest.raises(RuntimeError):
+        with window.open():
+            with window.open():
+                pass
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -453,6 +591,19 @@ class _GatedPjeIntake:
             self.finished.set()
 
 
+def _close_or_fail(runtime):
+    """Fecha com prazo finito: uma regressao na ordem das travas vira falha, nao CI travado."""
+    closer = threading.Thread(target=runtime.close, name="close-runtime", daemon=True)
+    closer.start()
+    closer.join(30)
+    if closer.is_alive():
+        # Threads de requisicao presas nao sao daemon: o interpretador ficaria
+        # esperando por elas para sempre DEPOIS do relatorio. Neste caminho (e so
+        # nele) o processo termina com erro assim que o pytest acabar.
+        threading._register_atexit(lambda: os._exit(3))
+        pytest.fail("o runtime nao fechou em 30 s: travas presas (deadlock)")
+
+
 @pytest.fixture
 def product(tmp_path):
     intake = _GatedPjeIntake()
@@ -465,7 +616,7 @@ def product(tmp_path):
         yield runtime, intake
     finally:
         intake.release.set()
-        runtime.close()
+        _close_or_fail(runtime)
 
 
 def _local(runtime, method, path, value=None):
@@ -570,47 +721,130 @@ def test_one_failing_authority_is_unavailable_and_the_rest_still_answer(product,
     assert stages["planejamento"]["state"] == "NOT_STARTED"
 
 
-def test_concurrent_write_never_lands_inside_a_projection(product, monkeypatch):
+def test_one_projection_lists_private_content_once(product, tmp_path, monkeypatch):
+    """Custo: a listagem privada (hash de cada byte) e lida uma vez por projecao."""
+    from tests.test_document_ingestion_lifecycle_v1 import _synthetic_pje
+
+    runtime, intake = product
+    intake.release.set()
+    workspace_id = _new_workspace(runtime, "Perícia com material")
+    status, _, body = request(
+        runtime, "POST", f"/app-api/v1/workspaces/{workspace_id}/materials",
+        headers={**browser_mutation_headers(runtime), "Content-Type": "application/pdf", "X-Document-Filename": "autos.pdf"},
+        raw_body=_synthetic_pje(tmp_path, "workflow-cost"),
+    )
+    assert status in {200, 201, 202}, body
+    assert intake.finished.wait(30)
+    private = runtime._local_api._private_store
+    original = private.list_all
+    calls = []
+    monkeypatch.setattr(private, "list_all", lambda workspace: calls.append(str(workspace)) or original(workspace))
+
+    stages = _status(runtime, workspace_id)
+    assert stages["materiais"]["reasons"][0]["code"] in {"MATERIALS_READY", "MATERIALS_PROCESSING"}
+    # Ingestao e conferencia de metadados consomem a mesma listagem: sem o memo seriam 2.
+    assert calls == [workspace_id]
+    _status(runtime, workspace_id)
+    assert len(calls) == 2, "o memo nao pode sobreviver a projecao"
+
+
+_PROCESS_DATA = {key: "" for key in (
+    "numero_processo", "ramo_justica", "tribunal", "vara", "municipio_sede", "subsecao_judiciaria",
+    "comarca_municipio", "uf", "parte_requerente", "parte_requerida",
+)}
+
+
+@pytest.mark.parametrize(
+    ("resource", "body", "stage", "created"),
+    [
+        # Grava fora de `authority_guard`: prova a metade SQLite da janela.
+        ("budget-snapshot", {"process_id": None, "appointment_id": None}, "orcamento", 201),
+        ("process-case", {"expected_revision": None, "data": _PROCESS_DATA | {"vara": "Vara sintética"}}, "processo", 200),
+    ],
+)
+def test_concurrent_write_never_lands_inside_a_projection(tmp_path, monkeypatch, resource, body, stage, created):
     """Coerencia: uma gravacao concorrente espera a projecao inteira terminar."""
+    intake = _GatedPjeIntake()
+    intake.release.set()
+    runtime = build_product_runtime(
+        tmp_path / "product.db", frontend_build(tmp_path), token=TOKEN, private_root=tmp_path / "private",
+        pje_intake=intake, config=ProductBridgeConfig(upstream_timeout_seconds=10.0),
+    )
+    runtime.start()
+    healthy = False
+    try:
+        workspace_id = _new_workspace(runtime, f"Perícia concorrente {resource}")
+        revisions = runtime._local_api._store.revisions
+        original_latest = revisions.latest
+        inside, resume = threading.Event(), threading.Event()
+
+        def latest(workspace, kind, artifact_id):
+            if kind == CASE_ANALYSIS_ARTIFACT_KIND and not resume.is_set():
+                inside.set()
+                assert resume.wait(10)
+            return original_latest(workspace, kind, artifact_id)
+
+        monkeypatch.setattr(revisions, "latest", latest)
+        projection, written = {}, threading.Event()
+        reader = threading.Thread(target=lambda: projection.setdefault("value", _status(runtime, workspace_id)), daemon=True)
+        reader.start()
+        assert inside.wait(10)
+
+        def write():
+            status, _, response = _local(runtime, "POST", f"/v1/workspaces/{workspace_id}/{resource}", body)
+            assert status == created, response
+            written.set()
+
+        writer = threading.Thread(target=write, daemon=True)
+        writer.start()
+        assert not written.wait(0.5), "a gravacao entrou no meio da projecao"
+        resume.set()
+        reader.join(15)
+        writer.join(15)
+        # Ordem de travas errada trava as threads: falha aqui, nao no timeout do CI.
+        assert not reader.is_alive() and not writer.is_alive(), "projecao ou gravacao travou (deadlock)"
+        healthy = True
+        assert written.is_set()
+        assert projection["value"][stage]["state"] == "NOT_STARTED"
+        assert _status(runtime, workspace_id)[stage]["state"] == "RECORDED"
+    finally:
+        if "resume" in locals():
+            resume.set()
+        # Com threads travadas, fechar o runtime travaria a suite inteira.
+        if healthy:
+            _close_or_fail(runtime)
+
+
+def test_upstream_authorities_are_read_once_per_projection(product, monkeypatch):
+    """Custo em cascata: planejamento reconcilia contra a analise sem reler a analise."""
+    from scripts.backend_contract.application.case_analysis import GetCaseAnalysis
+    from scripts.backend_contract.application.models import WorkspaceId
+    from scripts.backend_contract.case_analysis import CASE_ANALYSIS_ARTIFACT_ID
+    from scripts.backend_contract.pericial_planning import PERICIAL_PLANNING_ARTIFACT_ID
+
     runtime, _ = product
-    workspace_id = _new_workspace(runtime, "Perícia concorrente")
+    workspace_id = _new_workspace(runtime, "Perícia com análise e planejamento")
     revisions = runtime._local_api._store.revisions
-    inside, resume = threading.Event(), threading.Event()
-    # A pausa acontece no meio da projecao (depois de `processo`, antes das etapas seguintes).
-    original_latest = revisions.latest
+    import uuid
 
-    def latest(workspace, kind, artifact_id):
-        if kind == CASE_ANALYSIS_ARTIFACT_KIND:
-            inside.set()
-            assert resume.wait(10)
-        return original_latest(workspace, kind, artifact_id)
+    for kind, artifact_id, name in (
+        (CASE_ANALYSIS_ARTIFACT_KIND, CASE_ANALYSIS_ARTIFACT_ID, "case-analysis-snapshot-v1"),
+        (PERICIAL_PLANNING_ARTIFACT_KIND, PERICIAL_PLANNING_ARTIFACT_ID, "pericial-planning-snapshot-v1"),
+    ):
+        payload = json.loads((FIXTURES / f"{name}.json").read_text(encoding="utf-8").replace(WS, workspace_id))
+        revisions.append(
+            workspace_id=WorkspaceId.parse(workspace_id), artifact_kind=kind, artifact_id=artifact_id,
+            revision_id=str(uuid.uuid4()), created_at="2026-10-07T12:00:00+00:00", payload=payload,
+        )
+    original = GetCaseAnalysis.execute
+    calls = []
 
-    monkeypatch.setattr(revisions, "latest", latest)
-    projection = {}
-    reader = threading.Thread(target=lambda: projection.setdefault("value", _status(runtime, workspace_id)))
-    reader.start()
-    assert inside.wait(10)
+    def counted(self, workspace):
+        calls.append(str(workspace))
+        return original(self, workspace)
 
-    written = threading.Event()
-
-    def write():
-        data = {key: "" for key in (
-            "numero_processo", "ramo_justica", "tribunal", "vara", "municipio_sede", "subsecao_judiciaria",
-            "comarca_municipio", "uf", "parte_requerente", "parte_requerida",
-        )}
-        status, _, body = _local(runtime, "POST", f"/v1/workspaces/{workspace_id}/process-case",
-                                 {"expected_revision": None, "data": data | {"vara": "Vara sintética"}})
-        assert status == 200, body
-        written.set()
-
-    writer = threading.Thread(target=write)
-    writer.start()
-    # A gravacao nao pode concluir enquanto a projecao segura a janela de leitura.
-    assert not written.wait(0.5)
-    resume.set()
-    reader.join(10)
-    writer.join(10)
-    assert written.is_set()
-    assert projection["value"]["processo"]["state"] == "NOT_STARTED"
-    monkeypatch.setattr(revisions, "latest", original_latest)
-    assert _status(runtime, workspace_id)["processo"]["state"] == "RECORDED"
+    monkeypatch.setattr(GetCaseAnalysis, "execute", counted)
+    stages = _status(runtime, workspace_id)
+    assert stages["analise"]["state"] != "UNAVAILABLE", stages["analise"]
+    assert stages["planejamento"]["state"] != "UNAVAILABLE", stages["planejamento"]
+    assert calls == [workspace_id], f"analise lida {len(calls)} vezes numa unica projecao"

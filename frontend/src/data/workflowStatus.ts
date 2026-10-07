@@ -90,8 +90,15 @@ function parseStage(value: unknown): WorkflowStageStatus {
   ) {
     throw new WorkflowStatusError("invalid-response");
   }
-  // Mesma coerência que o backend impõe: base desatualizada nunca parece vigente.
+  // Mesma coerência que o backend impõe: base desatualizada nunca parece vigente,
+  // "não verificada" é sempre consulta indisponível, e estado afirmativo exige a
+  // revisão que o sustenta.
   if (currency === "STALE" && !["REVIEW_REQUIRED", "ATTENTION", "UNAVAILABLE"].includes(state)) {
+    throw new WorkflowStatusError("invalid-response");
+  }
+  if (state === "REVIEW_REQUIRED" && currency !== "STALE") throw new WorkflowStatusError("invalid-response");
+  if ((state === "UNAVAILABLE") !== (availability === "UNAVAILABLE")) throw new WorkflowStatusError("invalid-response");
+  if (["READY", "APPROVED", "RECORDED"].includes(state) && revision === null && stage !== "materiais") {
     throw new WorkflowStatusError("invalid-response");
   }
   return { stage, state, availability, currency, decision, reasons: reasons.map(parseReason), revision, updated_at };

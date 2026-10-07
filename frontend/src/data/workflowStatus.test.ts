@@ -44,6 +44,10 @@ describe("workflow status data boundary", () => {
     ["raw text reason", stage({ reasons: [{ code: "case analysis changed" }] })],
     ["extra reason field", stage({ reasons: [{ code: "X", detail: "y" }] })],
     ["fractional revision", stage({ revision: 1.5 })],
+    ["review required on a current base", stage({ state: "REVIEW_REQUIRED", currency: "CURRENT", revision: 2 })],
+    ["unverified stage claiming an available query", stage({ state: "UNAVAILABLE", availability: "AVAILABLE" })],
+    ["available query labeled unverified", stage({ availability: "UNAVAILABLE" })],
+    ["approval without the revision that supports it", stage({ state: "APPROVED", revision: null })],
   ])("rejects %s", (_label, value) => {
     expect(() => parseWorkflowStatus({ workspace_id: ID, stages: [value] }, ID)).toThrow(WorkflowStatusError);
   });

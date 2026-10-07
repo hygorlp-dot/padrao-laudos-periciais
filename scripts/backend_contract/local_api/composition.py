@@ -83,7 +83,13 @@ from ..infrastructure.sqlite import SQLiteApplicationStore
 from ..infrastructure.field_mobile import DeviceOfflineVaultRegistry
 from .server import LocalApiServer, LocalApiServerStartError, LocalServerConfig
 from .transport import LocalApi, LocalApiServices, _require_local_token
-from ..application.workflow_status import GetWorkflowStatus
+from ..application.workflow_status import (
+    GetWorkflowStatus,
+    ProjectionWindow,
+    WindowedAuthority,
+    WindowedIngestionStates,
+    WindowedPrivateListing,
+)
 from ..application.case_analysis import AddCaseAnalysisItem, GetCaseAnalysis, ReviewCaseAnalysisItem, SaveCaseAnalysis, StartCaseAnalysis
 from ..application.pericial_planning import GetPericialPlanning, ReviewPericialPlanning, SavePericialPlanning, StartPericialPlanning, StartSuccessorPericialPlanning
 from ..application.vistoria import GetInspectionSession, SaveInspectionSession, StartInspectionSession, ConfirmInspectionVisit, InspectionReuseCandidates, ReuseInspectionRecords, StartSuccessorInspectionSession
@@ -695,31 +701,70 @@ def build_local_api(
     get_budget_snapshot = GetBudgetSnapshot(get_latest_artifact)
     save_budget_snapshot = SaveBudgetSnapshot(store.revisions, get_latest_artifact, local_clock, local_ids)
 
+    # Situacao do fluxo (#291): somente leitura. Grafo PROPRIO de autoridades,
+    # com memo restrito a cada projecao: a listagem privada (que confere o hash
+    # de cada byte) e cada `Get*` de montante sao lidos uma vez, nao em cascata.
+    projection_window = ProjectionWindow()
+
     @contextmanager
     def workflow_status_reads():
-        # Mesma ordem de toda gravacao: autoridade privada (bytes e comandos de
-        # autoridade) e depois a conexao SQLite (todas as revisoes). Dentro das
-        # duas, nenhuma revisao concorrente e confirmada no meio da projecao.
+        # Ordem fixa: autoridade privada (bytes e comandos de autoridade) e depois
+        # a conexao SQLite (onde toda revisao e gravada). Nenhuma gravacao entra
+        # no meio da projecao; o memo vive so dentro dessa janela.
         with (private_store.authority_guard() if private_store is not None else nullcontext()):
             with store.consistent_reads():
-                yield
+                with projection_window.open():
+                    yield
 
-    # Situacao do fluxo (#291): somente leitura sobre as autoridades acima.
+    def windowed(authority):
+        return WindowedAuthority(authority, projection_window)
+
+    projection_documents = None
+    projection_case_documents = None
+    projection_ingestion = None
+    projection_metadata_review = None
+    if private_store is not None:
+        projection_documents = ListCaseDocuments(
+            ListPrivateContents(store.workspaces, WindowedPrivateListing(private_store, projection_window)),
+            PrivateContentRoles(store.revisions),
+        )
+        projection_case_documents = ListCaseDocumentsWithPjeInventory(projection_documents, store.revisions)
+        if case_document_ingestion is not None:
+            projection_ingestion = WindowedIngestionStates(case_document_ingestion, projection_documents)
+        if get_process_metadata_review is not None:
+            projection_metadata_review = GetProcessMetadataReview(
+                store.workspaces, projection_documents, store.revisions, get_process_case,
+            )
+    p_case = windowed(GetCaseAnalysis(get_latest_artifact, projection_case_documents))
+    p_planning = windowed(GetPericialPlanning(get_latest_artifact, p_case))
+    p_inspection = windowed(GetInspectionSession(get_latest_artifact, p_planning))
+    p_technical = windowed(GetTechnicalSnapshot(get_latest_artifact, p_case, p_inspection))
+    p_defects = windowed(GetConstructionDefectAnalysis(get_latest_artifact, get_process_case, p_case, p_planning, p_inspection))
+    p_report = windowed(GetReportSnapshot(
+        get_latest_artifact, p_case, p_inspection, p_technical, get_expert_profile, p_defects,
+        get_site_location=get_site_location,
+        get_property_record=GetPropertyRecord(get_latest_artifact, projection_case_documents),
+        get_process_record=get_report_process,
+    ))
+    p_delivery = (
+        windowed(GetDeliverySnapshot(get_latest_artifact, p_case, p_planning, p_inspection, p_technical, p_report))
+        if get_delivery_snapshot is not None else None
+    )
     get_workflow_status = GetWorkflowStatus(
         get_workspace=GetWorkspace(store.workspaces),
         revisions=store.revisions,
         consistent_reads=workflow_status_reads,
         get_process_case=get_process_case,
-        get_case_analysis=get_case_analysis,
-        get_pericial_planning=get_pericial_planning,
-        get_inspection_session=get_inspection_session,
-        get_technical_snapshot=get_technical_snapshot,
-        get_construction_defect_analysis=get_construction_defect_analysis,
-        get_report_snapshot=get_report_snapshot,
+        get_case_analysis=p_case,
+        get_pericial_planning=p_planning,
+        get_inspection_session=p_inspection,
+        get_technical_snapshot=p_technical,
+        get_construction_defect_analysis=p_defects,
+        get_report_snapshot=p_report,
         get_budget_snapshot=get_budget_snapshot,
-        get_process_metadata_review=get_process_metadata_review,
-        ingestion=case_document_ingestion,
-        get_delivery_snapshot=get_delivery_snapshot,
+        get_process_metadata_review=projection_metadata_review,
+        ingestion=projection_ingestion,
+        get_delivery_snapshot=p_delivery,
     )
     # Backup e recuperação alcançáveis pelo produto (#183). A raiz de staging é
     # IRMÃ da base viva, nunca ancestral: o marcador RECOVERY_NOT_PROMOTABLE de

@@ -22,11 +22,24 @@ O que faltava era uma leitura agregada que respondesse, de uma vez:
   nada, não aprova nada e não dispara OCR, renderização, derivação nem
   extração de texto. Não cria tabela, migração, agendador, evento, cache nem
   estado global persistido.
-- A leitura é feita sob `consistent_reads`: a trava da autoridade privada mais
-  a trava da conexão SQLite. São as mesmas travas que toda gravação deste
-  processo usa, na mesma ordem. Por isso nenhuma revisão concorrente é
-  confirmada no meio da projeção, e duas etapas nunca mostram estados de
-  instantes diferentes.
+- A leitura é feita sob `consistent_reads`: primeiro a trava da autoridade
+  privada, depois a trava da conexão SQLite, a mesma ordem das gravações.
+  - **Toda** revisão é gravada sob a trava SQLite, que é a conexão única.
+  - Os bytes privados e os comandos de autoridade são gravados sob a trava
+    privada.
+  - Por isso nenhuma gravação é confirmada no meio da projeção, e duas etapas
+    nunca mostram estados de instantes diferentes.
+- **Custo:** a projeção usa um grafo **próprio** de autoridades, com memo
+  restrito à janela travada e à thread que a executa (`ProjectionWindow`).
+  - A listagem privada, que confere o hash de cada byte, é lida uma vez por
+    projeção.
+  - Cada `Get*` de montante também é lido uma vez, em vez de em cascata. Sem o
+    memo, uma perícia completa repetia essa listagem dezenas de vezes segurando
+    as travas globais.
+  - Fora da janela nada fica guardado. O memo não é cache: o conteúdo não pode
+    mudar enquanto as travas estão seguras.
+- Na Local API a rota exige o token, como as demais rotas que derivam do
+  armazenamento privado. A ponte injeta o token.
 - A falha de uma etapa vira `UNAVAILABLE` **só nessa etapa** e não vira estado
   vazio. Uma perícia inexistente é 404. Cada etapa é lida pelo
   `workspace_id` da requisição, sem cache.
@@ -43,7 +56,7 @@ situação para leitura rápida:
 |---|---|---|
 | `availability` | `AVAILABLE`, `UNAVAILABLE` | a consulta foi possível? |
 | `currency` | `CURRENT`, `STALE`, `NOT_EVALUATED` | a base de montante ainda é a mesma? |
-| `decision` | `NOT_TRACKED`, `NONE`, `PARTIAL`, `COMPLETE`, `REVIEWED`, `APPROVED` | o que o profissional já decidiu (histórico) |
+| `decision` | `NOT_TRACKED`, `NONE`, `PARTIAL`, `COMPLETE`, `REVIEWED`, `APPROVED` | o que o profissional já decidiu (histórico); `NOT_TRACKED` onde a projeção não calcula a completude das decisões (por exemplo, análise sem conflitos ou patologias) |
 | `revision` / `updated_at` | inteiro / instante | qual revisão sustenta a leitura |
 
 Assim, um laudo **aprovado** sobre fonte que mudou aparece com
@@ -83,9 +96,9 @@ própria etapa, e o frontend escolhe o texto a partir do estado.
 
 | etapa | autoridade consultada | fatos e revisões | condições → estado | efeito de montante desatualizado |
 |---|---|---|---|---|
-| `processo` | `GetProcessCase`, `GetProcessMetadataReview` (só extrações persistidas, sem OCR), existência da confirmação, `CaseDocumentIngestion.states` | revisão do processo; estado agregado dos metadados | material em derivação → `PROCESSING`; metadados `CONFLICT` → `ATTENTION`; `ERROR` sem derivação em curso → `ATTENTION`; `EXTRACTED`/`PARTIAL` não confirmados → `AWAITING_REVIEW`; `CONFIRMED` → `RECORDED`; só dados manuais → `RECORDED`; nada → `NOT_STARTED` | confirmação existente mas não vinculada à revisão atual → `REVIEW_REQUIRED` (`METADATA_CONFIRMATION_OUTDATED`) |
+| `processo` | `GetProcessCase`, `GetProcessMetadataReview` (só extrações persistidas, sem OCR), existência da confirmação, `CaseDocumentIngestion.states` | revisão do processo; estado agregado dos metadados | material em derivação → `PROCESSING`; metadados `CONFLICT` → `ATTENTION`; `ERROR` sem derivação em curso → `ATTENTION` (ambos vencem a confirmação desatualizada, que fica como motivo); `EXTRACTED`/`PARTIAL` não confirmados → `AWAITING_REVIEW`; `CONFIRMED` → `RECORDED`; só dados manuais → `RECORDED`; nada → `NOT_STARTED` | confirmação existente mas não vinculada à revisão atual → `REVIEW_REQUIRED` (`METADATA_CONFIRMATION_OUTDATED`) |
 | `materiais` | `CaseDocumentIngestion.states` | contagem por estado de derivação | algum `PROCESSING` → `PROCESSING`; algum `FAILED`/`INTERRUPTED` → `ATTENTION`; todos `READY` → `RECORDED`; nenhum → `NOT_STARTED` | não se aplica (é a fonte) |
-| `analise` | `GetCaseAnalysis` | revisão, `stale_document_ids`, `source_inventory_stale`, conflitos com `human_review_status=PENDING`, cobertura | fontes alteradas ou novas não indexadas → `REVIEW_REQUIRED`; conflitos pendentes → `AWAITING_REVIEW`; senão `RECORDED` (cobertura parcial vira motivo) | `REVIEW_REQUIRED` |
+| `analise` | `GetCaseAnalysis` | revisão, `stale_document_ids`, `source_inventory_stale`, itens com `stale` (por exemplo, derivados de peça que o perito excluiu), conflitos com `human_review_status=PENDING`, cobertura | fontes alteradas, novas não indexadas ou itens `stale` → `REVIEW_REQUIRED` (`ITEMS_STALE`); conflitos pendentes → `AWAITING_REVIEW`; senão `RECORDED` (cobertura parcial vira motivo) | `REVIEW_REQUIRED` |
 | `planejamento` | `GetPericialPlanning` | revisão, `upstream_stale`, `coverage` (`pending_items`, `readiness`) | `upstream_stale` → `REVIEW_REQUIRED`; `pending_items>0` → `AWAITING_REVIEW`; `readiness=READY` → `READY`; `BLOCKED` → `ATTENTION`; `PARTIAL` → `IN_PROGRESS` | `REVIEW_REQUIRED`, mantendo `decision` histórico |
 | `vistoria` | `GetInspectionSession` | revisão, `upstream_stale`, `coverage` por estado de execução | `upstream_stale` → `REVIEW_REQUIRED`; itens `PENDING` → `IN_PROGRESS`; senão `RECORDED`. Itens bloqueados, parciais, não executados ou não aplicáveis são fatos registrados pelo perito e aparecem como motivos, não como falha | `REVIEW_REQUIRED` |
 | `evidencias` | `GetTechnicalSnapshot` | avaliações `PENDING`/`APPROVED`/`REJECTED` | `upstream_stale` → `REVIEW_REQUIRED`; avaliação `PENDING` → `AWAITING_REVIEW`; nenhuma evidência → `IN_PROGRESS`; senão `RECORDED` | `REVIEW_REQUIRED` |
@@ -104,7 +117,9 @@ O Início (`/pericias/{id}`) mostra:
 - o nome da perícia como `h2`;
 - **Situação**: contagem por estado, em texto;
 - **Precisa de atenção**: as etapas em `UNAVAILABLE`, `ATTENTION`,
-  `REVIEW_REQUIRED`, `AWAITING_REVIEW` e `PROCESSING`, com link e motivo;
+  `REVIEW_REQUIRED` e `AWAITING_REVIEW`, com link e motivo. `PROCESSING` não
+  pede decisão do perito: aparece na situação e na navegação, mas não nesta
+  lista;
 - **Próxima ação disponível**: a primeira etapa técnica, na ordem do catálogo,
   que não está em `RECORDED`, `READY`, `APPROVED` nem `NOT_TRACKED`. Quando não
   há nenhuma, o texto diz que as regras disponíveis não apontam pendência. Não
@@ -112,6 +127,12 @@ O Início (`/pericias/{id}`) mostra:
 
 Se a projeção falhar, o Início diz que a situação não pôde ser verificada e
 oferece nova tentativa. A navegação para todas as etapas continua disponível.
+
+A situação é relida a cada troca de rota e depois de cada gravação concluída
+na mesma perícia. Um observador de respostas, instalado uma vez, emite
+`pericial:workspace-mutated`. Ele não altera pedidos nem guarda dados. Assim,
+a navegação não continua mostrando, por exemplo, "Laudo aprovado" depois de
+uma alteração na análise.
 
 ## Consequências
 

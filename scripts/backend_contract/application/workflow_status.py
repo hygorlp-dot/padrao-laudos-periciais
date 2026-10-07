@@ -15,9 +15,10 @@ Limites (decisao de produto (a)):
 """
 from __future__ import annotations
 
+import threading
 from collections import Counter
 from collections.abc import Callable
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 
 from ..case_analysis import CASE_ANALYSIS_ARTIFACT_ID, CASE_ANALYSIS_ARTIFACT_KIND, CoverageStatus
@@ -64,6 +65,74 @@ DECISIONS = ("NOT_TRACKED", "NONE", "PARTIAL", "COMPLETE", "REVIEWED", "APPROVED
 # proprio, e so a existencia dela e lida aqui.
 _PROCESS_METADATA_CONFIRMATION_KIND = "PROCESS_METADATA_CONFIRMATION"
 _PROCESS_METADATA_CONFIRMATION_ID = "PROCESS_METADATA_CONFIRMATION"
+
+
+class ProjectionWindow:
+    """Memo de LEITURA restrito a uma unica projecao, na thread que a executa.
+
+    As autoridades de etapa se reconciliam em cascata: sem memo, a listagem do
+    conteudo privado (que confere o hash de cada byte) e cada `Get*` de montante
+    seriam refeitos dezenas de vezes por projecao, segurando as travas globais.
+    Dentro da janela as gravacoes estao bloqueadas pelas mesmas travas, entao o
+    valor lido uma vez e o valor vigente; fora dela, nada fica guardado e cada
+    chamada vai direto a autoridade.
+    """
+
+    def __init__(self):
+        self._local = threading.local()
+
+    @contextmanager
+    def open(self):
+        if getattr(self._local, "cache", None) is not None:
+            raise RuntimeError("janela de projecao ja aberta nesta thread")
+        self._local.cache = {}
+        try:
+            yield
+        finally:
+            self._local.cache = None
+
+    def memo(self, key, compute):
+        cache = getattr(self._local, "cache", None)
+        if cache is None:
+            return compute()
+        if key not in cache:
+            cache[key] = compute()
+        return cache[key]
+
+
+class WindowedPrivateListing:
+    """`list_all` do armazenamento privado lido uma vez por perícia na janela."""
+
+    def __init__(self, contents, window: ProjectionWindow):
+        self._contents, self._window = contents, window
+
+    def list_all(self, workspace_id):
+        return self._window.memo(("list_all", str(workspace_id)), lambda: self._contents.list_all(workspace_id))
+
+
+class WindowedAuthority:
+    """`execute` de uma autoridade de leitura lido uma vez por perícia na janela."""
+
+    def __init__(self, authority, window: ProjectionWindow):
+        self._authority, self._window = authority, window
+
+    def execute(self, workspace_id):
+        key = (id(self._authority), str(workspace_id))
+        return self._window.memo(key, lambda: self._authority.execute(workspace_id))
+
+    def __getattr__(self, name):
+        # Qualquer outra leitura passa direto, sem memo.
+        return getattr(self._authority, name)
+
+
+class WindowedIngestionStates:
+    """Estado de derivação por fonte, sobre a listagem com memo da janela."""
+
+    def __init__(self, ingestion, documents):
+        self._ingestion, self._documents = ingestion, documents
+
+    def states(self, workspace_id):
+        return tuple((record, self._ingestion.state(record)) for record in self._documents.execute(workspace_id))
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,16 +362,20 @@ class GetWorkflowStatus:
             # Extracao ausente enquanto a derivacao roda nao e erro: ainda nao terminou.
             return StageStatus("processo", "PROCESSING", "AVAILABLE", "NOT_EVALUATED", "NONE",
                                _counted("MATERIALS_PROCESSING", counts[PROCESSING]), revision, updated_at)
+        # Precedencia do ADR: ATTENTION > REVIEW_REQUIRED. Uma confirmacao antiga
+        # sobre extracao hoje em conflito/erro aparece como atencao, com o motivo
+        # da confirmacao desatualizada ao lado.
+        outdated = (_reason("METADATA_CONFIRMATION_OUTDATED"),) if confirmation is not None else ()
+        if state == "CONFLICT":
+            return StageStatus("processo", "ATTENTION", "AVAILABLE", "NOT_EVALUATED", "NONE",
+                               (_reason("METADATA_CONFLICT"), *outdated), revision, updated_at)
+        if state == "ERROR":
+            return StageStatus("processo", "ATTENTION", "AVAILABLE", "NOT_EVALUATED", "NONE",
+                               (_reason("METADATA_EXTRACTION_FAILED"), *outdated), revision, updated_at)
         if confirmation is not None and state != "WAITING_FOR_DOCUMENTS":
             # Ja houve confirmacao, mas ela nao se vincula mais a extracao/revisao atual.
             return StageStatus("processo", "REVIEW_REQUIRED", "AVAILABLE", "STALE", "COMPLETE",
-                               (_reason("METADATA_CONFIRMATION_OUTDATED"),), revision, updated_at)
-        if state == "CONFLICT":
-            return StageStatus("processo", "ATTENTION", "AVAILABLE", "NOT_EVALUATED", "NONE",
-                               (_reason("METADATA_CONFLICT"),), revision, updated_at)
-        if state == "ERROR":
-            return StageStatus("processo", "ATTENTION", "AVAILABLE", "NOT_EVALUATED", "NONE",
-                               (_reason("METADATA_EXTRACTION_FAILED"),), revision, updated_at)
+                               outdated, revision, updated_at)
         if state in {"EXTRACTED", "PARTIAL"}:
             return StageStatus("processo", "AWAITING_REVIEW", "AVAILABLE", "NOT_EVALUATED", "NONE",
                                (_reason("METADATA_AWAITING_CONFIRMATION" if state == "EXTRACTED" else "METADATA_PARTIAL_AWAITING_CONFIRMATION"),),
@@ -339,13 +412,28 @@ class GetWorkflowStatus:
         record, snapshot = found
         pending = sum(1 for item in snapshot.conflicts if item.human_review_status == "PENDING")
         reviewed = len(snapshot.conflicts) - pending
-        decision = _item_decision(pending, reviewed) if snapshot.conflicts else ("COMPLETE" if snapshot.human_reviews else "NONE")
+        # Só os conflitos têm critério de decisão completo aqui; sem eles, a
+        # projeção não afirma nada sobre decisões.
+        decision = _item_decision(pending, reviewed) if snapshot.conflicts else "NOT_TRACKED"
         coverage = () if snapshot.coverage.status is CoverageStatus.COMPLETE else (_reason(f"COVERAGE_{snapshot.coverage.status.value}"),)
         changed = len(snapshot.stale_document_ids)
-        if changed or snapshot.source_inventory_stale:
+        # Itens derivados de peca que o perito excluiu (ou cuja fonte mudou) ficam
+        # `stale` no proprio dominio: carecem de revisao, nunca sao "vigentes".
+        stale_items = sum(
+            1
+            for collection in (
+                snapshot.claims, snapshot.counterarguments, snapshot.decisions, snapshot.pericial_objects,
+                snapshot.questions, snapshot.events, snapshot.technical_document_references, snapshot.gaps,
+                snapshot.conflicts,
+            )
+            for item in collection
+            if item.stale
+        )
+        if changed or snapshot.source_inventory_stale or stale_items:
             return StageStatus(
                 "analise", "REVIEW_REQUIRED", "AVAILABLE", "STALE", decision,
-                (*_counted("SOURCES_CHANGED", changed), *_counted("SOURCES_NOT_INDEXED", snapshot.unindexed_source_count), *coverage),
+                (*_counted("SOURCES_CHANGED", changed), *_counted("SOURCES_NOT_INDEXED", snapshot.unindexed_source_count),
+                 *_counted("ITEMS_STALE", stale_items), *coverage),
                 record.revision, record.created_at,
             )
         if pending:
@@ -450,7 +538,8 @@ class GetWorkflowStatus:
         if found is None:
             return _not_started("analise-tecnica")
         record, snapshot = found
-        decision = "COMPLETE" if snapshot.reviews else "NONE"
+        # A projeção não confere se cada patologia tem decisão: só conta as revisões.
+        decision = "NOT_TRACKED"
         gate = _reason(f"GATE_{snapshot.gate}")
         if snapshot.upstream_stale:
             return _stale("analise-tecnica", decision, record, len(snapshot.upstream_stale_reasons), gate)
