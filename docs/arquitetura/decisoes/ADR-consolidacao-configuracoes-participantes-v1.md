@@ -143,8 +143,10 @@ conteúdo privado do workspace).
       Vizinhança só indica outra unidade sem alvo ("o imóvel vizinho") ou com
       alvo unidade ("vizinha ao imóvel"). Vizinho de um marco ("ao shopping",
       "ao Condomínio X", "ao centro") não muda o vínculo, e o marco num
-      parentético (", ao lado do prédio X, situado") não é o substantivo do
-      particípio.
+      parentético (vírgula, parêntese ou travessão: ", ao lado do prédio X,
+      situado") não é o substantivo do particípio. "Junto ao / diante do / em
+      frente ao imóvel objeto, na Rua..." sem outro imóvel antes é, no laudo,
+      o próprio imóvel: vale onde a regra anterior já aceitava a frase.
 
     A pista "objeto" devolve o vínculo a uma unidade "nova".
   - "imóvel objeto, onde reside, …" fala do próprio imóvel só com a relativa

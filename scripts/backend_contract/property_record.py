@@ -296,7 +296,7 @@ _NEIGHBOR_WORDS = re.compile(
 # Vizinhanca so torna "outra unidade" quando nao tem alvo ("o imovel vizinho") ou
 # quando o alvo e uma unidade ("vizinha ao imovel"); vizinho de um marco ("ao
 # shopping", "ao Condominio X", "ao centro") nao muda o vinculo.
-_COMMA_BEFORE = re.compile(r",\s*$")
+_COMMA_BEFORE = re.compile("[,(\u2013\u2014]\\s*$|\\s-\\s*$")
 _NEIGHBOR_AFTER = re.compile(r"\s+(?:vizinh[oa]s?|ao lado|em frente|defronte)\b")
 _NEIGHBOR_TARGET = re.compile(r"\s*(?:d[aoe]s?|a|ao|aos|as)\s+")
 _UNIT_TARGET = re.compile(
@@ -519,6 +519,16 @@ def _clause_markers(text):
             # nem outra unidade nem pista do imovel.
             continue
         objeto = any("objeto" in value for _start, _end, value in members)
+        if neighbor and objeto:
+            # "junto ao/diante do/em frente ao imovel objeto, na Rua": no laudo, quase
+            # sempre o proprio imovel. Sem nucleo antes ("a casa ao lado do imovel
+            # objeto"), vale so onde a regra anterior ja aceitava a frase.
+            reach = floor + before.start()
+            head = _PROPERTY_NOUN.search(text, max(begin_of(group_start), reach - 60), reach)
+            kind = "OTHER" if head is not None else "SUBJECT_LOOSE"
+            for start, end, _value in members:
+                markers.append((start, end, kind))
+            continue
         # Vizinhanca depois da pista: "unidade habitacional vizinha ao imovel" e outra
         # unidade; quem esta "ao lado do predio" no "imovel objeto" e o proprio objeto.
         neighbor = neighbor or (not objeto and _neighbor_of_unit(text, group_end))

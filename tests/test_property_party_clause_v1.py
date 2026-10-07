@@ -228,6 +228,15 @@ PROBES = {
     "r8_perto_do_condominio_situado": "O imóvel objeto da ação, perto do condomínio, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
     "r8_cpf_proxima_a_unidade_objeto": "FULANA, CPF 000.000.000-00, tem casa próxima à unidade habitacional objeto da ação, situada na Rua da Parte, nº 10.\n",
     "r8_cpf_vizinha_da_casa_objeto": "FULANA, CPF 000.000.000-00, comprou a unidade habitacional vizinha da casa objeto da ação, situada na Rua da Parte, nº 10.\n",
+    # Rodada 9 da revisão independente da PR #294.
+    "r9_compareceu_junto_ao_imovel": "LAUDO\nO perito compareceu junto ao imóvel objeto da ação, na Rua do Imóvel, nº 20, em 10/05/2024.\n",
+    "r9_diligencia_junto_a_unidade": "LAUDO\nA diligência foi realizada junto à unidade habitacional objeto da ação, na Rua do Imóvel, nº 20.\n",
+    "r9_junto_a_unidade_situada": "LAUDO\nA diligência foi realizada junto à unidade habitacional objeto da ação, situada na Rua do Imóvel, nº 20.\n",
+    "r9_diante_do_imovel": "LAUDO\nDiante do imóvel objeto da ação, na Rua do Imóvel, nº 20, constataram-se fissuras.\n",
+    "r9_area_proxima_a_unidade": "LAUDO\nA vistoria ocorreu na área próxima à unidade habitacional objeto da ação, na Rua do Imóvel, nº 20.\n",
+    "r9_em_frente_ao_imovel": "LAUDO\nEm frente ao imóvel objeto da ação, na Rua do Imóvel, nº 20, há uma praça.\n",
+    "r9_casa_ao_lado_do_imovel_objeto": "A autora mora na casa ao lado do imóvel objeto da ação, na Rua da Parte, nº 10.\n",
+    "r9_travessao_ao_lado_do_predio": "O imóvel objeto da ação – ao lado do prédio da prefeitura – situado na Rua do Imóvel, nº 20, tem fissuras.\n",
 }
 
 
@@ -822,6 +831,38 @@ MAIN_8941B2C_REPLAY_IDS = {
     ),
     "r8_cpf_proxima_a_unidade_objeto": (),
     "r8_cpf_vizinha_da_casa_objeto": (),
+    "r9_compareceu_junto_ao_imovel": (
+        "377ab4fbc7ca974ad59aa6985de13d870318cff67415d8da5c96e876e6f6bd3b",
+        "c282ab44ad393a341d7bc21d3ea5390ca50816bbcbd9271e8d9355fe204c25fc",
+    ),
+    "r9_diligencia_junto_a_unidade": (
+        "2600931206222d8a3e7a0c69fca2e37c03ca27777e24439b1c60aaa4bbfe616f",
+        "56ca22d678e85f0fa0e31292e9034dbd98880fa140d7b51c9972613cc3a298df",
+    ),
+    "r9_junto_a_unidade_situada": (
+        "8152fcab189466a6d5f56578eb83163ef38251ed68a7919292ac890cad76cc55",
+        "df39a36df3f2b52aa5319e7f89d299753509bd3b17bde22e1e21c5016896a9ef",
+    ),
+    "r9_diante_do_imovel": (
+        "a801edbf3acea6afa5f0abf735d9da3f1fac7d75c73be3999681c22d6ef092c3",
+        "e3fcaac48f2c1c223d6744c3da319561c2bf114e7a3c895f5fc1f566daa9947f",
+    ),
+    "r9_area_proxima_a_unidade": (
+        "4590a19cddfa5d1cff9dc3df70c306b4d1ee18df24cd0040281438e8e398d3fc",
+        "5c2f3aa64c0d8f1531234defe34662d5e4fa110d645cc3e3ba6bc8cb66a74270",
+    ),
+    "r9_em_frente_ao_imovel": (
+        "be2a702ac86580349f81cb7eae8dcbc0526d3e9608bd3a3600c3c78f3edadb67",
+        "f735cb6eb1fedee60c5a7ff0daad33208c4c29bc2e8a1687b8b38f2457e0f051",
+    ),
+    "r9_casa_ao_lado_do_imovel_objeto": (
+        "3b8bedb4aae432a2cdb15089cd25078b09de7b98650c646bb5a29f3e6c9cf289",
+        "7a72e0105781b27359ad3a1373386df16adcee027b9d469e7fffa6687d13bd74",
+    ),
+    "r9_travessao_ao_lado_do_predio": (
+        "65d54975ad03fc9f9beee4b07651ad8ce7bc39f0fc5b75984aedfe862906194d",
+        "fb90eccab1a727ad919538e161690ad87e3a0b6cb4a4738218bad092ea21abf4",
+    ),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -977,6 +1018,15 @@ EXPECTED = {
     "r8_perto_do_condominio_situado": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
     "r8_cpf_proxima_a_unidade_objeto": set(),
     "r8_cpf_vizinha_da_casa_objeto": set(),
+    # Rodada 9 da revisão independente da PR #294.
+    "r9_compareceu_junto_ao_imovel": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r9_diligencia_junto_a_unidade": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r9_junto_a_unidade_situada": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r9_diante_do_imovel": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r9_area_proxima_a_unidade": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r9_em_frente_ao_imovel": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r9_casa_ao_lado_do_imovel_objeto": set(),
+    "r9_travessao_ao_lado_do_predio": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
 }
 _PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 
