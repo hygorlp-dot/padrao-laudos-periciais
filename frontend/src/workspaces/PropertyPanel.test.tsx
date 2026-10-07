@@ -2,6 +2,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { PropertyPanel } from "./PropertyPanel";
 import { getPropertyRecord, getPropertyProposals, savePropertyRecord } from "../data/propertyRecord";
+import type { PropertyProposal, PropertyValueCluster } from "../data/propertyRecord";
 vi.mock("../data/propertyRecord", async (original) => ({ ...await original<object>(), getPropertyRecord: vi.fn(), getPropertyProposals: vi.fn(), savePropertyRecord: vi.fn() }));
 vi.mock("../data/siteLocation", async (original) => ({ ...await original<object>(), getSiteLocation: vi.fn().mockResolvedValue({ revision: 1, location: { state: "CONFIRMED", latitude: -12.5, longitude: -38.5 } }) }));
 const record = { revision: 1, updated_at: null, record: { schema_version: "1.0.0" as const, workspace_id: "11111111-1111-4111-8111-111111111111", values: [{ field: "owner", value: "Proprietário confirmado", evidence: null, confirmed_by: "EXPERT-1", confirmed_at: "2026-09-28T12:00:00Z" }] }, fields: [{ field: "owner", label: "Proprietário do imóvel", kind: "text" as const }], stale_fields: [] as string[] };
@@ -83,12 +84,12 @@ it("labels a weak contextual match as a possible information, never as a fact", 
 });
 const WS = "11111111-1111-4111-8111-111111111111";
 function proposal(id: string, value: string, filename: string, rank: string) {
-  return { proposal_id: id, workspace_id: WS, field: "owner", value, state: "PROPOSED" as const, strength: "STRONG" as const, source_rank: rank, piece_id: null,
+  return { proposal_id: id, workspace_id: WS, field: "owner", value, state: "PROPOSED" as const, strength: "STRONG" as NonNullable<PropertyProposal["strength"]>, source_rank: rank, piece_id: null,
     evidence: { document_id: filename, document_sha256: "a".repeat(64), filename, page: 1, excerpt: `Proprietário: ${value}`, method: "LABEL_NATIVE_TEXT_V1", confidence: null, source_value: value } };
 }
 function cluster(id: string, items: ReturnType<typeof proposal>[], overrides: object = {}) {
   return { cluster_id: id, field: "owner", canonical_value: items[0].value, display_value: items[0].value, normalized_value: items[0].value.toLowerCase(),
-    confidence: "HIGH" as const, strength: "STRONG" as const, best_rank: items[0].source_rank, source_count: items.length, document_count: items.length,
+    confidence: "HIGH" as const, strength: "STRONG" as PropertyValueCluster["strength"], best_rank: items[0].source_rank, source_count: items.length, document_count: items.length,
     evidences: items, conflicting_cluster_ids: [] as string[], ...overrides };
 }
 it("groups repeated values into one proposal with counts and saves the best evidence (#288)", async () => {
