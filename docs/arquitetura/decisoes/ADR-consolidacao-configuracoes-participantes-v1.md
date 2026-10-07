@@ -110,6 +110,71 @@ conteúdo privado do workspace).
   jurisprudencial bloqueiam a proposta. Os bloqueadores são avaliados na frase
   inteira, com limite de palavra; abreviações ("Av.", "Dr.", "Rel.", "Des.", "nº")
   não terminam a frase. Contatos de timbre (telefone, e-mail) também bloqueiam.
+- Desde a #293, o vínculo de um endereço é decidido pela **oração**. O
+  logradouro, e o número, bairro e CEP que o seguem na mesma cadeia, pertence ao
+  marcador mais próximo antes dele. Há dois regimes, para nunca propor mais
+  endereço de parte do que antes:
+  - **Frase que a regra anterior aceitava.** Só sai o endereço introduzido por
+    um verbo de residência, sede, trabalho ou deslocamento ("moradora da", "mora
+    na", "estabelecida", "com domicílio", "cuja sede", "com matriz", "filial",
+    "trabalha na", "mudou-se para/à", "transferida para"). Também sai o
+    endereço introduzido por um particípio de parte ("a vendedora, localizada
+    na"; "foi vendida a FULANA, situada na"). Comarca, testemunha, assistente
+    e mudança, citados na narrativa, não apagam o endereço do imóvel; "foi
+    para" também não. Sem marcador antes, decide o primeiro marcador depois da
+    cadeia.
+  - **Frase que a regra anterior bloqueava inteira** (CPF, telefone, advogado,
+    juízo…). Só entra o endereço ligado diretamente a uma pista do imóvel
+    objeto ("imóvel objeto da ação, situado na", "fica na"). Se o vínculo vem
+    por particípio, ele precisa estar ancorado nessa pista. E não pode haver
+    bloqueador depois do endereço.
+  - "situado/localizado" segue o substantivo de imóvel que concorda com ele
+    (alcance de 160 caracteres). O vínculo cai, fail-closed, quando aparece
+    entre os dois:
+    - uma parte que concorda e não é só agente de um particípio atributivo
+      ("adquirida pela autora" e qualquer relativa aberta depois do imóvel, como
+      "que/o qual (em 2015) foi adquirido pela autora", mantêm o
+      vínculo; "foi entregue pela construtora" o tira). Onde a regra anterior
+      bloqueava a frase, nenhuma isenção vale: uma parte que concorde tira a
+      âncora;
+    - CPF, CNPJ, OAB ou telefone;
+    - um imóvel vizinho ou outro ("ao lado do", "nova unidade"), decidido uma
+      vez para todo o sintagma da pista ("próximo ao imóvel objeto da ação").
+      Vizinhança só indica outra unidade sem alvo ("o imóvel vizinho") ou com
+      alvo unidade ("vizinha ao imóvel"). Vizinho de um marco ("ao shopping",
+      "ao Condomínio X", "ao centro") não muda o vínculo, e o marco num
+      parentético (vírgula, parêntese ou travessão: ", ao lado do prédio X,
+      situado") não é o substantivo do particípio. "Junto ao / diante do / em
+      frente ao imóvel objeto, na Rua..." sem outro imóvel antes é, no laudo,
+      o próprio imóvel: vale onde a regra anterior já aceitava a frase.
+
+    A pista "objeto" devolve o vínculo a uma unidade "nova".
+  - "imóvel objeto, onde reside, …" fala do próprio imóvel só com a relativa
+    colada à pista do imóvel, sem negação e sem deslocamento depois do verbo,
+    e com no máximo um parentético de lista fechada ("financiada em 2015").
+    "Mora no imóvel" também não apresenta endereço de parte.
+  - Dois logradouros diferentes presos à mesma pista ficam "possíveis".
+  - Precedente continua bloqueando a frase inteira.
+  - Município/UF seguem a frase inteira (fail-closed).
+  - A hifenização do PDF ("mora-\ndora", "resi- dente") não esconde o
+    marcador.
+  - Resíduos conhecidos:
+    - frase sem nenhum marcador de parte;
+    - relativa colada à pista com deslocamento implícito ("onde reside hoje
+      em Recife");
+    - erro de gênero do OCR no particípio, que perde o endereço (fail-closed);
+    - "no bairro vizinho" sem alvo é outro lugar, mesmo depois do imóvel objeto
+      (troca de desenho contra "onde reside, no bairro vizinho, na Rua...");
+    - "nova/novo/antiga unidade" sem a pista "objeto" entre ela e o particípio
+      é outra unidade, por regra da #293, mesmo quando a frase diz depois que
+      ela "é objeto da ação" (fail-closed);
+    - agente atributivo seguido de particípio que concorda com os dois ("a
+      unidade, vendida pela construtora, localizada na…"): o caso é lido como
+      a unidade, igual à regra anterior.
+  - `BACKUP_REPLAY_LEGACY = ALLOWED` e `NEW_PROPOSAL_FROM_PARTY_ADDRESS =
+    PROHIBITED`: a reprodução do backup (`include_legacy_labels=True`) aceita
+    a união da regra nova com a anterior. Toda proposta nova é reproduzível, e
+    a evidência confirmada antes da #293 continua conferível.
 - No nível 1, só rótulo de endereço genérico ("Logradouro:", "CEP:") depois de
   qualificação de parte ou timbre institucional deixa de ser proposto. Rótulo que
   nomeia o imóvel ("Logradouro do imóvel:") e rótulos que não são endereço
