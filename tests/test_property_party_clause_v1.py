@@ -195,6 +195,16 @@ PROBES = {
     "r4_cpf_proximo_ao_imovel_objeto": "FULANA, CPF 000.000.000-00, tem casa situada próximo ao imóvel objeto da ação, na Rua da Parte, nº 10.\n",
     # P2-2: "tem endereço atual" do proprio imovel.
     "r4_tem_endereco_atual": "LAUDO\nO imóvel objeto da ação tem endereço atual Rua do Imóvel, nº 20, após renomeação.\n",
+    # Rodada 5 da revisão independente da PR #294.
+    # Relativa do proprio imovel em qualquer forma (regime A).
+    "r5_que_em_data_foi": "O imóvel objeto da ação, que em 10/05/2015 foi adquirido pela autora, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r5_que_no_ano_de_foi": "O imóvel objeto da ação, que no ano de 2015 foi adquirido pela autora, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r5_que_sem_virgula": "O imóvel objeto da ação que foi adquirido pela autora, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r5_que_entre_parenteses": "O imóvel objeto da ação (que foi adquirido pela autora), situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r5_que_entre_travessoes": "O imóvel objeto da ação – que foi adquirido pela autora –, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    "r5_financiado_e_que_foi": "O imóvel objeto da ação, financiado e que foi entregue à autora, situado na Rua do Imóvel, nº 20, tem fissuras.\n",
+    # Vizinhanca que aponta para um marco, nao para outro imovel.
+    "r5_vizinho_a_escola": "O imóvel objeto da ação vizinho à escola fica na Rua do Imóvel, nº 20.\n",
 }
 
 
@@ -698,6 +708,34 @@ MAIN_8941B2C_REPLAY_IDS = {
         "39f3473e769f8bc0ec3104362b6299f80f0af777966ce8d4918266ebcd4410a4",
         "c0b4d83a99a44edb2e0b6fcfe5632225c2c5e0bb9131cb02eac07310b8c0df29",
     ),
+    "r5_que_em_data_foi": (
+        "64664da4ebc6bbd1a907221088a1e805b112eccfbd4b1ae793c92ebbd0678efb",
+        "dfefcf625644a36f69911e8cb43466f3d1696d3c4bca16601db0241efd0d2e8f",
+    ),
+    "r5_que_no_ano_de_foi": (
+        "c6cc2295a114b636712a25599c3c37591c92bc69599a110aa07b6c032eadc5d7",
+        "dab961c71aa3eb4a8ba87a8e96b45dd223accc9a176afa33cdcfdc40c58d0e83",
+    ),
+    "r5_que_sem_virgula": (
+        "62c37ac804234f086506b29dcc7fafaf82c7c9a44f82c0a2661049bf6b300087",
+        "732458d70b1b1b610acc3fa178553aed858f281144b8c5906a47c6d84287a872",
+    ),
+    "r5_que_entre_parenteses": (
+        "40a307889c9c1930a7e5078d8546400036ee5d94f42052720754bd02e032598c",
+        "f2f008eedf55fbcd04b0c24657c6f906e813a252da94928f6ce570bede158740",
+    ),
+    "r5_que_entre_travessoes": (
+        "3b232b88fd1a491759b33d889256a85baf52f2b41c2ed46f749dd4e7b20a8c67",
+        "4dac2b03b4c479273e31e08c6b34511eced1664ac6e646b9cb082196c7e39a01",
+    ),
+    "r5_financiado_e_que_foi": (
+        "0d1befc44983804e837f758ada9a8b2228907d0fb3ffebf329916fff9d715ffe",
+        "2510e5431b0c3cc5dd6951fee0525aaf02460453182b98f59992aa618376d59a",
+    ),
+    "r5_vizinho_a_escola": (
+        "213fb20820582b1083a8f2bdabf099e6af58a57e72552d02d89b2dffdaf4fa03",
+        "2f9b3387ac57943d240d2a33eb872a1a9d0df6d038e73a761a41423ed8d78604",
+    ),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -822,6 +860,14 @@ EXPECTED = {
     "r4_cpf_que_foi_vendida_pela_ltda": set(),
     "r4_cpf_proximo_ao_imovel_objeto": set(),
     "r4_tem_endereco_atual": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    # Rodada 5 da revisão independente da PR #294.
+    "r5_que_em_data_foi": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r5_que_no_ano_de_foi": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r5_que_sem_virgula": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r5_que_entre_parenteses": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r5_que_entre_travessoes": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r5_financiado_e_que_foi": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r5_vizinho_a_escola": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
 }
 _PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 

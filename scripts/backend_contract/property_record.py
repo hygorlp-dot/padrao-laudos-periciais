@@ -322,15 +322,15 @@ _COPULA = re.compile(r"\b(?:foi|foram|era|eram|sera|serao|esta|estava|seria)\b")
 _COPULA_AGENT = re.compile(
     r"\b(?:foi|foram|era|eram|sera|serao|seria)\s+(?:[a-z]+(?:ad|id)[oa]s?|entregues?)\s+(?:pel[oa]s?|por|a|ao|aos|as)\b"
 )
-_RELATIVE_OPENING = re.compile(r",\s*(?:que|o qual|a qual|os quais|as quais)\s+(?:[a-z0-9]+\s+){0,3}$")
+# Onde a regra anterior ja aceitava a frase, qualquer relativa aberta depois do
+# imovel ("que foi", "(que em 10/05/2015 foi", "o qual no ano de 2015 foi")
+# e do proprio imovel: afrouxar ali nunca propoe mais do que antes.
+_RELATIVE = re.compile(r"\b(?:que|o qual|a qual|os quais|as quais)\b")
 
 
 def _bare(pattern, text, start, stop):
-    """Ha `pattern` em [start, stop) fora de relativa aberta logo antes dele?"""
-    return any(
-        not _RELATIVE_OPENING.search(text, max(start, item.start() - 60), item.start())
-        for item in pattern.finditer(text, start, stop)
-    )
+    """Ha `pattern` em [start, stop) sem relativa aberta entre start e ele?"""
+    return any(not _RELATIVE.search(text, start, item.start()) for item in pattern.finditer(text, start, stop))
 _PARTICIPLE_REACH = 160
 # SUBJECT_LOOSE: participio ligado a um substantivo de imovel sem pista "objeto";
 # basta onde a regra anterior ja aceitava a frase, nunca onde ela bloqueava.
@@ -476,7 +476,9 @@ def _clause_markers(text):
         if neighbor and _PARTICIPLE_BEFORE.search(text, max(begin_of(group_start), floor + before.start() - 24), floor + before.start()):
             # "situado proximo ao Conjunto X, na Rua...": referencia de localizacao do proprio imovel.
             continue
-        neighbor = neighbor or _OTHER_UNIT_AFTER.match(text, group_end) is not None
+        # "objeto da acao vizinho a escola" segue sendo o objeto; "objeto ... vizinho ao imovel" nao.
+        after = _OTHER_UNIT_AFTER.match(text, group_end)
+        neighbor = neighbor or (after is not None and _PROPERTY_NOUN.search(text, after.end(), after.end() + 30) is not None)
         objeto = any("objeto" in value for _start, _end, value in members)
         # "novo imovel objeto da acao" e o objeto; "ao lado do (imovel) objeto" nao.
         kind = "OTHER" if neighbor or (before is not None and not objeto) else "SUBJECT"

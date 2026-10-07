@@ -132,8 +132,8 @@ conteúdo privado do workspace).
     (alcance de 160 caracteres). O vínculo cai, fail-closed, quando aparece
     entre os dois:
     - uma parte que concorda e não é só agente de um particípio atributivo
-      ("adquirida pela autora" e a relativa "que/o qual (já) foi adquirido pela
-      autora" mantêm o
+      ("adquirida pela autora" e qualquer relativa aberta depois do imóvel, como
+      "que/o qual (em 2015) foi adquirido pela autora", mantêm o
       vínculo; "foi entregue pela construtora" o tira). Onde a regra anterior
       bloqueava a frase, nenhuma isenção vale: uma parte que concorde tira a
       âncora;
