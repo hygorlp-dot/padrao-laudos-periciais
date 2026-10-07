@@ -244,6 +244,13 @@ PROBES = {
     "r10_testemunha_reside_em_frente": "A testemunha, que reside em frente ao imóvel objeto da ação, na Rua da Parte, nº 10, depôs.\n",
     "r10_familia_vive_junto": "A família vive junto ao imóvel objeto da ação, na Rua da Parte, nº 10.\n",
     "r10_testemunha_mora_ao_lado": "A testemunha mora ao lado do imóvel objeto da ação, na Rua da Parte, nº 10.\n",
+    # Rodada 11 da revisão independente da PR #294.
+    "r11_moradores_acompanharam_junto": "LAUDO\nOs moradores acompanharam a vistoria junto ao imóvel objeto da ação, na Rua do Imóvel, nº 20.\n",
+    "r11_morador_aguardava_em_frente": "LAUDO\nO morador aguardava em frente ao imóvel objeto da ação, na Rua do Imóvel, nº 20.\n",
+    "r11_conforme_estabelecido_diante": "LAUDO\nConforme estabelecido, a vistoria ocorreu diante do imóvel objeto da ação, na Rua do Imóvel, nº 20.\n",
+    "r11_autora_reside_no_imovel_junto": "A autora, que reside no imóvel, acompanhou a vistoria junto ao imóvel objeto da ação, na Rua do Imóvel, nº 20.\n",
+    "r11_vizinhos_moram_em_frente": "Os vizinhos moram em frente ao imóvel objeto da ação, na Rua da Parte, nº 10.\n",
+    "r11_reside_perto": "A testemunha reside perto do imóvel objeto da ação, na Rua da Parte, nº 10.\n",
 }
 
 
@@ -894,6 +901,30 @@ MAIN_8941B2C_REPLAY_IDS = {
         "b51a0382d876c7523d38e6e860e981e6a9741a540c558c81acc9116c066579f4",
         "c00de6baaa3322ca1dd923618e516a6d5e84ac87b74e6aa9e498752fff226ab8",
     ),
+    "r11_moradores_acompanharam_junto": (
+        "589c5c5cfa0dc7490fa64a742e101489d3f0003116d082c502a82d83f2e0bccf",
+        "64b8af3389a8150b06c34c75eff049e29a2d2480a5159c31c3a1625d0b938374",
+    ),
+    "r11_morador_aguardava_em_frente": (
+        "65905d7593a06c4ec02256697aa5519c639ec9e3b2445aab217b982b55e2c072",
+        "b579587801a1e8e9d31e3bc97c7f975a2eab7e900a59b29ef2723e598e9342d2",
+    ),
+    "r11_conforme_estabelecido_diante": (
+        "3288ec8b4c964d510e14dfc1be1996777cd37918c731a39445ca51693a34415c",
+        "c111ffe73f59ad681a7d5a2773637c79ff03a6ad1ae5da14acb4ded9e8176a2c",
+    ),
+    "r11_autora_reside_no_imovel_junto": (
+        "5d61d04f922edeed8b8352ab5b1e447226fab2f093dc9eae1b1bb6461c2898b8",
+        "6c249966786de1910a459bdd036f77ca049258bca551f3c661fb04a3d0809d87",
+    ),
+    "r11_vizinhos_moram_em_frente": (
+        "8511aad8279ad7a6b1684ed9a3532ea0e4fb7d32bc10aaeb91487dd645430198",
+        "e168305c45193b12dd169478c9199e7a98853a79b7d9338619469222c3fc5057",
+    ),
+    "r11_reside_perto": (
+        "ba413cf976756cae8b8cbefdb5535273b6da0fa828005fd1a5cb9e851ae806a0",
+        "e241a2a3243a8ba6051cd7c8a9aecd8bba43b02d90fd97bf278f1b40ace2653d",
+    ),
 }
 
 _ROAD = {("street", "Rua do Imóvel", "STRONG"), ("number", "20", "STRONG")}
@@ -1065,6 +1096,13 @@ EXPECTED = {
     "r10_testemunha_reside_em_frente": set(),
     "r10_familia_vive_junto": set(),
     "r10_testemunha_mora_ao_lado": set(),
+    # Rodada 11 da revisão independente da PR #294.
+    "r11_moradores_acompanharam_junto": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r11_morador_aguardava_em_frente": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r11_conforme_estabelecido_diante": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r11_autora_reside_no_imovel_junto": {("number", "20", "STRONG"), ("street", "Rua do Imóvel", "STRONG")},
+    "r11_vizinhos_moram_em_frente": set(),
+    "r11_reside_perto": set(),
 }
 _PARTY_VALUES = {"Rua da Parte", "10", "Parte Sintética", "51111-111", "Avenida da Vendedora", "900", "vizinho"}
 

@@ -532,7 +532,12 @@ def _clause_markers(text):
             # nao e outro nucleo. Parte que mora/tem sede ali ("a testemunha mora
             # ao lado do imovel objeto") continua sendo outra unidade.
             idiom = _JUNTO_DIANTE.match(text, reach) is not None
-            party = _PARTY_INTRODUCERS.search(text, low, min(group_start, reach + 3)) is not None
+            # So o introdutor colado a vizinhanca ("mora ao lado", "reside perto"):
+            # "os moradores acompanharam a vistoria junto ao imovel" e o objeto.
+            party = any(
+                item.end() >= reach - 1
+                for item in _PARTY_INTRODUCERS.finditer(text, max(low, reach - 24), min(group_start, reach + 3))
+            )
             kind = "OTHER" if (head is not None and not idiom) or party else "SUBJECT_LOOSE"
             for start, end, _value in members:
                 markers.append((start, end, kind))
