@@ -1059,10 +1059,13 @@ def test_slow_drip_cannot_hold_product_runtime_shutdown(tmp_path, slow_part):
     runtime.start()
     client = socket.create_connection(runtime.address, timeout=5)
     if slow_part == "body":
-        # Each drip waits at least `drip_interval`, so the dripper cannot send
-        # more than this many bytes before the guard expires. Declaring twice
-        # that keeps the body incomplete for the whole guard: only the request
-        # deadline, not the client finishing, can release the worker (#301).
+        # Each drip waits at least `drip_interval`, so during the guard alone
+        # the dripper sends at most `drip_byte_budget` bytes. It also drips
+        # while the worker start is awaited below (about 0.5 s) and the prefix
+        # already carries one body byte; declaring twice the budget covers
+        # both, so the body stays incomplete for the whole guard and only the
+        # request deadline, not the client finishing, can release the worker
+        # (#301).
         drip_byte_budget = math.ceil(shutdown_deadline / drip_interval)
         declared_body_bytes = 2 * drip_byte_budget
         assert declared_body_bytes <= runtime._bridge._config.max_body_bytes
