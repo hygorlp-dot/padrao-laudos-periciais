@@ -44,7 +44,7 @@ from scripts.backend_contract.local_api.composition import (
     build_local_api,
 )
 
-from request_worker_probe import live_request_workers
+from tests.request_worker_probe import live_request_workers
 
 
 WORKSPACE_UUID = UUID("11111111-1111-4111-8111-111111111111")

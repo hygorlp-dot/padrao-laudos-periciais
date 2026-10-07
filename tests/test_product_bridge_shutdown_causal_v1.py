@@ -8,7 +8,7 @@ import pytest
 from scripts.backend_contract.product_bridge.composition import build_product_runtime
 from scripts.backend_contract.product_bridge.server import ProductBridgeConfig
 
-from request_worker_probe import live_request_workers
+from tests.request_worker_probe import live_request_workers
 from test_product_bridge_v1 import TOKEN, _wait_for_product_shutdown, frontend_build
 
 

@@ -21,7 +21,7 @@ from scripts.backend_contract.product_bridge.server import (
     ProductBridgeServerStartError,
 )
 
-from request_worker_probe import live_request_workers
+from tests.request_worker_probe import live_request_workers
 
 
 TOKEN = "product-bridge-test-token-with-sufficient-entropy"

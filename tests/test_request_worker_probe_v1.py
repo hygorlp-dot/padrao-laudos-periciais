@@ -9,7 +9,7 @@ import pytest
 from scripts.backend_contract.local_api.server import _ThreadingLocalServer
 from scripts.backend_contract.product_bridge.server import _ProductHttpServer
 
-from request_worker_probe import live_request_workers
+from tests.request_worker_probe import live_request_workers
 
 SERVER_CLASSES = (_ThreadingLocalServer, _ProductHttpServer)
 
