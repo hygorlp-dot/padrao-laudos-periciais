@@ -5921,6 +5921,36 @@ def test_text_box_is_counted_once_by_the_expectation_builder() -> None:
     assert [item.text for item in expectations] == ["antes", "dentro"]
 
 
+@pytest.mark.parametrize("container", ["pict", "drawing"])
+@pytest.mark.parametrize("top", [810.0, 45.0])
+def test_text_style_matching_preserves_textbox_text_in_page_margin(container, top) -> None:
+    document = _doc(
+        f"<w:p><w:r><w:{container}><w:txbxContent>"
+        "<w:p><w:r><w:t>CAIXA</w:t></w:r></w:p>"
+        f"</w:txbxContent></w:{container}></w:r></w:p>"
+    )
+    expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": document}
+    )
+    fragment = replace(_frag("CAIXA", 50.0, 90.0, top=top), page_height=842.0)
+
+    assert delivery_renderer._text_sizes_match(
+        expectations, [fragment], [],
+        top_margin=(85.05, 85.05), bottom_margin=(56.7, 56.7),
+    )
+    assert not delivery_renderer._text_sizes_match(
+        expectations, [replace(fragment, font_size=20)], [],
+        top_margin=(85.05, 85.05), bottom_margin=(56.7, 56.7),
+    )
+    body_expectations = delivery_renderer._word_text_expectations(
+        {"word/document.xml": _doc("<w:p><w:r><w:t>CAIXA</w:t></w:r></w:p>")}
+    )
+    assert not delivery_renderer._text_sizes_match(
+        body_expectations, [fragment], [],
+        top_margin=(85.05, 85.05), bottom_margin=(56.7, 56.7),
+    )
+
+
 def test_blank_spacer_row_does_not_consume_the_next_row_line() -> None:
     fragments = [
         _frag("Cabecalho A", 50.0, 110.0, top=700.0),

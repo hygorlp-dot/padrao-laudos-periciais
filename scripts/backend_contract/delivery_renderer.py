@@ -3000,6 +3000,8 @@ class _WordTextExpectation:
     # A header/footer PAGE or NUMPAGES result: its text is the value for the
     # page the expectation is bound to, and its typography is the field run's.
     dynamic_field: str | None = None
+    # Caixas de texto podem ser posicionadas na margem, fora do fluxo do corpo.
+    in_text_box: bool = False
 
 
 def _twips_attribute(node: ElementTree.Element | None, name: str) -> float | None:
@@ -4140,6 +4142,11 @@ def _word_text_expectations(
             for table in _current_iter(xml_roots[name], "tbl")
             for paragraph in _current_iter(table, "p")
         }
+        text_box_paragraph_ids = {
+            id(paragraph)
+            for text_box in _current_iter(xml_roots[name], "txbxContent")
+            for paragraph in _current_iter(text_box, "p")
+        }
         # A paragraph kept with a following picture -- directly or through a
         # chain of keep-with-next paragraphs -- moves to the next page with it
         # when the picture does not fit: ordinary Word layout the text flow
@@ -4540,6 +4547,7 @@ def _word_text_expectations(
                         min(0.0, first_line_offset(paragraph)),
                         even_text_left_margin,
                         segment_fields.get(segment_index),
+                        id(paragraph) in text_box_paragraph_ids,
                     )
                 )
             if name == "word/document.xml":
@@ -4661,7 +4669,7 @@ def _text_sizes_match(
             # wholly inside one is header or footer text.  First-fit bound the
             # findings table's "1" cell to the first page's footer number, leaving
             # the footer without its fragment (Word 16, #303).
-            if expectation.band is None and any(
+            if expectation.band is None and not expectation.in_text_box and any(
                 (bottom_margin is not None and fragment.top < bottom_margin[0])
                 or (
                     top_margin is not None
