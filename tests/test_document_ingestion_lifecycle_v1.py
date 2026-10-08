@@ -271,12 +271,21 @@ def test_t1_small_document_is_ready_in_the_same_response(tmp_path):
 
 
 def test_t2_t3_t8_slow_document_is_accepted_processing_and_ready_later_through_the_bridge(tmp_path):
+    _slow_document_bridge_lifecycle(tmp_path)
+
+
+def test_ready_poll_auxiliary_read_survives_busy_store_beyond_bridge_deadline(tmp_path):
+    _slow_document_bridge_lifecycle(tmp_path, busy_read_seconds=3.0)
+
+
+def _slow_document_bridge_lifecycle(tmp_path, *, busy_read_seconds=0.0):
     gate = GatedPjeIntake()
     runtime = build_product_runtime(
         tmp_path / "t2.db", frontend_build(tmp_path), token=TOKEN, private_root=tmp_path / "t2-private",
         pje_intake=gate, config=ProductBridgeConfig(upstream_timeout_seconds=1.5),
     )
     runtime.start()
+    holder = None
     try:
         workspace_id = _workspace(runtime)
         content = _synthetic_pje(tmp_path)
@@ -294,12 +303,19 @@ def test_t2_t3_t8_slow_document_is_accepted_processing_and_ready_later_through_t
         # Enquanto processa, nao ha inventario logico sobre o qual agir.
         assert request(runtime, "GET", root + "/pje-intake")[0] == 404
         gate.release.set()
+        if busy_read_seconds:
+            holder = _hold_store(runtime, busy_read_seconds)
+        polling_started = time.monotonic()
 
         def ready():
-            status, _, raw = request(runtime, "GET", root + "/material-processing")
-            return json.loads(raw)["items"][0]["state"] == "READY"
+            # Espera auxiliar, como a conferencia de persistencia da #296:
+            # nao depende do prazo curto usado para provar a importacao.
+            # As recargas PROCESSING acima e o inventario abaixo seguem na ponte.
+            return _states(runtime._local_api, workspace_id)[material["content_id"]] == "READY"
 
         _until(ready)
+        if holder is not None:
+            assert time.monotonic() - polling_started >= 1.5, "a leitura auxiliar nao aguardou a conexao ocupada"
         # T8: o inventario pronto continua ligado a fonte exata.
         status, _, raw = request(runtime, "GET", root + "/pje-intake")
         inventory = json.loads(raw)["intakes"][0]["inventory"]
@@ -308,6 +324,9 @@ def test_t2_t3_t8_slow_document_is_accepted_processing_and_ready_later_through_t
         assert inventory["source_sha256"] == material["checksum_sha256"]
         assert inventory["workspace_id"] == workspace_id
     finally:
+        if holder is not None:
+            holder[1].set()
+            holder[0].join(10)
         gate.release.set()
         runtime.close()
 
@@ -508,6 +527,52 @@ class _Record:
     def __init__(self, workspace_id="w", content_id="c"):
         self.workspace_id = workspace_id
         self.content_id = content_id
+
+
+@pytest.mark.parametrize("accept_seconds", [0.0, 0.2, 0.5, 0.8])
+@pytest.mark.parametrize("lookup_seconds", [0.0, 0.1])
+def test_ingestion_grace_budget_includes_acceptance_and_derivation_lookup(monkeypatch, accept_seconds, lookup_seconds):
+    """Relogio controlado: nenhuma latencia de runner decide o contrato #309."""
+    from scripts.backend_contract.application import document_ingestion as ingestion
+
+    now = [100.0]
+    record = _Record()
+
+    class Importer:
+        def accept(self, **_kwargs):
+            now[0] += accept_seconds
+            return record, True
+
+        def is_derived(self, _record):
+            return False
+
+        def needs_derivation(self, _record):
+            now[0] += lookup_seconds
+            return True
+
+    class PendingDerivation:
+        def wait(self, seconds):
+            assert seconds >= 0
+            now[0] += seconds
+            return False
+
+    queue = ingestion.DocumentDerivationQueue(lambda *_args: None)
+    submitted = []
+
+    def submit(value):
+        submitted.append(value)
+        return PendingDerivation()
+
+    monkeypatch.setattr(ingestion, "monotonic", lambda: now[0], raising=False)
+    monkeypatch.setattr(queue, "submit", submit)
+    monkeypatch.setattr(queue, "state_of", lambda _record: ingestion.PROCESSING)
+    service = ingestion.CaseDocumentIngestion(Importer(), queue, None, grace_seconds=0.5)
+    result = service.import_document(workspace_id="w", original_filename="synthetic.pdf", content=b"synthetic", media_type="application/pdf")
+
+    assert result == (record, True, ingestion.PROCESSING)
+    assert submitted == [record], "janela esgotada nao pode descartar a derivacao"
+    # Aceite duravel nao e abortado; apenas a espera opcional usa o saldo.
+    assert now[0] - 100.0 == pytest.approx(max(0.5, accept_seconds + lookup_seconds))
 
 
 def test_queue_coalesces_requests_for_the_same_source_and_reports_failure():
