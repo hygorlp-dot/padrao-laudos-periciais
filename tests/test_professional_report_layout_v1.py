@@ -379,6 +379,36 @@ def test_repeated_expert_name_binds_header_before_same_literal_in_synopsis():
     assert not d._text_sizes_match([body, header], [body_text], [], top_margin=(56.7, 56.7), bottom_margin=(56.7, 56.7))
 
 
+@pytest.mark.parametrize("role", ["photo_figure_id", "plan_figure_id"])
+def test_sheet_placement_without_captured_pat_is_rejected_without_losing_figures(role):
+    from types import SimpleNamespace
+    from scripts.backend_contract.application.report_foundation import AmendReportDraft
+    from scripts.backend_contract.delivery_renderer import professional_report_blocks
+    from scripts.backend_contract.professional_report_presentation import capture_to_mapping
+    from scripts.backend_contract.report_foundation import ReportState
+
+    original, _ = golden_report()
+    report = replace(
+        original,
+        source_snapshot=replace(original.source_snapshot, construction_defect_analysis_snapshot_id=None, construction_defect_analysis_revision=None, construction_defect_analysis_digest=None),
+        presentation=replace(original.presentation, sources=tuple(source for source in original.presentation.sources if source.kind != "pathology"), repair_budget=None, sheet_figures=()),
+        state=ReportState.DRAFT, review_decisions=(), coverage=replace(original.coverage, complete=False, reasons=("Draft",)),
+    )
+    assert len([block for block in professional_report_blocks(report) if block.kind == "FIGURE"]) == len(report.figures) == 2
+    saved = []
+    service = AmendReportDraft(
+        SimpleNamespace(execute=lambda _: (SimpleNamespace(revision=4), report)),
+        SimpleNamespace(execute=lambda *args: saved.append(args) or SimpleNamespace(revision=5)), None,
+    )
+    values = {key: value for key, value in capture_to_mapping(report.presentation).items() if key != "sources"}
+    values["sheet_figures"] = [{"pat_id": "PAT-NOT-BOUND", "photo_figure_id": None, "plan_figure_id": None, role: report.figures[0].figure_id}]
+
+    with pytest.raises(ValueError, match="professional sheet is not an effective pathology"):
+        service.execute(report.workspace_id, expected_revision=4, action="SET_PROFESSIONAL_PRESENTATION", values=values)
+
+    assert saved == [] and report.figures == original.figures
+
+
 def test_professional_golden_ooxml_has_geometry_fields_roles_and_no_external_content():
     from io import BytesIO
     from zipfile import ZipFile

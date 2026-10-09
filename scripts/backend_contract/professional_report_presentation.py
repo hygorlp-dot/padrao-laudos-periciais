@@ -381,13 +381,13 @@ def professional_report_projection(report):
         questions.append(ProfessionalQuestion(q.item_id, source.origin if source else "Origem não informada", source.original_number if source else None, a.question_text or q.text, a.answer_id, a.finding_id, a.decision_id))
     pathology = sources.get("pathology")
     items = []
+    placements = {p.pat_id: p for p in capture.sheet_figures}
     if pathology is not None:
         links = {(v.legacy_kind, v.legacy_id): v.canonical_id for v in pathology.identity_links}
         claims = {c.item_id: c.text for c in case.claims}
         obs = {o.observation_id: o.raw_observation for o in inspection.observations}
         measurements = {m.measurement_id: m for m in inspection.measurements}
         photos = {p.photo_id: p for p in inspection.photos}
-        placements = {p.pat_id: p for p in capture.sheet_figures}
         for p in pathology.analysis_final.get("patologias", ()):
             if p["id"] not in pathology.effective_pat_ids:
                 continue
@@ -405,8 +405,8 @@ def professional_report_projection(report):
             ms = tuple(measurements[v] for v in (links.get(("MEASUREMENT", m)) for m in p.get("medicoes", ())) if v in measurements)
             eligible = p.get("elegibilidade_orcamento") == "ELEGIVEL_ORCAMENTO_VICIO" and p.get("orcamento", {}).get("incluir") is True and p.get("orcamento", {}).get("revisao_profissional", {}).get("status") in {"APROVADO", "AJUSTADO"}
             items.append(ProfessionalItem(p["id"], review.review_id, p.get("sistema"), p.get("manifestacao", "Manifestação não informada"), p.get("localizacao_detalhada") or p.get("ambiente"), tuple(claims[v] for v in (links.get(("ALLEGATION", a)) for a in p.get("alegacoes_relacionadas", ())) if v in claims), tuple(obs[v] for v in (links.get(("OBSERVATION", o)) for o in p.get("constatacoes", ())) if v in obs), tuple(f"{m.raw_value} {m.raw_unit}" for m in ms), writing.get("analise_alegacoes_causas"), writing.get("consequencias"), constatacao.get("situacao"), p.get("origem"), p.get("criticidade"), writing.get("conclusao") or p["conclusao_tecnica"], recommendation, eligible, photo_figure_id, figure.plan_figure_id if figure else None))
-        if set(placements) - {i.pat_id for i in items}:
-            raise ValueError("professional sheet is not an effective pathology")
+    if set(placements) - {i.pat_id for i in items}:
+        raise ValueError("professional sheet is not an effective pathology")
     budget = capture.repair_budget
     if budget is not None:
         eligible = {i.pat_id for i in items if i.repair_eligible}
