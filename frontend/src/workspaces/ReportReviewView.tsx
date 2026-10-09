@@ -36,6 +36,8 @@ export function ReportReviewView({ workspaceId }: { workspaceId: string }) {
   if (state.kind === "missing") return <section className="status-state status-state--empty"><span className="empty-sheet" aria-hidden="true"><span /><span /><span /></span><div><h2>Nenhum laudo para revisar</h2><p>Componha o laudo antes de revisá-lo.</p><a className="primary-action" href={workspacePath(workspaceId, "laudo")} onClick={navigate}>Ir para Laudo</a></div></section>;
 
   const { snapshot } = state.value;
+  const history = state.value.review_history;
+  const historicalApproval = history !== undefined && history.report_id === snapshot.report_id && history.source_revision === state.value.revision && history.captured_state === "APPROVED" && history.last_review?.action === "APPROVE";
   const coverage = snapshot.coverage;
   const checks: Check[] = [
     { label: "Identificação capturada do processo", done: !coverage.reasons.includes("captured process identity incomplete"), detail: "Número e juízo utilizados no documento final" },
@@ -61,7 +63,7 @@ export function ReportReviewView({ workspaceId }: { workspaceId: string }) {
   const person = (id: string) => (expert && id === expert.profile_id ? expert.full_name : id);
 
   return <section className="report-review" aria-labelledby="report-review-title">
-    <header className="planning-overview"><div><h2 id="report-review-title">Revisão do laudo</h2><p>Confira a completude antes de marcar como revisado e aprovar. A aprovação libera a entrega em Word e PDF.</p></div><div className="planning-readiness"><strong>{stateLabel(snapshot.state)}</strong><span>{snapshot.state === "APPROVED" ? "Aprovado para entrega" : ready ? "Conferência completa" : "Há pendências de conteúdo"}</span></div></header>
+    <header className="planning-overview"><div><h2 id="report-review-title">Revisão do laudo</h2><p>Confira a completude antes de marcar como revisado e aprovar. A aprovação libera a entrega em Word e PDF.</p></div><div className="planning-readiness"><strong>{snapshot.upstream_stale ? historicalApproval || snapshot.state === "APPROVED" ? "Aprovado antes da alteração" : "Base desatualizada" : stateLabel(snapshot.state)}</strong><span>{snapshot.upstream_stale ? "Revisão necessária" : snapshot.state === "APPROVED" ? "Aprovado para entrega" : ready ? "Conferência completa" : "Há pendências de conteúdo"}</span></div></header>
     <section className="analysis-section" aria-labelledby="review-checklist-title"><h3 id="review-checklist-title">Conferência</h3><ul className="review-checklist">{checks.map((check) => <li key={check.label} data-done={check.done || undefined}><span className="review-check-mark" aria-hidden="true">{check.done ? "✓" : "!"}</span><div><strong>{check.label}</strong><span>{check.done ? "Completo" : "Pendente"} · {check.detail}</span></div></li>)}</ul>{coverage.reasons.length > 0 && <ul className="planning-reasons">{reasonLabels(coverage.reasons).map((item) => <li key={item}>{item}</li>)}</ul>}<a className="text-action" href={workspacePath(workspaceId, "laudo")} onClick={navigate}>Corrigir no Laudo</a></section>
     <ReportPreflightPanel workspaceId={workspaceId} reportRevision={state.value.revision} />
     {actionError && <section className="inline-alert" role="alert"><strong>Não foi possível registrar a revisão.</strong><p>O laudo continua no estado anterior. Confira as pendências e tente de novo.</p></section>}
@@ -69,7 +71,7 @@ export function ReportReviewView({ workspaceId }: { workspaceId: string }) {
       {allowed.MARK_REVIEWED && <button className="authority-action" type="button" disabled={busy || snapshot.upstream_stale || !reason.trim()} onClick={() => act("MARK_REVIEWED")}>Marcar como revisado</button>}
       {allowed.APPROVE && <button className="authority-action" type="button" disabled={busy || snapshot.upstream_stale || !reason.trim() || !ready} onClick={() => act("APPROVE")}>Aprovar laudo</button>}
       {allowed.SUPERSEDE && <button className="destructive-action" type="button" disabled={busy || !reason.trim()} onClick={() => act("SUPERSEDE")}>Marcar como substituído</button>}
-    </div>{allowed.APPROVE && !ready && <p className="field-hint">A aprovação fica disponível quando a conferência estiver completa.</p>}{snapshot.state === "APPROVED" && <a className="primary-action" href={workspacePath(workspaceId, "exportar")} onClick={navigate}>Ir para a entrega</a>}</section>}
+    </div>{allowed.APPROVE && !ready && <p className="field-hint">A aprovação fica disponível quando a conferência estiver completa.</p>}{snapshot.state === "APPROVED" && !snapshot.upstream_stale && <a className="primary-action" href={workspacePath(workspaceId, "exportar")} onClick={navigate}>Ir para a entrega</a>}</section>}
     <section className="analysis-section"><h3>Histórico de revisão</h3>{snapshot.review_decisions.length ? <ol className="planning-decisions">{snapshot.review_decisions.map((item) => <li key={item.review_id}><strong>{actionLabel(item.action)}</strong><span>{person(item.professional_id)} · {formatDateTime(item.timestamp)}</span><p>{item.reason}</p><TechnicalDetails><span className="data">{item.review_id}</span></TechnicalDetails></li>)}</ol> : <p className="planning-empty">Nenhuma revisão registrada.</p>}</section>
   </section>;
 }

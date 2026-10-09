@@ -94,3 +94,18 @@ def test_a_current_report_or_a_moved_revision_opens_no_version() -> None:
     with pytest.raises(RepositoryConflict):
         _service(_superseded())[0].execute(stored.workspace_id, expected_revision=3)
     assert appended == []
+
+
+def test_new_version_recaptures_sources_without_reusing_old_review_or_sheet_roles():
+    from scripts.backend_contract.professional_report_presentation import capture_report_authorities, ProfessionalReportDetails
+    records, case, inspection, technical, _ = upstreams()
+    stored = _superseded()
+    capture = capture_report_authorities(stored, case=case, inspection=inspection, technical=technical, pathology=None)
+    stored = replace(stored, presentation=replace(capture, details=ProfessionalReportDetails(objective="Objetivo sintético aprovado anteriormente.")))
+    moved = (records[0], SimpleNamespace(**{**vars(records[1]), "revision": 3, "checksum_sha256": "e" * 64}), records[2], records[3])
+    draft = _service(stored, records=moved)[0].execute(stored.workspace_id, expected_revision=4)[1]
+    assert next(s.revision for s in draft.presentation.sources if s.kind == "inspection") == 3
+    assert draft.presentation.details == stored.presentation.details
+    assert draft.presentation.sheet_figures == () and draft.presentation.repair_budget is None
+    assert draft.state is ReportState.DRAFT and draft.review_decisions == ()
+    assert next(s.revision for s in stored.presentation.sources if s.kind == "inspection") == 2

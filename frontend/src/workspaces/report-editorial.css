@@ -1,0 +1,53 @@
+/* Laudo only: a continuous document, with provenance beside each paragraph. */
+.report-authoring { min-width: 0; }
+.report-authoring .technical-header { display: block; }
+.report-editorial-status, .report-nature { color: var(--color-graphite); font-weight: 650; }
+.report-authority-note { max-width: 75ch; margin: 0; color: var(--color-slate); }
+.report-chapter-index { padding: var(--space-4) 0; border-block: 1px solid var(--color-rule); }
+.report-chapter-index summary { cursor: pointer; padding-block: 0.4rem; }
+.report-authoring .preflight-panel { padding-block: var(--space-4); }
+.report-authoring .preflight-panel h3 { margin-bottom: var(--space-2); }
+.report-chapter-index ol { columns: 2; column-gap: var(--space-6); margin: 0; padding: 0; list-style: none; }
+.report-chapter-index li { break-inside: avoid; padding-block: 0.2rem; }
+.report-chapter-index a, .report-question-index a { display: inline-block; padding-block: 0.3rem; color: var(--color-graphite); text-underline-offset: 0.2em; }
+.report-preparation { border-bottom: 1px solid var(--color-rule); padding-bottom: var(--space-4); }
+.report-preparation > summary, .report-provenance > summary { cursor: pointer; width: fit-content; padding-block: 0.5rem; color: var(--color-graphite); }
+.report-authoring .report-sections { gap: 0; padding-inline: clamp(1rem, 3vw, 2.5rem); background: var(--color-paper); border: 1px solid var(--color-rule); }
+.report-authoring .report-section { border: 0; border-bottom: 1px solid var(--color-rule); padding: var(--space-6) 0; }
+.report-authoring .report-sections > li:last-child .report-section { border-bottom: 0; }
+.report-authoring .report-section > header { flex-wrap: wrap; gap: var(--space-2); }
+.report-authoring .report-section h3 { font-family: var(--font-display); font-size: 1.3rem; }
+.report-authoring .report-claim { border-top: 0; padding-block: var(--space-3); }
+.report-authoring .report-claim > p:not(.report-nature, .report-claim-source, .field-hint) { white-space: pre-wrap; line-height: 1.8; }
+.report-authoring .report-nature { font-size: 0.88rem; }
+.report-authoring .report-claim-source { font-size: 0.86rem; }
+.report-authoring .report-claim-source .status-pill { border: 0; padding: 0; background: transparent; }
+.report-authoring .report-provenance { font-size: 0.9rem; border-block: 1px solid var(--color-rule); padding-block: var(--space-2); }
+.report-source-lines { display: grid; gap: var(--space-3); padding-left: var(--space-5); }
+.report-source-chain { display: grid; gap: var(--space-3); padding-block: var(--space-3); }
+.report-authoring .report-question-index { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-5); list-style: none; padding: 0; }
+.report-authoring .report-question { padding-block: var(--space-5); }
+.report-authoring .report-question h4 { font-size: 1.08rem; }
+.report-authoring :is(textarea, select, input) { min-width: 0; max-width: 100%; box-sizing: border-box; caret-color: var(--color-graphite); }
+.report-authoring :is(p, li, a, dd, pre, summary, h3, h4) { overflow-wrap: anywhere; }
+.report-authoring pre { white-space: pre-wrap; font-size: 0.82rem; }
+.report-authoring .action-row { flex-wrap: wrap; }
+.report-authoring :is(.report-section h3, .report-claim, .report-question, [id^="report-answer-"]) { scroll-margin-top: 2rem; }
+.report-authoring :focus-visible { outline: 2px solid var(--color-focus); outline-offset: 4px; }
+.report-authoring :is(.report-claim, .report-question, .report-section h3):focus { outline: 2px solid var(--color-focus); outline-offset: 4px; }
+.report-authoring ::selection { background: var(--color-rule); color: var(--color-graphite); }
+@media (max-width: 1100px) {
+  .report-chapter-index ol { columns: 1; }
+  .report-authoring .report-sections { padding-inline: var(--space-4); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .report-authoring *, .report-authoring *::before, .report-authoring *::after { animation: none; transition: none; scroll-behavior: auto; }
+}
+
+.report-professional-presentation fieldset { display: grid; gap: var(--space-4); min-width: 0; margin: 0; padding: var(--space-4) 0; border: 0; border-top: 1px solid var(--color-rule); }
+.report-professional-presentation legend { padding: 0; color: var(--color-graphite); font-weight: 650; }
+.report-professional-presentation fieldset > div { display: grid; gap: var(--space-3); min-width: 0; padding-block: var(--space-3); }
+.report-professional-presentation .report-repair-toggle { display: flex; align-items: center; font-weight: 500; }
+.report-professional-presentation .report-repair-toggle input { width: auto; flex: none; }
+.report-professional-presentation summary { cursor: pointer; padding-block: var(--space-2); }
+.report-professional-presentation fieldset > p { margin: 0; color: var(--color-slate); }

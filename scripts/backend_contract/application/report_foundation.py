@@ -48,6 +48,7 @@ from ..report_foundation import (
     editorial_profile_from_mapping,
 )
 from ..site_location import SiteLocationState
+from ..professional_report_presentation import capture_report_authorities, capture_from_mapping, capture_to_mapping
 from ..technical_findings import DecisionAction, TechnicalSnapshot, technical_snapshot_to_mapping
 from ..vistoria import InspectionSession, inspection_session_to_mapping
 from .models import thaw_payload, ProcessCaseData
@@ -595,7 +596,7 @@ class SaveReportSnapshot:
                         raise ValueError("Report new version requires a superseded or stale predecessor")
                 elif not allow_review_transition and snapshot.review_decisions != predecessor.review_decisions:
                     raise ValueError("Report Snapshot review decisions require the professional review command")
-                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table", "site_location", "figures", "property_record", "process_record")
+                material_fields = ("source_snapshot", "expert_profile", "editorial_profile", "context_matrix", "sections", "claims", "answers", "references", "findings_table", "site_location", "figures", "property_record", "process_record", "presentation")
                 if not allow_new_version and predecessor.review_decisions and any(getattr(predecessor, name) != getattr(snapshot, name) for name in material_fields):
                     raise ValueError("Report Snapshot material change requires a new draft before professional review")
             _refuse_new_answers_to_excluded_questions(snapshot, current[1], None if allow_new_version else predecessor)
@@ -652,6 +653,21 @@ class GetReportSnapshot:
             self.get_construction_defect_analysis,
         )
         return record, _with_process_staleness(_with_property_staleness(_with_site_location_staleness(_reconcile(snapshot, current[-1]), self.get_site_location, workspace_id), self.get_property_record, workspace_id), self.get_process_record, workspace_id)
+
+
+def captured_report_review_history(record, current: ReportSnapshot) -> dict | None:
+    """Read the decision on this stored revision, never restore current authority."""
+    if not current.upstream_stale or not hasattr(record, "payload"):
+        return None
+    captured = validated_report_snapshot_from_mapping(thaw_payload(record.payload))
+    if (captured.workspace_id, captured.report_id, captured.source_snapshot) != (current.workspace_id, current.report_id, current.source_snapshot):
+        raise ValueError("historical report review identity mismatch")
+    if not captured.review_decisions:
+        return None
+    from dataclasses import asdict
+    return {"report_id": captured.report_id, "source_revision": record.revision,
+            "captured_state": captured.state.value,
+            "last_review": asdict(captured.review_decisions[-1])}
 
 
 @dataclass(frozen=True, slots=True)
@@ -759,6 +775,11 @@ class AmendReportDraft:
             if values != {} or snapshot.findings_table is None:
                 raise ValueError("Report findings table amendment is invalid")
             amended = replace(snapshot, findings_table=None)
+        elif action == "SET_PROFESSIONAL_PRESENTATION":
+            if set(values) != {"details", "repair_budget", "sheet_figures"} or snapshot.presentation is None:
+                raise ValueError("professional presentation requires captured Report authorities")
+            captured = capture_to_mapping(snapshot.presentation)
+            amended = replace(snapshot, presentation=capture_from_mapping({**captured, **values}))
         elif action == "SET_FIGURES":
             # The figures are the library's current selection, in its order.
             if values != {} or self.get_photo_library is None:
@@ -1008,10 +1029,15 @@ class StartReportVersion:
         answers_tuple, context_tuple = tuple(answers), tuple(context)
         draft = replace(
             stored, source_snapshot=binding, expert_profile=profile, context_matrix=context_tuple, claims=kept_claims,
+            presentation=None,
             answers=answers_tuple, review_decisions=(), state=ReportState.DRAFT, upstream_stale=False, upstream_stale_reasons=(),
             findings_table=findings_table, site_location=site_location, property_record=_capture_property(self.get_property_record, workspace_id), process_record=_capture_process(self.get_process_record, workspace_id),
             coverage=_draft_coverage(stored, claims=kept_claims, answers=answers_tuple, context=context_tuple),
         )
+        presentation = capture_report_authorities(draft, case=case, inspection=inspection, technical=technical, pathology=pathology)
+        if stored.presentation is not None:
+            presentation = replace(presentation, details=stored.presentation.details)
+        draft = replace(draft, presentation=presentation)
         saved = self.save_snapshot.execute(workspace_id, draft, expected_revision, allow_new_version=True)
         dropped = {
             "claims": dropped_claims, "answers": dropped_answers, "context_fields": cleared_context,
@@ -1195,6 +1221,9 @@ class StartReportSnapshot:
             coverage=ReportCoverage(14, 0, 0, 0, 0, sum(item.required_by_cpc473 for item in sections), 0, 6, 0, False, ("Report draft has no material claims.",)),
             upstream_stale=False, upstream_stale_reasons=(), property_record=_capture_property(self.get_property_record, workspace_id), process_record=_capture_process(self.get_process_record, workspace_id),
         )
+        snapshot = replace(snapshot, presentation=capture_report_authorities(
+            snapshot, case=case, inspection=inspection, technical=technical, pathology=current[9],
+        ))
         record = self.save_snapshot.execute(workspace_id, snapshot, None, allow_initial_create=True)
         return record, snapshot
 

@@ -287,6 +287,8 @@ def test_start_creates_an_empty_draft_bound_to_all_four_authorities():
     service.execute(WorkspaceId.parse(case.workspace_id))
     started = captured["snapshot"]
     assert started.state is ReportState.DRAFT
+    assert started.presentation is not None
+    assert {source.kind for source in started.presentation.sources} == {"case", "inspection", "technical"}
     assert started.claims == started.answers == started.review_decisions == ()
     assert started.coverage.complete is False
     assert started.source_snapshot.technical_snapshot_id == technical.snapshot_id
@@ -321,6 +323,7 @@ def test_start_binds_an_available_effective_pathology_snapshot_exactly():
     service.execute(WorkspaceId.parse(case.workspace_id))
 
     source = captured["snapshot"].source_snapshot
+    assert {item.kind for item in captured["snapshot"].presentation.sources} == {"case", "inspection", "technical", "pathology"}
     assert source.construction_defect_analysis_snapshot_id == pathology.snapshot_id
     assert source.construction_defect_analysis_revision == pathology_record.revision
     assert source.construction_defect_analysis_digest == report_upstream_digest(pathology)
@@ -485,6 +488,14 @@ def test_get_marks_upstream_change_stale_and_reopen_cannot_preserve_approval():
     assert reopened.upstream_stale is True
     assert reopened.state is ReportState.DRAFT
     assert reopened.coverage.complete is False
+    from scripts.backend_contract.application.report_foundation import captured_report_review_history
+    history = captured_report_review_history(stored, reopened)
+    assert history["captured_state"] == "APPROVED"
+    assert history["source_revision"] == 4
+    assert history["report_id"] == snapshot.report_id
+    assert history["last_review"]["action"] == "APPROVE"
+    assert reopened.review_decisions == ()
+    assert stored.payload["state"] == "APPROVED"
 
 
 def test_get_marks_report_stale_when_bound_pathology_revision_changes():

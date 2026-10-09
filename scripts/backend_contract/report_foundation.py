@@ -11,6 +11,7 @@ import re
 from typing import Any, TypeVar
 from .property_record import PropertyRecord, property_record_from_mapping
 from .process_participants import CaseParticipant, participant_from_mapping, participant_to_mapping
+from .professional_report_presentation import ProfessionalReportCapture, capture_from_mapping, professional_report_projection
 
 
 REPORT_SNAPSHOT_ARTIFACT_KIND = "REPORT_SNAPSHOT_V1"
@@ -830,9 +831,12 @@ class ReportSnapshot:
     figures: tuple[ReportFigure, ...] | None = None
     property_record: ReportProperty | None = None
     process_record: ReportProcess | None = None
+    presentation: ProfessionalReportCapture | None = None
 
     def __post_init__(self):
         _all_text(self, ("schema_version", "report_id", "workspace_id"))
+        if self.presentation is not None:
+            professional_report_projection(self)
         if self.schema_version != "1.0.0" or self.source_snapshot.workspace_id != self.workspace_id:
             raise ValueError("report workspace or schema mismatch")
         if self.source_snapshot.expert_profile_id != self.expert_profile.profile_id or self.source_snapshot.expert_profile_revision != self.expert_profile.revision:
@@ -990,10 +994,11 @@ def report_snapshot_from_mapping(value: object) -> ReportSnapshot:
     if type(value) is not dict:
         raise ValueError("ReportSnapshot mapping is invalid")
     allowed = {item.name for item in fields(ReportSnapshot)}
-    optional = {"references", "findings_table", "site_location", "figures", "property_record", "process_record"}
+    optional = {"references", "findings_table", "site_location", "figures", "property_record", "process_record", "presentation"}
     if not allowed - optional <= set(value) <= allowed:
         raise ValueError("ReportSnapshot fields are invalid")
     data = dict(value)
+    data["presentation"] = capture_from_mapping(data["presentation"]) if "presentation" in data else None
     data["process_record"] = report_process_from_mapping(data["process_record"]) if "process_record" in data else None
     if "property_record" not in data:
         data["property_record"] = None
@@ -1144,7 +1149,7 @@ def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     for answer in mapping["answers"]:
         if answer["question_text"] is None:
             del answer["question_text"]
-    for name in ("references", "findings_table", "site_location", "figures", "property_record", "process_record"):
+    for name in ("references", "findings_table", "site_location", "figures", "property_record", "process_record", "presentation"):
         if mapping[name] is None:
             del mapping[name]
     if value.process_record is not None:

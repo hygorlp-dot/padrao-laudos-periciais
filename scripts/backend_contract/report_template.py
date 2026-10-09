@@ -92,6 +92,10 @@ def _participants_summary(pole: str):
 
 
 _FIELD_VALUES = {
+    "EXPERT_COVER_NAME": lambda report: report.expert_profile.full_name,
+    "ACTION_TYPE": lambda report: report.presentation.details.action_type or "Não informado" if report.presentation is not None else "Não informado",
+    "PROTOCOL_OPENING": lambda report: report.presentation.details.protocol_opening or "Apresentação protocolar não fornecida." if report.presentation is not None else "Apresentação protocolar não fornecida.",
+    "REPORT_CITY_DATE": lambda report: ", ".join(v for v in (report.presentation.details.city, report.presentation.details.report_date) if v) or "Local e data não fornecidos." if report.presentation is not None else "Local e data não fornecidos.",
     "EXPERT_FULL_NAME": lambda report: report.expert_profile.full_name,
     "EXPERT_REGISTRATION": lambda report: report.expert_profile.registration,
     "REPORT_ID": lambda report: report.report_id,

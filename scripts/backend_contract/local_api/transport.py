@@ -89,6 +89,7 @@ from ..application.construction_defect_analysis import (
     validated_observation_contexts_from_mapping,
 )
 from ..application.report_foundation import (
+    captured_report_review_history,
     expert_profile_to_validated_mapping,
     report_snapshot_to_validated_mapping,
     validated_expert_profile_from_mapping,
@@ -1175,7 +1176,8 @@ class LocalApi:
                     if self._services.get_report_snapshot is None:
                         return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")
                     record, snapshot = self._services.get_report_snapshot.execute(workspace_id)
-                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
+                    history = captured_report_review_history(record, snapshot)
+                    return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot), **({"review_history": history} if history is not None else {})})
                 if normalized_method == "POST":
                     if self._services.start_report_snapshot is None:
                         return _error(503, "REPORT_SNAPSHOT_UNAVAILABLE")

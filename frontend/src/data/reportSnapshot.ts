@@ -1,6 +1,10 @@
 import type { ProcessCaseData } from "./processCase";
 import type { PropertyEnvelope } from "./propertyRecord";
 
+export type ProfessionalReportDetails = Partial<Record<"action_type" | "protocol_opening" | "qualification" | "preamble" | "objective" | "definitions" | "classification_framework" | "conditions" | "city" | "report_date" | "closing", string | null>>;
+export type ReportRepairLine = Record<"group" | "item" | "pat_id" | "source" | "code" | "description" | "unit" | "quantity" | "memory" | "unit_cost" | "bdi_percent" | "unit_price" | "total", string>;
+export type ProfessionalReportCapture = { sources: unknown[]; details: ProfessionalReportDetails; repair_budget: { competence: string; regime: string; observations: string; bdi_memory: string; lines: ReportRepairLine[] } | null; sheet_figures: Array<{ pat_id: string; photo_figure_id: string | null; plan_figure_id: string | null }> };
+
 export type ExpertProfile = { profile_id: string; revision: number; full_name: string; professional_title: string; registration: string; court_registration: string; contact_line: string };
 export type EditorialTypography = { heading1_pt: number; heading2_pt: number; heading3_pt: number; headings_bold: boolean; heading_space_before_pt: number; heading_space_after_pt: number; paragraph_space_after_pt: number };
 export type HeadingCase = "PRESERVE" | "UPPER" | "TITLE_CASE" | "SENTENCE_CASE";
@@ -14,6 +18,12 @@ export function referenceCitation(reference: ReportReference) { const name = ref
 export type ReportSnapshot = {
   schema_version: "1.0.0"; report_id: string; workspace_id: string; source_snapshot: {
     workspace_id: string;
+    case_analysis_snapshot_id?: string;
+    case_analysis_revision?: number;
+    inspection_session_id?: string;
+    inspection_session_revision?: number;
+    technical_snapshot_id?: string;
+    technical_snapshot_revision?: number;
     construction_defect_analysis_snapshot_id: string | null;
     construction_defect_analysis_revision: number | null;
     construction_defect_analysis_digest: string | null;
@@ -27,13 +37,15 @@ export type ReportSnapshot = {
   state: string; coverage: { sections: number; material_claims: number; traceable_claims: number; answers: number; traceable_answers: number; cpc473_required_sections: number; cpc473_present_sections: number; context_required_fields: number; context_present_fields: number; complete: boolean; reasons: string[] };
   upstream_stale: boolean; upstream_stale_reasons: string[];
   references?: ReportReference[]; findings_table?: ReportFindingRow[];
+  presentation?: ProfessionalReportCapture;
   figures?: Array<{ figure_id: string; content_id: string; original_sha256: string; caption: string; section_kind: string; width: number; height: number }>;
   process_record?: ProcessCaseData & { workspace_id: string; source_revision: number; source_checksum: string };
   property_record?: { record: PropertyEnvelope["record"]; source_revision: number; source_checksum: string };
   site_location?: { latitude: number; longitude: number; address_label: string | null; source_revision: number; source_checksum: string };
 };
 export type ProfileEnvelope = { revision: number; updated_at: string; profile: ExpertProfile };
-export type ReportEnvelope = { revision: number; updated_at: string; snapshot: ReportSnapshot };
+export type ReportReviewHistory = { report_id: string; source_revision: number; captured_state: string; last_review: { review_id: string; action: string; professional_id: string; reason: string; timestamp: string } };
+export type ReportEnvelope = { revision: number; updated_at: string; snapshot: ReportSnapshot; review_history?: ReportReviewHistory };
 export class ReportApiError extends Error { constructor(readonly kind: "not-found" | "invalid" | "unavailable") { super(kind); } }
 const base = (workspaceId: string) => `/app-api/v1/workspaces/${encodeURIComponent(workspaceId)}`;
 async function decode(response: Response) { if (response.status === 404) throw new ReportApiError("not-found"); if (!response.ok) throw new ReportApiError("unavailable"); return response.json(); }
@@ -45,7 +57,7 @@ export async function getReportSnapshot(workspaceId: string, signal?: AbortSigna
 export async function startReportSnapshot(workspaceId: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}" })), workspaceId); }
 export async function saveReportSnapshot(workspaceId: string, envelope: ReportEnvelope, snapshot: ReportSnapshot) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { method: "PUT", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, snapshot }) })), workspaceId); }
 export async function reviewReportSnapshot(workspaceId: string, envelope: ReportEnvelope, action: "MARK_REVIEWED" | "APPROVE" | "SUPERSEDE", reason: string) { return reportEnvelope(await decode(await fetch(`${base(workspaceId)}/report-snapshot/reviews`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ expected_revision: envelope.revision, action, professional_id: envelope.snapshot.expert_profile.profile_id, reason }) })), workspaceId); }
-export type ReportAmendment = "SET_PROCESS_RECORD" | "SET_PROPERTY_RECORD" | "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE" | "ADD_REFERENCE" | "REMOVE_REFERENCE" | "SET_FINDINGS_TABLE" | "REMOVE_FINDINGS_TABLE" | "SET_SITE_LOCATION" | "REMOVE_SITE_LOCATION" | "SET_FIGURES" | "REMOVE_FIGURES";
+export type ReportAmendment = "SET_PROFESSIONAL_PRESENTATION" | "SET_PROCESS_RECORD" | "SET_PROPERTY_RECORD" | "ADD_CLAIM" | "UPDATE_CONTEXT" | "ADD_ANSWER" | "ANSWER_QUESTION" | "UPDATE_ANSWER_TEXT" | "REMOVE_ANSWER" | "UPDATE_CLAIM_TEXT" | "REMOVE_CLAIM" | "SET_EDITORIAL_PROFILE" | "ADD_REFERENCE" | "REMOVE_REFERENCE" | "SET_FINDINGS_TABLE" | "REMOVE_FINDINGS_TABLE" | "SET_SITE_LOCATION" | "REMOVE_SITE_LOCATION" | "SET_FIGURES" | "REMOVE_FIGURES";
 export type AIAssistantStatus = { available: boolean; mode: "LOCAL_ONLY" | null; reasons: Array<"NO_LOCAL_PROVIDER" | "PRIVATE_CASE_EGRESS_NOT_AUTHORIZED">; proposal_only: true };
 // Fail closed: anything but a well-formed "available" answer means unavailable.
 export async function getAIAssistantStatus(signal?: AbortSignal): Promise<AIAssistantStatus> {

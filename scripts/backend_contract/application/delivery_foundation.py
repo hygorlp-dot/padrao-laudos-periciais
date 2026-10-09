@@ -525,8 +525,8 @@ class StoreDefaultDeliveryTemplate:
         if self.get_workspace_settings is not None:
             _record, settings = self.get_workspace_settings.current(workspace_id)
         if settings is None:
-            content = default_report_template(report.editorial_profile)
-            manifest = default_template_manifest()
+            content = default_report_template(report.editorial_profile, professional=report.presentation is not None)
+            manifest = default_template_manifest(professional=report.presentation is not None)
         else:
             if self.get_private_content is None:
                 raise ValueError("workspace branding requires private content access")
@@ -549,8 +549,8 @@ class StoreDefaultDeliveryTemplate:
                 seal=self._image(workspace_id, assets.get(AssetRole.PROFESSIONAL_SEAL)),
                 city_year=", ".join(item for item in (city, year) if item) or None,
             )
-            content = branded_report_template(report.editorial_profile, branding)
-            manifest = branded_template_manifest()
+            content = branded_report_template(report.editorial_profile, branding, professional=report.presentation is not None)
+            manifest = branded_template_manifest(professional=report.presentation is not None)
         record = self.store_private_content.execute(
             workspace_id=workspace_id, original_filename=DEFAULT_TEMPLATE_FILENAME, content=content,
             media_type=_DOCX_MEDIA_TYPE, origin=PrivateContentOrigin.LOCAL_IMPORT,

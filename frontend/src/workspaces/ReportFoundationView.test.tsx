@@ -52,6 +52,60 @@ function routed(snapshot: object, amendments: (body: Record<string, unknown>) =>
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe("editorial authority and navigation (3A)", () => {
+  test("uses captured read-only review history while the real reconciled state remains draft and stale", async () => {
+    const stale = { ...baseSnapshot, state: "DRAFT", upstream_stale: true, review_decisions: [], upstream_stale_reasons: ["technical snapshot revision changed"] };
+    const normal = routed(stale);
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/report-snapshot") ? Promise.resolve(response(200, { ...envelope(stale), review_history: { report_id: stale.report_id, source_revision: 3, captured_state: "APPROVED", last_review: { review_id: "R-HIST", action: "APPROVE", timestamp: "2026-08-31T11:00:00Z", professional_id: "EXPERT-PROFILE-001", reason: "Aprovação sintética anterior" } } })) : normal(input, init));
+    render(<ReportFoundationView workspaceId={ID} />);
+    expect(await screen.findByText("Aprovado antes da alteração · revisão necessária")).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Editar trecho" })).not.toBeInTheDocument();
+  });
+  test("reads the document before entering the local paragraph editor", async () => {
+    vi.stubGlobal("fetch", routed(baseSnapshot));
+    render(<ReportFoundationView workspaceId={ID} />);
+    const section = within(await screen.findByRole("article", { name: "1. Identificação" }));
+    expect(section.getByText("Afirmação documentada.")).toBeVisible();
+    expect(section.queryByLabelText("Texto")).not.toBeInTheDocument();
+    await userEvent.click(section.getByRole("button", { name: "Editar trecho" }));
+    expect(section.getByLabelText("Texto")).toHaveFocus();
+    expect(screen.getByRole("navigation", { name: "Capítulos do laudo" })).toBeInTheDocument();
+  });
+
+  test.each(["APPROVED", "DRAFT"])("never presents stale historical approval as current approval (%s)", async (state) => {
+    vi.stubGlobal("fetch", routed({ ...baseSnapshot, state, review_decisions: [], upstream_stale: true, upstream_stale_reasons: ["technical snapshot revision changed"] }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    expect(await screen.findByText(state === "APPROVED" ? "Aprovado antes da alteração · revisão necessária" : "Base desatualizada · revisão necessária")).toBeVisible();
+    expect(screen.queryByText("Aprovado")).not.toBeInTheDocument();
+    expect(screen.queryByText(/quesitos respondidos/)).not.toBeInTheDocument();
+  });
+
+  test("keeps allegations, observations, measurements and adopted authority distinct", async () => {
+    const authorities = ["ALLEGED", "OBSERVED", "MEASURED", "TECHNICALLY_FOUND", "PROFESSIONALLY_CONCLUDED", "AI_PROPOSAL"];
+    vi.stubGlobal("fetch", routed({ ...baseSnapshot, claims: authorities.map((authority, index) => ({ ...baseSnapshot.claims[0], claim_id: `CLAIM-${index}`, authority, text: `Trecho ${index}` })) }));
+    render(<ReportFoundationView workspaceId={ID} />);
+    for (const label of ["Alegação nos autos", "Observado em vistoria", "Medição", "Constatação", "Conclusão profissional", "Proposta aguardando decisão"]) expect((await screen.findAllByText(label, { exact: true }))[0]).toBeVisible();
+  });
+
+  test("a failed source consultation is never represented as no questions", async () => {
+    const normal = routed(baseSnapshot);
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/sources") ? Promise.resolve(response(503, {})) : normal(input, init));
+    render(<ReportFoundationView workspaceId={ID} />);
+    expect(await screen.findByText("Consulta de quesitos indisponível. Não é possível afirmar que não há quesitos." )).toBeVisible();
+    expect(screen.queryByText(/Nenhum quesito vinculado/)).not.toBeInTheDocument();
+  });
+
+  test("brings authoritative preflight occurrences to their editorial location", async () => {
+    const normal = routed(baseSnapshot);
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith("/preflight") ? Promise.resolve(response(200, { report_revision: 3, profile_label: "Perfil sintético", blocking: true, sources: [], findings: [{ code: "PENDING_MARKER", severity: "BLOCKING", section_id: "SEC-1", location_id: "CLAIM-1", excerpt: "[VALIDAÇÃO DO PERITO: medida]", message: "Validação do perito necessária", suggestion: "Conferir a medida" }] })) : normal(input, init));
+    render(<ReportFoundationView workspaceId={ID} />);
+    const link = await screen.findByRole("link", { name: "Ir ao trecho: Identificação" });
+    expect(link).toHaveAttribute("href", "#report-claim-CLAIM-1");
+    await userEvent.click(link);
+    expect(document.getElementById("report-claim-CLAIM-1")).toHaveFocus();
+  });
+});
+
 describe("professional report authoring (Laudo)", () => {
   test("presents sections, readable sources and the process context without internal identities on the first layer", async () => {
     vi.stubGlobal("fetch", routed(baseSnapshot));
@@ -115,9 +169,10 @@ describe("professional report authoring (Laudo)", () => {
     vi.stubGlobal("fetch", routed(baseSnapshot, () => response(409, {})));
     render(<ReportFoundationView workspaceId={ID} />);
     const first = within(await screen.findByRole("article", { name: "1. Identificação" }));
+    fireEvent.click(first.getByRole("button", { name: "Editar trecho" }));
     fireEvent.change(first.getByLabelText("Texto"), { target: { value: "Texto alterado." } });
     fireEvent.click(first.getByRole("button", { name: "Salvar texto" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível salvar o texto.");
+    expect((await screen.findByText("Não foi possível salvar o texto.")).closest("[role=alert]")).not.toBeNull();
     expect(screen.getByRole("heading", { name: "Laudo técnico" })).toBeInTheDocument();
   });
 
@@ -150,6 +205,7 @@ describe("professional report authoring (Laudo)", () => {
     fireEvent.click(within(form).getByRole("button", { name: "Adicionar referência" }));
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toEqual({ expected_revision: 3, action: "ADD_REFERENCE", values: { kind: "TECHNICAL_LITERATURE", author: "Thomaz, Ercio", title: "Trincas em edifícios", year: 2020, identifier: null, details: null } });
+    fireEvent.click(screen.getByRole("button", { name: "Editar trecho" }));
     fireEvent.change(screen.getByLabelText("Inserir citação"), { target: { value: "REFERENCE-1" } });
     expect(screen.getByDisplayValue("Afirmação documentada. (ABNT NBR 15575-1, 2021)")).toBeInTheDocument();
   });
@@ -204,6 +260,7 @@ describe("professional report authoring (Laudo)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Trazer figuras da biblioteca" }));
     await waitFor(() => expect(bodies).toEqual([{ expected_revision: 3, action: "SET_FIGURES", values: {} }]));
     expect(await screen.findByText("Figura 1")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Editar trecho" }));
     expect(screen.getByRole("option", { name: "Figura 1 – Fissura na parede leste" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Inserir referência a figura ou tabela"), { target: { value: "[[FIGURA:PHOTO-B]]" } });
     expect(screen.getByDisplayValue("Afirmação documentada. [[FIGURA:PHOTO-B]]")).toBeInTheDocument();

@@ -825,6 +825,7 @@ class ReportPresentationBlock:
     rows: tuple[tuple[str, ...], ...] = ()
     # A FIGURE block names the figure whose derivative it shows; no text.
     figure_id: str = ""
+    sheet_figures: tuple[str | None, ...] = ()
 
     @property
     def visible_text(self) -> str:
@@ -835,6 +836,8 @@ class ReportPresentationBlock:
     @property
     def paragraph_texts(self) -> tuple[str, ...]:
         """The Word paragraphs this block becomes, in document order."""
+        if self.kind == "SHEET":
+            return (*tuple(cell for row in self.rows for cell in row), "")
         if self.kind == "TABLE":
             return tuple(cell for row in self.rows for cell in row)
         return (self.visible_text,)
@@ -887,7 +890,137 @@ def _presentation_paragraphs(text: str) -> list[str]:
     return [line.strip() for line in _canonical_text(text).split(chr(10)) if line.strip()]
 
 
+def _captured_professional_report_blocks(report):
+    """Compose the captured document using the existing renderer's block contract."""
+    from .professional_report_presentation import professional_report_projection, origin_presentation, classification_presentation, criticality_presentation
+    Block = ReportPresentationBlock
+    projection = professional_report_projection(report)
+    sections = {s.kind: s for s in report.sections}
+    bodies = {kind: [] for kind in sections}
+    current = None
+    for block in _legacy_professional_report_blocks(report):
+        if block.kind == "HEADING_1":
+            current = next(kind for kind, s in sections.items() if block.text.split(". ", 1)[1] == apply_heading_case(s.title, report.editorial_profile.effective_layout.heading1_case))
+        elif current is not None:
+            bodies[current].append(block)
+    placed_figures = {identity for row in report.presentation.sheet_figures for identity in (row.photo_figure_id, row.plan_figure_id) if identity is not None}
+    for kind, blocks in bodies.items():
+        # The same selected asset is presented in its explicit sheet role once.
+        filtered = []
+        for index, block in enumerate(blocks):
+            if block.kind == "FIGURE" and block.figure_id in placed_figures:
+                continue
+            if block.kind == "CAPTION" and index + 1 < len(blocks) and blocks[index + 1].kind == "FIGURE" and blocks[index + 1].figure_id in placed_figures:
+                continue
+            filtered.append(block)
+        bodies[kind] = filtered
+    output = []
+
+    def paragraph(text, lead=""):
+        if text:
+            output.extend(Block("PARAGRAPH", p, lead if index == 0 else "") for index, p in enumerate(_presentation_paragraphs(text)))
+
+    def heading(level, text):
+        output.append(Block("HEADING_" + str(level), text))
+
+    def content(*kinds):
+        for kind in kinds:
+            output.extend(bodies[kind])
+
+    details = projection.details
+    heading(1, "1. CONSIDERAÇÕES GERAIS")
+    heading(2, "1.1 SÍNTESE DA PERÍCIA")
+    synthesis = projection.synopsis
+    if synthesis:
+        output.append(Block("TABLE", "", rows=(("Campo", "Informação capturada"), *tuple(synthesis))))
+    content("IDENTIFICATION", "PROCEDURAL_CONTEXT")
+    paragraph(details.qualification, "Qualificação:")
+    paragraph(details.preamble, "Preâmbulo:")
+    content("PURPOSE_OBJECT", "SCOPE")
+    paragraph(details.objective, "Objetivo:")
+    heading(1, "2. METODOLOGIA E NORMAS TÉCNICAS")
+    content("METHODOLOGY", "DOCUMENTS_EVIDENCE")
+    paragraph(details.definitions, "Definições:")
+    paragraph(details.classification_framework, "Classificações adotadas:")
+    content("LIMITATIONS_RESERVATIONS")
+    heading(1, "3. VISTORIA E ANÁLISE TÉCNICA")
+    paragraph(details.conditions, "Condições da vistoria:")
+    content("INSPECTION", "TECHNICAL_ANALYSIS", "TECHNICAL_FINDINGS")
+    for system_index, system in enumerate(projection.systems, 1):
+        heading(2, f"3.{system_index} {system.name}")
+        for item_index, item in enumerate(system.items, 1):
+            heading(3, f"3.{system_index}.{item_index} {item.manifestation}")
+            photo_number = next((index for index, f in enumerate(report.figures or (), 1) if f.figure_id == item.photo_figure_id), None)
+            title = (f"FOTO {photo_number:02d}" if photo_number is not None else "FOTO NÃO FORNECIDA") + " – " + (item.local or "Local não informado")
+            output.append(Block("SHEET", "", rows=((title,), ("Manifestação: " + item.manifestation,), (
+                "Fotografia" if item.photo_figure_id else "Fotografia não fornecida",
+                "",
+                next((f.caption for f in report.figures or () if f.figure_id == item.photo_figure_id), ""),
+                "Sistema: " + (item.system or "Não informado"),
+                "Recomendações técnicas: " + (item.recommendation or "Não fornecidas"),
+                "Local: " + (item.local or "Não informado"),
+                "Mini-planta" if item.plan_figure_id else "Mini-planta não fornecida",
+                "",
+                next((f.caption for f in report.figures or () if f.figure_id == item.plan_figure_id), ""),
+            ), ("Classificação: " + classification_presentation(item.classification), "Origem: " + origin_presentation(item.origin), "Criticidade: " + criticality_presentation(item.criticality))), sheet_figures=(item.photo_figure_id, item.plan_figure_id)))
+            for allegation in item.allegation:
+                paragraph(allegation, "Alegação:")
+            for observation in item.observation:
+                paragraph(observation, "Constatação:")
+            for measurement in item.measurements:
+                paragraph(measurement, "Medição:")
+            paragraph(item.analysis, "Análise das alegações e causas:")
+            paragraph(item.consequences, "Consequências:")
+            paragraph(item.conclusion, "Conclusão do item:")
+    heading(1, "4. CONCLUSÃO GERAL")
+    content("CONCLUSIONS")
+    heading(1, "5. REFERÊNCIAS")
+    content("REFERENCES")
+    heading(1, "6. RESPOSTAS AOS QUESITOS")
+    for claim in report.claims:
+        if claim.section_id == sections["ANSWERS_TO_QUESTIONS"].section_id:
+            paragraph(claim.text)
+    answers = {a.answer_id: a for a in report.answers}
+    for origin_index, group in enumerate(projection.question_groups, 1):
+        origin = group.origin
+        origin_label = {"COURT": "Quesitos do Juízo", "CLAIMANT": "Quesitos da parte autora", "DEFENDANT": "Quesitos da parte ré"}.get(origin, origin)
+        heading(2, f"6.{origin_index} {origin_label}")
+        for question in group.questions:
+            label = f"{question.number})" if question.number else "Quesito (número original não informado):"
+            output.append(Block("QUESTION", question.text, label))
+            paragraphs = _presentation_paragraphs(answers[question.answer_id].text)
+            output.extend(Block("ANSWER", p, "R:" if index == 0 else "") for index, p in enumerate(paragraphs))
+    heading(1, "7. ORÇAMENTO DE REPAROS")
+    budget = projection.repair_budget
+    if budget is None:
+        paragraph("Orçamento de reparos não fornecido nesta revisão.")
+    else:
+        paragraph(budget.competence, "Competência:")
+        paragraph(budget.regime, "Regime:")
+        paragraph(budget.bdi_memory, "Memória do BDI:")
+        for group in dict.fromkeys(line.group for line in budget.lines):
+            paragraph(group)
+            rows = tuple((line.item, line.source, line.code, line.description, line.unit, line.quantity, line.unit_cost, line.bdi_percent, line.unit_price, line.total) for line in budget.lines if line.group == group)
+            output.append(Block("TABLE", "", rows=(("Item", "Fonte", "Código", "Descrição", "Un.", "Qtd.", "Custo", "BDI %", "Preço", "Total"), *rows)))
+            for line in (line for line in budget.lines if line.group == group):
+                paragraph(line.memory, f"Memória do item {line.item}:")
+        paragraph(budget.total, "Total dos reparos:")
+        paragraph(budget.observations, "Observações:")
+    heading(1, "8. ENCERRAMENTO")
+    paragraph(projection.closing.text)
+    if projection.closing.city or projection.closing.report_date:
+        paragraph(", ".join(v for v in (projection.closing.city, projection.closing.report_date) if v))
+    content("ATTACHMENTS")
+    return tuple(output)
+
+
 def professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentationBlock, ...]:
+    if report.presentation is not None:
+        return _captured_professional_report_blocks(report)
+    return _legacy_professional_report_blocks(report)
+
+
+def _legacy_professional_report_blocks(report: ReportSnapshot) -> tuple[ReportPresentationBlock, ...]:
     """The report as a professional document: numbered sections, prose, answers.
 
     Sections without content are omitted and the visible numbering follows the
@@ -969,7 +1102,7 @@ def _toc_bookmark(index: int) -> str:
 
 def report_heading_texts(report: ReportSnapshot) -> tuple[str, ...]:
     """The presented section headings, in order: what a table of contents lists."""
-    return tuple(block.text for block in professional_report_blocks(report) if block.kind == "HEADING_1")
+    return tuple(block.text for block in professional_report_blocks(report) if block.kind in {"HEADING_1", "HEADING_2", "HEADING_3"})
 
 
 def toc_entry_texts(report: ReportSnapshot, pages: tuple[int, ...] | None) -> tuple[str, ...]:
@@ -1003,7 +1136,7 @@ def _named_style_id(styles: bytes | None, built_in_name: str) -> str | None:
     return None
 
 
-def _toc_content_markup(report: ReportSnapshot, prefix: bytes, pages: tuple[int, ...] | None, toc_style: str | None) -> bytes:
+def _toc_content_markup(report: ReportSnapshot, prefix: bytes, pages: tuple[int, ...] | None, toc_style: str | None, *, professional_width: int | None = None) -> bytes:
     """The table of contents as a borderless two-column table of heading and page.
 
     Each page is a PAGEREF field to the heading's bookmark whose cached result
@@ -1036,7 +1169,11 @@ def _toc_content_markup(report: ReportSnapshot, prefix: bytes, pages: tuple[int,
         style = element(b"pStyle", value(b"val", toc_style)) if toc_style else b""
         alignment = element(b"jc", value(b"val", "right")) if right else b""
         indent = element(b"ind", value(b"firstLine", "0"))
-        return wrap(b"p", wrap(b"pPr", style + indent + alignment) + content)
+        tabs = b""
+        if professional_width is not None and not right:
+            tabs = wrap(b"tabs", element(b"tab", value(b"val", "right") + value(b"leader", "dot") + value(b"pos", str(round(professional_width * 7800 / 9000) - 108))))
+            content += wrap(b"r", element(b"tab"))
+        return wrap(b"p", wrap(b"pPr", style + indent + tabs + alignment) + content)
 
     headings = report_heading_texts(report)
     if pages is not None and len(pages) != len(headings):
@@ -1055,7 +1192,10 @@ def _toc_content_markup(report: ReportSnapshot, prefix: bytes, pages: tuple[int,
             wrap(b"tc", wrap(b"tcPr", element(b"tcW", value(b"w", "7800") + value(b"type", "dxa"))) + paragraph(text_run(heading)))
             + wrap(b"tc", wrap(b"tcPr", element(b"tcW", value(b"w", "1200") + value(b"type", "dxa"))) + paragraph(page_content, right=True))
         )))
-    return wrap(b"tbl", table_properties + grid + b"".join(rows))
+    table = wrap(b"tbl", table_properties + grid + b"".join(rows))
+    if professional_width is not None:
+        return wrap(b"p", field_char("begin") + instruction('TOC \\o "1-3" \\u') + field_char("separate")) + table + wrap(b"p", field_char("end"))
+    return table
 
 
 def locate_heading_pages(pdf: bytes, headings: tuple[str, ...]) -> tuple[int, ...] | None:
@@ -4589,7 +4729,11 @@ def _text_sizes_match(
     used_fragments: set[int] = set()
     previous_body_fragments: list[_PositionedText] | None = None
     paragraph_wrap_anchor: _ParagraphWrapAnchor | None = None
-    for expectation in expectations:
+    # Reserve the declared, page-bound running content before body first-fit.
+    # A tall branded header can extend below the nominal margin; the identical
+    # expert name in a table must bind its own body occurrence, never steal it.
+    ordered_expectations = [e for e in expectations if e.band is not None] + [e for e in expectations if e.band is None]
+    for expectation in ordered_expectations:
         match: list[int] | None = None
         for start in range(len(positioned)):
             if (
@@ -5809,6 +5953,8 @@ def _paragraph_sits_in_column(
                 text, ordered, start, barriers, strict_identity=True
             )
             is None
+            and _wrapped_sequence_end(text, ordered, start, barriers, strict_identity=True) is None
+            and _cell_column_match(text, ordered, start, barriers, strict_identity=True) is None
         ):
             continue
         distances = [abs(fragment.x - value) for value in anchor_positions]
@@ -6542,6 +6688,49 @@ def _painted_paths_are_bound_to_tables(
     return len(used) == len(paths)
 
 
+def _declared_toc_leader_dot_count(root, positioned, barriers) -> int:
+    """Bind native leader glyphs to explicitly declared TOC right tabs.
+
+    Missing, truncated and displaced leaders fail closed. Dots outside these
+    declared spans remain ordinary PDF content in both token comparisons.
+    """
+    count = 0
+    cursor = 0
+    for control in _controls_tagged(root, TOC_CONTROL_TAG) if root is not None else ():
+        for paragraph in control.iter(f"{_W}p"):
+            tabs = paragraph.findall(f"./{_W}pPr/{_W}tabs/{_W}tab")
+            leaders = [t for t in tabs if t.attrib.get(f"{_W}leader") == "dot" and t.attrib.get(f"{_W}val") == "right"]
+            if not leaders:
+                continue
+            if len(leaders) != 1 or not paragraph.findall(f"./{_W}r/{_W}tab"):
+                raise ValueError("unsupported TOC leader declaration")
+            phrase = "".join(n.text or "" for n in paragraph.iter(f"{_W}t"))
+            match = next(((start, end) for start in range(cursor, len(positioned)) if (end := _fragment_sequence_end(phrase, positioned, start, barriers)) is not None), None)
+            if match is None:
+                raise ValueError("TOC leader heading is missing")
+            start, end = match
+            cursor = end
+            fragments = positioned[start:end]
+            last = fragments[-1]
+            target = fragments[0].x + int(leaders[0].attrib[f"{_W}pos"]) / 20
+            if last.right >= target - 8:
+                continue  # No remaining tab gap to paint.
+            dots = [v for v in positioned[end:] if v.page == last.page and v.text and set(v.text) == {"."} and v.x >= last.right and v.right <= target + 2 and v.bottom >= last.bottom - 1 and v.top <= last.top + 1]
+            dots.sort(key=lambda v: v.x)
+            if not dots or dots[0].x - last.right > 8 or target - dots[-1].right > 8:
+                raise ValueError("TOC dotted leader is missing or truncated")
+            prior_right = last.right
+            for dot in dots:
+                # PDFium bounds enclose ink, not the trailing glyph advance:
+                # two Arial 11 dots occupy 4.1 pt, while 32 occupy 94.1 pt.
+                expected_ink_width = (len(dot.text) - 1) * last.font_size * 0.278 + last.font_size * 0.1
+                if dot.x - prior_right > 8 or abs(dot.font_size - last.font_size) > 0.1 or dot.font_family != last.font_family or max(dot.color) > 8 or abs(dot.right - dot.x - expected_ink_width) > last.font_size * 0.22:
+                    raise ValueError("TOC dotted leader geometry diverges")
+                count += len(dot.text)
+                prior_right = dot.right
+    return count
+
+
 def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     """Reject converter output that is not observably derived from the bound Word."""
     try:
@@ -7244,6 +7433,8 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
     pdf_tokens = _lexical_tokens(pdf_text)
     source_counts = Counter(source_tokens)
     pdf_counts = Counter(pdf_tokens)
+    leader_dots = _declared_toc_leader_dot_count(xml_roots.get("word/document.xml"), reading_positioned, barriers)
+    expected_leader_counts = Counter({".": leader_dots})
     expected_repeatable_counts = Counter(
         _lexical_tokens(
             " ".join(
@@ -7255,7 +7446,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
             )
         )
     )
-    token_counts_match = pdf_counts == source_counts + expected_repeatable_counts
+    token_counts_match = pdf_counts == source_counts + expected_repeatable_counts + expected_leader_counts
     # The matching stream above is NFKC-folded and case-insensitive so that wrap
     # and fragment matching work.  That folding also hides material substitution,
     # so the same multiset is compared again without it.
@@ -7271,7 +7462,7 @@ def _validate_pdf_fidelity(word_content: bytes, pdf_content: bytes) -> None:
         )
     )
     strict_token_counts_match = Counter(_strict_tokens(strict_pdf_text)) == (
-        Counter(_strict_tokens(" ".join(body_fragments))) + strict_repeatable
+        Counter(_strict_tokens(" ".join(body_fragments))) + strict_repeatable + expected_leader_counts
     )
     document_order_matches = _ordered_text_blocks_match(
         document_fragments,
@@ -7495,10 +7686,16 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
         # out exactly as declared, which is what the painted grid is checked
         # against.  The item column keeps room for its header word.
         total = text_width or 9000
-        shares = (3, 5) if len(rows[0]) == 3 else (2200, 1500, 3200, 1300)
-        rest = total - 800
-        widths = (800, *(rest * share // sum(shares) for share in shares[:-1]))
+        count = len(rows[0])
+        shares = (3, 5) if count == 3 else (2200, 1500, 3200, 1300) if count == 5 else (1,) * (count - 1)
+        first = 800 if count in {3, 5} else total // count
+        rest = total - first
+        widths = (first, *(rest * share // sum(shares) for share in shares[:-1]))
         widths = (*widths, total - sum(widths))
+        if count == 10:
+            shares = (600, 1400, 900, 2400, 450, 600, 1000, 650, 1000, 1000)
+            widths = tuple(total * share // sum(shares) for share in shares[:-1])
+            widths = (*widths, total - sum(widths))
         border = b"".join(element(side, value(b"val", "single") + value(b"sz", "4") + value(b"space", "0") + value(b"color", "000000")) for side in (b"top", b"left", b"bottom", b"right", b"insideH", b"insideV"))
         # "Table Grid" is the painted grid the fidelity oracle binds cell by
         # cell; the direct borders paint it even where a template lacks the style.
@@ -7508,17 +7705,19 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
         body = []
         for index, row in enumerate(rows):
             cells = b"".join(
-                wrap(b"tc", wrap(b"tcPr", element(b"tcW", value(b"w", str(width)) + value(b"type", "dxa"))) + wrap(b"p", wrap(b"pPr", cell_paragraph) + run(text, bold=index == 0)))
+                wrap(b"tc", wrap(b"tcPr", element(b"tcW", value(b"w", str(width)) + value(b"type", "dxa")) + (wrap(b"tcMar", element(b"left", value(b"w", "40") + value(b"type", "dxa")) + element(b"right", value(b"w", "40") + value(b"type", "dxa"))) if count == 10 else b"")) + wrap(b"p", wrap(b"pPr", cell_paragraph) + run(text, bold=index == 0)))
                 for width, text in zip(widths, row, strict=True)
             )
             body.append(wrap(b"tr", wrap(b"trPr", element(b"cantSplit")) + cells))
         return wrap(b"tbl", properties + grid + b"".join(body))
 
-    def figure(block: ReportPresentationBlock, index: int) -> bytes:
+    def figure(block: ReportPresentationBlock, index: int, *, width: int | None = None, max_height: int | None = None, alignment: str = "center") -> bytes:
         if not figure_images or block.figure_id not in figure_images:
             raise ValueError("report figures require their images")
         caption = next(item.caption for item in report.figures if item.figure_id == block.figure_id)
-        cx, cy = _figure_extent(figure_images[block.figure_id], text_width)
+        cx, cy = _figure_extent(figure_images[block.figure_id], width or text_width)
+        if max_height is not None and cy > max_height:
+            cx, cy = round(cx * max_height / cy), max_height
         _part, relationship = _figure_part(index)
         identity = str(_FIGURE_DOCPR_BASE + index)
         # The drawing namespaces are declared where they are used, so the
@@ -7533,8 +7732,50 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
             f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>'
             '</pic:pic></a:graphicData></a:graphic></wp:inline>'
         ).encode("utf-8")
-        properties = wrap(b"pPr", element(b"keepLines") + element(b"spacing", value(b"after", "240")) + element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", "center")))
+        properties = wrap(b"pPr", element(b"keepLines") + element(b"spacing", value(b"after", "240")) + element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", alignment)))
         return wrap(b"p", properties + wrap(b"r", wrap(b"drawing", drawing)))
+
+    def sheet(block: ReportPresentationBlock) -> bytes:
+        nonlocal figure_index
+        total = text_width or 9000
+        widths = (total // 6,) * 5 + (total - (total // 6) * 5,)
+        left = sum(widths[:3])
+        right = total - left
+        border = b"".join(element(side, value(b"val", "single") + value(b"sz", "4") + value(b"color", "000000")) for side in (b"top", b"left", b"bottom", b"right", b"insideH", b"insideV"))
+        properties = wrap(b"tblPr", element(b"tblStyle", value(b"val", "TableGrid")) + element(b"tblW", value(b"w", str(total)) + value(b"type", "dxa")) + wrap(b"tblBorders", border) + element(b"tblLayout", value(b"type", "fixed")))
+        grid = wrap(b"tblGrid", b"".join(element(b"gridCol", value(b"w", str(w))) for w in widths))
+
+        def paragraph(text, *, bold=False, keep=True):
+            props = element(b"ind", value(b"firstLine", "0")) + element(b"spacing", value(b"before", "60") + value(b"after", "60")) + element(b"jc", value(b"val", "left")) + element(b"keepLines")
+            if table_style:
+                props = element(b"pStyle", value(b"val", table_style)) + props
+            return wrap(b"p", wrap(b"pPr", props + (element(b"keepNext") if keep else b"")) + run(text, bold=bold))
+
+        def cell(content, width, span, shade="FFFFFF"):
+            props = element(b"tcW", value(b"w", str(width)) + value(b"type", "dxa")) + element(b"gridSpan", value(b"val", str(span))) + element(b"shd", value(b"val", "clear") + value(b"fill", shade)) + element(b"vAlign", value(b"val", "top"))
+            return wrap(b"tc", wrap(b"tcPr", props) + content)
+
+        def image_or_text(identity, text, width, height, alignment):
+            nonlocal figure_index
+            if identity is None:
+                return paragraph(text)
+            figure_index += 1
+            return figure(ReportPresentationBlock("FIGURE", "", figure_id=identity), figure_index, width=width - 216, max_height=height, alignment=alignment)
+
+        rows = [cell(paragraph(block.rows[0][0], bold=True), total, 6, "D9D9D9"), cell(paragraph(block.rows[1][0], bold=True), total, 6, "E7EEF4")]
+        main = block.rows[2]
+        photo = paragraph(main[0]) + image_or_text(block.sheet_figures[0], main[1], left, 2743200, "left") + paragraph(main[2])
+        info = b"".join(paragraph(t) for t in main[3:7]) + image_or_text(block.sheet_figures[1], main[7], right, 1270000, "right") + paragraph(main[8])
+        rows.append(cell(photo, left, 3) + cell(info, right, 3))
+        # Any keepNext in the final row can pull the following narrative into
+        # the table's pagination group in Word. cantSplit holds this row; the
+        # earlier rows alone link the sheet, ending at the classification row.
+        rows.append(b"".join(cell(paragraph(t, keep=False), sum(widths[index * 2:index * 2 + 2]), 2, "E7EEF4") for index, t in enumerate(block.rows[3])))
+        # Word can extend a table's keepNext group to the following body
+        # paragraph. A one-point empty paragraph ends that group explicitly,
+        # leaving the technical narrative free to flow independently.
+        separator = wrap(b"p", wrap(b"pPr", element(b"keepNext", value(b"val", "0")) + element(b"spacing", value(b"before", "0") + value(b"after", "0") + value(b"line", "20") + value(b"lineRule", "exact"))))
+        return wrap(b"tbl", properties + grid + b"".join(wrap(b"tr", wrap(b"trPr", element(b"cantSplit")) + r) for r in rows)) + separator
 
     paragraphs = []
     heading_index = 0
@@ -7545,6 +7786,8 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
             paragraphs.append(figure(block, figure_index))
         elif block.kind == "TABLE":
             paragraphs.append(table(block.rows))
+        elif block.kind == "SHEET":
+            paragraphs.append(sheet(block))
         elif block.kind == "CAPTION":
             properties = wrap(b"pPr", styled(caption_style, element(b"ind", value(b"firstLine", "0")) + element(b"jc", value(b"val", "center"))) + element(b"keepNext"))
             paragraphs.append(wrap(b"p", properties + run(block.text)))
@@ -7561,16 +7804,28 @@ def _canonical_content_markup(report: ReportSnapshot, prefix: bytes, heading_sty
                 properties = wrap(b"pPr", element(b"spacing", value(b"after", "240") + value(b"line", str(round(240 * layout.long_quote_line_spacing))) + value(b"lineRule", "auto")) + element(b"ind", value(b"left", str(round(layout.long_quote_indent_cm * 567))) + value(b"firstLine", "0")) + element(b"jc", value(b"val", "both")))
                 size = max(16, (report.editorial_profile.body_font_pt - layout.long_quote_font_pt_delta) * 2)
                 paragraphs.append(wrap(b"p", properties + run(block.text, size_half_points=size)))
-        elif block.kind == "HEADING_1":
+        elif block.kind in {"HEADING_1", "HEADING_2", "HEADING_3"}:
             heading_index += 1
-            style = element(b"pStyle", value(b"val", heading_style)) if heading_style else b""
+            level = int(block.kind[-1])
+            selected_style = heading_style if level == 1 else _named_style_id(styles, "heading " + str(level))
+            style = element(b"pStyle", value(b"val", selected_style)) if selected_style else b""
             # With a table of contents before it, the report body opens a page.
             page_break = element(b"pageBreakBefore") if break_before_first_heading and heading_index == 1 else b""
-            properties = b"<" + prefix + b"pPr>" + style + element(b"keepNext") + page_break + element(b"outlineLvl", value(b"val", "0")) + b"</" + prefix + b"pPr>"
+            band = report.presentation is not None and level == 1 and styles and b'ProfessionalChapterBand' in styles
+            spacing = element(b"spacing", value(b"before", "0") + value(b"after", "0")) if band else b""
+            properties = b"<" + prefix + b"pPr>" + style + element(b"keepNext") + page_break + spacing + element(b"outlineLvl", value(b"val", str(level - 1))) + b"</" + prefix + b"pPr>"
             identity = str(_TOC_BOOKMARK_BASE + heading_index)
             bookmark_start = element(b"bookmarkStart", value(b"id", identity) + value(b"name", _toc_bookmark(heading_index)))
             bookmark_end = element(b"bookmarkEnd", value(b"id", identity))
-            paragraphs.append(b"<" + prefix + b"p>" + properties + bookmark_start + run(block.text, bold=heading_style is None) + bookmark_end + b"</" + prefix + b"p>")
+            paragraph_markup = b"<" + prefix + b"p>" + properties + bookmark_start + run(block.text, bold=heading_style is None) + bookmark_end + b"</" + prefix + b"p>"
+            if band:
+                total = text_width or 9000
+                borders = b"".join(element(side, value(b"val", "single") + value(b"sz", "4") + value(b"color", "000000")) for side in (b"top", b"left", b"bottom", b"right", b"insideH", b"insideV"))
+                table_properties = wrap(b"tblPr", element(b"tblStyle", value(b"val", "TableGrid")) + element(b"tblW", value(b"w", str(total)) + value(b"type", "dxa")) + wrap(b"tblBorders", borders) + element(b"tblLayout", value(b"type", "fixed")))
+                grid = wrap(b"tblGrid", element(b"gridCol", value(b"w", str(total))))
+                cell_properties = wrap(b"tcPr", element(b"tcW", value(b"w", str(total)) + value(b"type", "dxa")) + element(b"shd", value(b"val", "clear") + value(b"fill", "D9D9D9")))
+                paragraph_markup = wrap(b"tbl", table_properties + grid + wrap(b"tr", wrap(b"trPr", element(b"cantSplit")) + wrap(b"tc", cell_properties + paragraph_markup)))
+            paragraphs.append(paragraph_markup)
         elif block.lead:
             content = run(block.lead, bold=True) + (run(" " + block.text) if block.text else b"")
             paragraphs.append(b"<" + prefix + b"p>" + content + b"</" + prefix + b"p>")
@@ -7694,7 +7949,11 @@ def _verify_toc_binding(part: bytes, report: ReportSnapshot, pages: tuple[int, .
     if content is None:
         raise ValueError("table of contents did not bind to its content control")
     rendered = ["".join(node.text or "" for node in paragraph.iter(f"{_W}t")) for paragraph in content.iter(f"{_W}p")]
-    if rendered != list(toc_entry_texts(report, pages)):
+    professional_toc = any((node.text or "").strip().startswith("TOC ") for node in content.iter(f"{_W}instrText"))
+    expected = list(toc_entry_texts(report, pages))
+    if professional_toc:
+        rendered = rendered[1:-1]
+    if rendered != expected:
         raise ValueError("table of contents did not bind to its content control")
 
 
@@ -7720,11 +7979,12 @@ def _add_figure_parts(parts: dict[str, bytes], report: ReportSnapshot, figure_im
     if rels is None or types is None or b"</Relationships>" not in rels:
         raise ValueError("bound Word artifact cannot carry figures")
     entries = []
-    for index, block in enumerate((item for item in professional_report_blocks(report) if item.kind == "FIGURE"), 1):
+    figure_ids = tuple(identity for block in professional_report_blocks(report) for identity in ((block.figure_id,) if block.kind == "FIGURE" else block.sheet_figures if block.kind == "SHEET" else ()) if identity is not None)
+    for index, figure_id in enumerate(figure_ids, 1):
         part, relationship = _figure_part(index)
         if part in parts or f'Id="{relationship}"'.encode("ascii") in rels:
             raise ValueError("bound Word artifact already uses a figure identity")
-        parts[part] = figure_images[block.figure_id]
+        parts[part] = figure_images[figure_id]
         entries.append(f'<Relationship Id="{relationship}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/plp-figure-{index:03d}.jpeg"/>'.encode("ascii"))
     parts[rels_name] = rels.replace(b"</Relationships>", b"".join(entries) + b"</Relationships>", 1)
     if not re.search(rb'<Default\s+Extension="jpeg"', types, re.IGNORECASE):
@@ -7770,7 +8030,7 @@ def _inject_canonical_report(content: bytes, report: ReportSnapshot, toc_pages: 
         toc_style = _named_style_id(parts.get("word/styles.xml"), "toc 1")
         parts["word/document.xml"] = _replace_canonical_content(
             parts["word/document.xml"], report, tag=TOC_CONTROL_TAG,
-            markup=lambda prefix: _toc_content_markup(report, prefix, toc_pages, toc_style),
+            markup=lambda prefix: _toc_content_markup(report, prefix, toc_pages, toc_style, professional_width=round((21 - report.editorial_profile.margin_left_cm - report.editorial_profile.margin_right_cm) * 567) if report.presentation is not None and b'ProfessionalChapterBand' in parts.get("word/styles.xml", b"") else None),
         )
         _verify_toc_binding(parts["word/document.xml"], report, toc_pages)
         _verify_canonical_binding(parts["word/document.xml"], report)
