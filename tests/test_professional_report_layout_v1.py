@@ -14,6 +14,34 @@ def capture():
     return capture_report_authorities(report, case=case, inspection=inspection, technical=technical, pathology=None)
 
 
+def test_empty_professional_chapters_remain_distinct_word_tables():
+    """Delivery repro: neighboring empty chapter bands must not join in Word."""
+    from io import BytesIO
+    from zipfile import ZipFile
+    from xml.etree import ElementTree as ET
+    from scripts.backend_contract.delivery_renderer import render_word_candidate
+    from scripts.backend_contract.report_default_template import default_report_template, default_template_manifest
+    report = replace(bound_report(), presentation=capture())
+    word = render_word_candidate(template_bytes=default_report_template(report.editorial_profile, professional=True), report=report, manifest=default_template_manifest(professional=True)).output_bytes
+    w = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    root = ET.fromstring(ZipFile(BytesIO(word)).read("word/document.xml"))
+    canonical = next(c for c in root.iter(w + "sdt") if any(t.attrib.get(w + "val") == "CANONICAL_REPORT" for t in c.findall("./" + w + "sdtPr/" + w + "tag")))
+    blocks = list(canonical.find(w + "sdtContent"))
+    adjacent_bands = [(a, b) for a, b in zip(blocks, blocks[1:]) if a.tag == b.tag == w + "tbl" and len(a.findall("./" + w + "tr")) == len(b.findall("./" + w + "tr")) == 1]
+    assert not adjacent_bands, "Neighboring chapter tables are conflated by native Word"
+
+
+@pytest.mark.skipif("not __import__('tests.test_default_report_template_v1', fromlist=['_native'])._native()", reason="Microsoft Word 16 unavailable")
+def test_native_delivery_with_empty_professional_chapters_keeps_pdf_fidelity():
+    from scripts.backend_contract.application.delivery_foundation import RenderDeliveryPackage
+    from scripts.backend_contract.report_default_template import default_report_template, default_template_manifest
+    from scripts.backend_contract.infrastructure.office_pdf import LocalOfficePdfConverter
+    report = replace(bound_report(), presentation=capture())
+    service = RenderDeliveryPackage(None, None, None, None, None, None, pdf_converter=LocalOfficePdfConverter())
+    word, pdf, renderer = service._paginated(default_report_template(report.editorial_profile, professional=True), report, default_template_manifest(professional=True))
+    assert word and pdf is not None and renderer is not None
+
+
 def test_projection_is_immutable_captured_authority_not_latest_lookup():
     from scripts.backend_contract.professional_report_presentation import professional_report_projection
     report = replace(bound_report(), presentation=capture())
