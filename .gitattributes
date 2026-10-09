@@ -2,3 +2,6 @@
 
 *.docm binary
 *.pdf binary
+
+# Licença upstream vendorizada com CRLF: o blob pinado é o byte exato do upstream.
+.agents/third-party/playwright-cli/LICENSE -text

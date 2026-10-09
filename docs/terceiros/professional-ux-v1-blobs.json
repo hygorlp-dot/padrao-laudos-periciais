@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0.0",
+  "mode": "THIRD_PARTY_SKILL_PINNED_BYTE_EXACT",
+  "retrieval_date": "2026-10-03",
+  "first_party_precedence": [
+    "AGENTS.md",
+    ".agents/skill-router.json"
+  ],
+  "skills": [
+    {
+      "name": "vercel-react-best-practices",
+      "repo": "https://github.com/vercel-labs/agent-skills",
+      "commit": "063bee94c3f4df8453406c830b0a7df0f2860278",
+      "upstream_path": "skills/react-best-practices",
+      "license": "MIT",
+      "license_evidence": "upstream README.md \"## License: MIT\" and SKILL.md frontmatter; upstream ships no LICENSE file",
+      "integration": "RESTRICTED_SUBSET",
+      "omitted_upstream_paths": [
+        "README.md",
+        "metadata.json",
+        "rules/"
+      ],
+      "omission_reason": "AGENTS.md is the upstream compilation of rules/",
+      "local_modifications": "NONE",
+      "routing": "ui:react_performance",
+      "destination": ".agents/skills/vercel-react-best-practices",
+      "blobs": {
+        "AGENTS.md": "4e340a50684a8e7811d5bfa4df48bd9989d0fd87",
+        "SKILL.md": "237988de4a66dd8a71d30a2c24ebe1a86b58d04e"
+      }
+    },
+    {
+      "name": "vercel-composition-patterns",
+      "repo": "https://github.com/vercel-labs/agent-skills",
+      "commit": "063bee94c3f4df8453406c830b0a7df0f2860278",
+      "upstream_path": "skills/composition-patterns",
+      "license": "MIT",
+      "license_evidence": "upstream README.md \"## License: MIT\" and SKILL.md frontmatter; upstream ships no LICENSE file",
+      "integration": "RESTRICTED_SUBSET",
+      "omitted_upstream_paths": [
+        "README.md",
+        "metadata.json",
+        "rules/"
+      ],
+      "omission_reason": "AGENTS.md is the upstream compilation of rules/",
+      "local_modifications": "NONE",
+      "routing": "ui:component_composition",
+      "destination": ".agents/skills/vercel-composition-patterns",
+      "blobs": {
+        "AGENTS.md": "558bf9aa1e36db2161f1633c9bfae14a819f0508",
+        "SKILL.md": "d07025bf943345bc1cf15eb923594f889ff881f0"
+      }
+    },
+    {
+      "name": "web-design-guidelines",
+      "repo": "https://github.com/vercel-labs/agent-skills",
+      "commit": "063bee94c3f4df8453406c830b0a7df0f2860278",
+      "upstream_path": "skills/web-design-guidelines",
+      "license": "MIT",
+      "license_evidence": "upstream README.md \"## License: MIT\"; upstream ships no LICENSE file",
+      "integration": "VERBATIM",
+      "local_modifications": "NONE",
+      "routing": "reference_only",
+      "network_dependency": "instructs WebFetch of remote guidelines; egress denied by default",
+      "destination": ".agents/skills/web-design-guidelines",
+      "blobs": {
+        "SKILL.md": "ceae92ab319216a68274168fba9b63b998b65997"
+      }
+    },
+    {
+      "name": "find-skills",
+      "repo": "https://github.com/vercel-labs/skills",
+      "commit": "18f96ea131dab3b0fcc9b27cf7c6f6cbb6174680",
+      "upstream_path": "skills/find-skills",
+      "license": "MIT",
+      "license_file": ".agents/third-party/vercel-skills/LICENSE",
+      "license_blob": "eabe3008f6c0275929faa8b07d406e82717648cc",
+      "integration": "VERBATIM",
+      "local_modifications": "NONE",
+      "routing": "reference_only",
+      "network_dependency": "instructs npx skills (remote registry); egress denied by default",
+      "destination": ".agents/skills/find-skills",
+      "blobs": {
+        "SKILL.md": "a41bdd074bb587afd861332cf2f473f3154de4d7"
+      }
+    },
+    {
+      "name": "playwright-cli",
+      "repo": "https://github.com/microsoft/playwright-cli",
+      "commit": "b85c7a736bb473bf55b584e54a09ffa698d6d871",
+      "upstream_path": "skills/playwright-cli",
+      "license": "Apache-2.0",
+      "license_file": ".agents/third-party/playwright-cli/LICENSE",
+      "license_blob": "cefe596afef12e19a8e5e923f1a04c7da3188760",
+      "integration": "VERBATIM",
+      "local_modifications": "NONE",
+      "routing": "ui:browser_qa",
+      "network_dependency": "only with an executable already available and a local target origin; no product dependency",
+      "destination": ".agents/skills/playwright-cli",
+      "blobs": {
+        "SKILL.md": "0a75c909eb7c8d93d9f81954b1b6dc5165c963f4",
+        "references/element-attributes.md": "4e9fa6b99103bbe4e1262c37a9c4a664dfe1dbd5",
+        "references/playwright-tests.md": "bec2ec90e4adbc6ed56f06ab19c34916ce7f736b",
+        "references/pr-attachments.md": "91663b58bccf34b1cd2790ef8ae335d45b3d99df",
+        "references/request-mocking.md": "9005fda67dfc4af13848fd9ebedee08420aeec97",
+        "references/running-code.md": "5bf7e8cfb52112da2ecd9600631fa8365fbb90f1",
+        "references/session-management.md": "eb1bde35d9ce619d5cd939384d656e5c91310ebd",
+        "references/storage-state.md": "bb5021a09097127c051eaad83a262ff755e62971",
+        "references/test-generation.md": "33ae38be7b16027df11a963b5cd35af0677cf492",
+        "references/tracing.md": "51b8d30489a66c5f4d1b559cd68a41267e92831e",
+        "references/video-recording.md": "f0b528ab1a70f2e8d5a828862a3dd89b8644239b"
+      }
+    }
+  ]
+}

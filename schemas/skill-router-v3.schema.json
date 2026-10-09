@@ -20,7 +20,7 @@
           "required": {"$ref": "#/$defs/skills"},
           "conditional": {
             "type": "object",
-            "propertyNames": {"enum": ["reproduced_bug", "multi_step", "stable_plan", "dependency_decision", "review_requested", "independent_review_required", "systemic_risk", "external_review_eligible", "polish_requested", "material_claims", "continuous_audit", "terminal_head", "tipo_pericia_vicios", "language_audit", "report_review"]},
+            "propertyNames": {"enum": ["reproduced_bug", "multi_step", "stable_plan", "dependency_decision", "review_requested", "independent_review_required", "systemic_risk", "external_review_eligible", "polish_requested", "material_claims", "continuous_audit", "terminal_head", "tipo_pericia_vicios", "language_audit", "report_review", "product_discovery", "parallel_independent_tasks", "subagent_plan_execution", "isolated_workspace", "branch_completion", "react_performance", "component_composition", "browser_qa"]},
             "additionalProperties": {"$ref": "#/$defs/skills"}
           }
         }

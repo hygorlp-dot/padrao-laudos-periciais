@@ -29,10 +29,38 @@
   `test-driven-development`, `systematic-debugging` e
   `verification-before-completion`, conforme aplicáveis.
 - AGENTS.md é canônico sobre `using-superpowers`: em caso de conflito, estas
-  regras first-party prevalecem. Não tentar invocar Skills não vendorizadas,
-  inclusive `brainstorming`. Aplicar Skills proporcionalmente ao risco; elas
-  são obrigatórias nas mudanças materiais já definidas, sem criar burocracia
-  em perguntas e operações triviais.
+  regras first-party prevalecem. Não tentar invocar Skills não vendorizadas.
+  `brainstorming` serve somente à descoberta real de produto ou UX (condição
+  `product_discovery` do roteador); não repeti-lo quando escopo e decisão já
+  estão fechados, nunca torná-lo obrigatório para toda mudança, e ele não
+  supera autoridade first-party. O servidor visual (`brainstorming-server`) e a
+  imagem de marca remota permanecem excluídos por
+  `.agents/superpowers-policy.json`. Aplicar Skills proporcionalmente ao risco;
+  elas são obrigatórias nas mudanças materiais já definidas, sem criar
+  burocracia em perguntas e operações triviais.
+- Skills de terceiros pinadas em `.agents/skills/PROFESSIONAL_UX_V1_SOURCES.md`
+  entram somente pelas condições do roteador: `vercel-react-best-practices`
+  (`react_performance`), `vercel-composition-patterns`
+  (`component_composition`), `using-git-worktrees`,
+  `dispatching-parallel-agents`, `subagent-driven-development` e
+  `finishing-a-development-branch` (fluxo de engenharia) e `playwright-cli`
+  (`browser_qa`, somente com executável já disponível no ambiente e contra a
+  origem local; nunca `npx` que resolva pacote remoto, download de navegador
+  ou script de instalação). Vendorizar uma Skill não autoriza adicionar
+  dependência ao produto; Playwright como dependência exige UOW TDD própria.
+  `find-skills` e `web-design-guidelines` são somente referência, porque
+  dependem de rede (`npx skills`, regras remotas), negada por padrão. Passos
+  de setup de Skills de terceiros que instalam ou baixam (`npm install`,
+  `pip install`, `npx`, `git clone`, `curl`) não se aplicam aqui: usar somente
+  os comandos pinados do repositório (`npm ci`, `pip install --require-hashes`)
+  ou nenhum. A integridade das Skills de terceiros é fixada por blob em
+  `docs/terceiros/superpowers-manifest.json` e
+  `docs/terceiros/professional-ux-v1-blobs.json`. As regras "brainstorm first"
+  de `using-superpowers` não se aplicam: `brainstorming` só entra pela condição
+  `product_discovery`. De `finishing-a-development-branch` valem somente as
+  opções de manter a branch ou abrir Pull Request; nunca merge local em
+  `main`. Ajuste de `.gitignore` sugerido por `using-git-worktrees` só entra
+  pela branch de uma Issue.
 - Aplicar `SKILL_ROUTING_V3` por `.agents/skill-router.json`: selecionar o
   conjunto mínimo aplicável, sem transformar roteamento em execução, instalação
   ou autoridade. Contexto material não mapeado falha fechado.
