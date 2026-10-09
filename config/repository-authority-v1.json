@@ -15,7 +15,8 @@
     {"path": "schemas/README.md", "role": "SCHEMA_FAMILIES"},
     {"prefix": "checklists/", "role": "HUMAN_CONTROLS"},
     {"path": "config/repository-authority-v1.json", "role": "AUTHORITY_MAP"},
-    {"path": "docs/PRODUCT_MATURITY_REPORT_V1.md", "role": "MATURITY_DECLARATION_REPORT_TEMPORAL"}
+    {"path": "config/product-maturity-v1.json", "role": "OPERATIONAL_READINESS_AND_HISTORICAL_RC_EVIDENCE"},
+    {"path": "docs/PRODUCT_MATURITY_REPORT_V1.md", "role": "IMPLEMENTED_FOUNDATIONS_AND_HISTORICAL_EVIDENCE"}
   ],
   "agent_wrappers": {
     "target": "AGENTS.md",

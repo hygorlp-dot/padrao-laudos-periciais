@@ -51,6 +51,7 @@ def evaluate(declaration: dict, head: str | None) -> dict:
     evidence = declaration.get("evidence_base_sha")
     if head is None:
         status = LIVE_HEAD_UNAVAILABLE
+        errors.append("live HEAD unavailable; operational readiness cannot be established")
     elif head == evidence:
         status = SELF_REFERENTIAL
         errors.append("declaration not yet committed: evidence_base_sha equals the live HEAD; commit it so it becomes historical evidence")
@@ -62,6 +63,9 @@ def evaluate(declaration: dict, head: str | None) -> dict:
         "observed_repository_head": head,
         "declaration_status": status,
         "contract_errors": errors,
+        "human_rc_ready": declaration.get("human_rc_ready") is True and not errors,
+        "human_rc_accepted": declaration.get("human_rc_accepted") is True and not errors,
+        "historical_rc_candidate": declaration.get("historical_rc_candidate"),
     }
 
 

@@ -15,7 +15,15 @@
     "V7-5_docs_and_governance_reconciliation": "COMPLETE",
     "V7-6_final_synthetic_oracle": "COMPLETE"
   },
-  "human_rc_ready": true,
+  "human_rc_ready": false,
+  "readiness_reason": "MATERIAL_CHANGES_AFTER_HISTORICAL_RC_CANDIDATE; NO_CURRENT_CANDIDATE_ACCEPTED",
+  "current_rc_candidate": null,
+  "historical_rc_candidate": {
+    "sha": "42de7be85462e6e8a38ac696dd3adb987b270ec0",
+    "human_rc_ready": true,
+    "human_rc_accepted": false,
+    "evidence": "Historical candidate and rounds in #238/#256; not operational readiness for live HEAD"
+  },
   "human_rc_accepted": false,
   "real_case_executed": false,
   "packaging": "PACKAGING_GAP_NO_INSTALLER",

@@ -2,13 +2,11 @@
 
 <!-- impeccable:product-schema 1 -->
 
-> Status: CURRENT AUTHORITY for what the product is now. Derived from the live
-> implementation (`frontend/src/routes/routeCatalog.ts`,
-> `frontend/src/workspaces/`, `scripts/backend_contract/`) and the accepted
-> architecture decisions in `docs/arquitetura/decisoes/`. Temporal state
-> (candidate SHA, Human RC rounds, CI results) is not recorded here; it lives in
-> the canonical roadmap issue and in `config/product-maturity-v1.json`.
-> No case data, brand or commercial claim is inferred.
+> Status: CURRENT AUTHORITY for the implemented product. Sources are the live
+> route catalog, workspaces, data clients, Local API/Application Layer and
+> accepted ADRs. Candidate SHAs, CI results and Human RC rounds belong to
+> `config/product-maturity-v1.json`, the roadmap and Human RC issues.
+> No future UX increment or real case evidence is represented as implemented.
 
 ## Platform
 
@@ -16,155 +14,127 @@ web
 
 ## Stack
 
-Existing codebase. Local desktop/browser application:
+Local desktop/browser application: React, TypeScript and Vite with plain CSS
+and browser-native navigation; Python modular monolith with Domain,
+Application, Infrastructure, Local API (`/app-api`) and Product Bridge layers.
+The protected forensic Core remains below those layers. Case revisions persist
+in local SQLite; installation settings use a separate local store. Private
+source, media, templates and final artifacts stay in a local private root.
 
-- frontend: React, TypeScript and Vite, plain CSS, browser-native navigation;
-- backend: Python modular monolith (`scripts/backend_contract/`) with Domain,
-  Application, Infrastructure, Local API (`/app-api`) and Product Bridge layers
-  over the protected forensic Core (`scripts/extracao_pje/`,
-  `scripts/triagem_pericial/`, `scripts/planejamento_pericial/`,
-  `scripts/vistoria_estruturada/`, `scripts/motor_vicios/`,
-  `scripts/redacao_pericial/`);
-- persistence: local SQLite per installation (cases) plus a separate local
-  installation-settings file; private case bytes in a local private root;
-- Word rendering: DOCX/DOCM produced locally; PDF derived locally through
-  Microsoft Word 16 on Windows.
-
-The product listens on `127.0.0.1` only and is started by a local command over a
-built frontend. There is no installer yet (`PACKAGING_GAP`).
+The composition root is `scripts/planejamento_pericial/app_composition.py`.
+The product listens on `127.0.0.1` and serves a built frontend. Word artifacts
+are produced locally; derived PDF conversion requires Microsoft Word 16 on
+Windows. There is no distributed installer.
 
 ## Users
 
-The primary user is a court-appointed engineering expert (perito judicial)
-preparing, reviewing and delivering forensic engineering work on a desktop,
-often in long sessions. They need a calm, predictable workspace that keeps the
-sequence of forensic work visible, keeps every value traceable to its source and
-never decides on their behalf.
+A court-appointed engineering expert (perito judicial) preparing, reviewing
+and delivering technical work. Long desktop sessions require traceable values,
+predictable navigation and explicit professional decisions.
 
 ## Product Purpose
 
-A professional local application for judicial engineering expert work,
-initially focused on construction defects and pathological manifestations in
-buildings. It takes a judicial case from the PJe export to an authoritative Word
-report, a separate fee budget and a verifiable backup, while the forensic Core,
-not the UI or an AI, remains the domain authority and the expert remains the
-professional authority.
-
-Success means the expert moves through the real workflow with every proposal
-reviewable, every decision explicit and every artifact recoverable.
+Professional local software for judicial engineering expert work, initially
+covering construction defects and pathological manifestations in buildings.
+It connects case sources, analysis, planning, inspection, technical findings,
+report, Word delivery, financially separate fee budget and recoverable backup.
+The expert owns criteria, technical conclusions and approval.
 
 ## Positioning
 
-The interface follows the real progression of forensic work, not technical
-modules, generic dashboards or AI features. Extraction and AI only propose;
-the expert confirms, corrects or rejects, and that decision is recorded with its
-source.
+The interface follows forensic work rather than technical modules or AI
+features. A source value or proposal is never effective professional authority
+by itself. The functional descriptor is “Sistema Pericial”; no commercial
+brand, logo, sigla or tagline has been authorized.
 
 ## Operating Context
 
-Workflow implemented today (routes under `/pericias/<id>/…`, grouped as
-Processo, Perícia, Laudo and Gestão):
+`frontend/src/routes/routeCatalog.ts` defines the implemented navigation.
+Within a case, the prefix is `/pericias/<workspace-id>`; `/` in the table below
+means the case root. Global Perícias, Configurações and Recuperação are outside
+that prefix.
 
-| Step | Route | What happens |
-|---|---|---|
-| Perícias (start) | `/` | open an existing case workspace or create a new one |
-| Início | `/` (in a case) | stage overview and this case's settings snapshot |
-| Processo | `/processo` | process identification, participants by pole (active, passive, other participants) with representatives, and property data proposals by layer, each with its source |
-| Materiais | `/materiais` | import PDFs (including PJe exports); two-phase ingestion with honest processing, retry and PJe document availability (exclude/re-enable a piece) |
-| Análise | `/analise` | Case Analysis: parties, allegations, quesitos and documents from the record, with provenance |
-| Planejamento | `/planejamento` | object, material questions, what to verify on site, site location; explicit succession when the analysis changes |
-| Vistoria | `/vistoria` | observations, measurements, photographs (photo library), statements, field/mobile package; explicit successor inspection with record-by-record reuse |
-| Evidências | `/evidencias` | technical chain: evidence review, method choice, decision on each technical proposal |
-| Constatações | `/constatacoes` | effective findings ledger, each with evidence, method and decision |
-| Análise técnica | `/analise-tecnica` | construction-defect analysis (PAT); the engine proposes, the expert decides; explicit empty successor when upstream authority changes |
-| Laudo | `/laudo` | report authoring with editorial profile, figures, references and citations |
-| Revisão | `/revisao` | report review and legal-editorial preflight; open `[INFORMAÇÃO NECESSÁRIA` / `[VALIDAÇÃO DO PERITO` markers block the final Word |
-| Exportar | `/exportar` | delivery: authoritative Word (DOCX/DOCM) and the locally derived PDF |
-| Orçamento | `/orcamento` | fee budget, financially separate from technical merit |
-| Recuperação | `/recuperacao` (also outside any case) | backup verify → staging → explicit promotion → reopen |
-| Configurações | `/configuracoes` (outside any case) | installation defaults: professional profile, editorial and legal-editorial profile, visual identity and assets, default/custom Word template, test document, history and restore |
+| Route | Implemented surface |
+|---|---|
+| Global `/` | open an existing local workspace or create one |
+| Case `/` | current workflow projection, stages needing attention and next available action; unavailable status stays explicit |
+| `/processo` | process identification, plural participants and representatives, source-bound process-number suggestions and layered property proposals; the expert confirms effective values |
+| `/materiais` | local PDF/PJe ingestion, processing state and retry; exclusion/re-enable of PJe pieces |
+| `/analise` | case analysis of parties, allegations, quesitos and documents, with provenance and review |
+| `/planejamento` | object, material questions and field plan; explicit succession when upstream authority changes |
+| `/vistoria` | observations, measurements, photos, statements and local field/mobile package; successor inspection with record-by-record reuse |
+| `/evidencias` | evidence review, methods and decisions on technical proposals |
+| `/constatacoes` | effective findings with evidence, method and decision |
+| `/analise-tecnica` | construction-defect/PAT analysis and professional decisions; stale predecessors remain immutable |
+| `/laudo` | report authoring, editorial profile, figures, references and citations |
+| `/revisao` | report review and legal-editorial preflight; unresolved information/validation markers block final Word |
+| `/exportar` | authoritative Word DOCX/DOCM and locally derived, fidelity-checked PDF |
+| `/orcamento` | fee proposals, judicial decisions, expenses and receipts, separate from technical merit |
+| `/recuperacao` | backup verification, staging, explicit promotion and reopen |
+| Global `/recuperacao` | recovery even when no case exists |
+| Global `/configuracoes` | installation defaults, professional/editorial profiles, visual assets, Word template, test document, history and restore |
 
-Settings flow (accepted decision D3/D8, ADR
-`ADR-consolidacao-configuracoes-participantes-v1.md`):
+Settings authority follows:
 
 `INSTALLATION DEFAULT → NEW CASE SNAPSHOT → CASE → REPORT → WORD`
 
-Installation defaults live in their own local file and never travel in a case
-backup. A new case copies the current defaults into its own snapshot; an
-existing case changes only through an explicit "update from settings" with
-confirmation. The report and the Word output use the case snapshot, never the
-day's global default.
+Installation defaults do not travel in a case backup. New cases copy defaults
+and their assets into a case snapshot. Later global edits do not silently change
+existing cases: updating a case from settings requires an explicit confirmed
+action. Report and Word use the case snapshot. A selected custom Word template
+is the visual authority for that report. Sources:
+`ADR-consolidacao-configuracoes-participantes-v1.md` and
+`scripts/backend_contract/application/installation_settings.py`.
 
 ## Capabilities and Constraints
 
-Authority (non-negotiable):
-
-- `AI = PROPOSAL_ONLY`: `SOURCE_VALUE → AI_PROPOSAL → ENGINE_DECISION →
-  PROFESSIONAL_OVERRIDE`; an AI proposal never becomes effective by itself.
-  The AI assistant is unavailable by default.
-- `PROFESSIONAL_DECISION = HUMAN`: technical content, criteria and conclusions
-  belong to the expert; legal qualifications are reserved to the Court.
-- `PROPOSAL != FACT`, `SOURCE != DECISION`, `NOT_OBSERVED != NONEXISTENT`,
-  `SEARCH_FOUND_NOTHING != INFORMATION_DOES_NOT_EXIST`.
-- `WORD = AUTHORITATIVE`: the bound Word/DOCM is the professional artifact,
-  hash-bound and structurally revalidated.
-- `PDF = DERIVED_LOCAL`: rendered locally by Word 16, accepted only after
-  fidelity checks and bound by SHA-256 to the exact Word bytes; any refusal
-  keeps the Word and produces no PDF.
+- `AI = PROPOSAL_ONLY`: `SOURCE_VALUE → AI_PROPOSAL → ENGINE_DECISION → PROFESSIONAL_OVERRIDE`.
+  The assistant is unavailable by default; installation does not authorize a provider.
+- `PROFESSIONAL_DECISION = HUMAN`: approval and signature belong to the expert;
+  legal qualifications belong to the Court.
+- `WORD = AUTHORITATIVE`: final Word bytes are bound by hash and structurally revalidated.
+- `PDF = DERIVED_LOCAL`: Word 16 conversion must pass structural and visual
+  fidelity checks and bind to the exact Word bytes. Refusal preserves Word and
+  produces no professional PDF.
 - `PRIVATE_EGRESS = FALSE`: no cloud OCR, external maps, analytics, telemetry,
-  remote settings sync or external AI by default.
-
-Engineering constraints:
-
-- Append-only revisions; predecessors stay immutable; stale state propagates
-  monotonically.
-- Workspace isolation; backup and recovery fail closed on foreign or incomplete
-  graphs.
-- The frontend holds no domain logic, secrets, remote fonts or remote assets.
-- No real case material in the repository, fixtures, issues or logs.
-
-Not yet available: installer/packaging, human acceptance of the release
-candidate, execution on a real case.
+  remote settings sync or external AI by default. OCR is local and optional;
+  extraction does not invent missing content.
+- Append-only revisions, workspace isolation, monotonic stale propagation and
+  fail-closed backup/recovery protect the authority chain.
+- `PROPOSAL != FACT`, `SOURCE != DECISION`, `NOT_OBSERVED != NONEXISTENT`.
+- Domain logic stays below the UI. Source code contains no case secrets, remote
+  fonts/assets or real case material.
+- Automated synthetic assurance is distinct from human acceptance. Installer,
+  accepted Human RC and real-case execution remain unproven deliverables.
 
 ## Brand Commitments
 
-No commercial brand, name, sigla, logo or tagline is defined for the product.
-The interface uses only the neutral functional descriptor "Sistema Pericial".
-Visual identity configured by the expert in Configurações (logo, watermark,
-background, header, footer, cover) applies to that expert's Word reports
-generated from the default template, taken from each case's snapshot; a custom
-Word template selected by the expert is the visual authority instead (ADR D8).
-It is the expert's identity, not a product brand. Voice: concise, professional,
-technical and action-oriented in Brazilian Portuguese; never a generic SaaS
-dashboard, CRM, AI product or marketing page.
+Voice is concise, professional and action-oriented in Brazilian Portuguese.
+An expert’s configured logo, watermark, cover/header/footer apply to reports
+through the case snapshot; they do not establish a product brand.
 
 ## Evidence on Hand
 
-Only synthetic material exists in the repository: synthetic PJe exports,
-fixtures, golden corpus and oracles. No real case content, customer claims,
-metrics, photographs or brand assets are available, and the UI must not
-fabricate them.
+Public fixtures, golden corpus and product oracles are synthetic. They verify
+implementation and authority boundaries, not professional acceptance or a real
+case. No customer claims, photographs or metrics may be fabricated.
 
 ## Product Principles
 
-- User workflow first: the product follows the forensic sequence.
-- Simple by default; technical and audit detail only on demand.
-- One primary action per view.
-- Domain logic stays below the UI; proposals stay proposals until the expert
-  decides.
-- Assurance remains proportional to risk; no false success, no silent data loss.
+- Follow the professional workflow, with one primary action per view.
+- Keep normal work simple; technical and audit detail are available on demand.
+- Preserve professional decisions, provenance and recoverability.
+- Keep assurance proportional to risk and report unavailable states honestly.
 
 ## Accessibility & Inclusion
 
-Semantic landmarks, real links, visible focus, keyboard navigation,
-`aria-current`, sufficient contrast, live-region announcements for asynchronous
-work and reduced-motion support. Layouts must work at reduced desktop widths
-without horizontal scroll and with long names and large participant lists.
+Semantic landmarks, keyboard navigation, visible focus, real links,
+`aria-current`, live-region feedback and reduced-motion support are implemented
+patterns. Long content and reduced desktop widths remain explicit QA concerns,
+not a blanket claim of flawless accessibility.
 
 ## Historical origin
 
-The current surface grew from `FRONTEND_SHELL_V1` (human brief of 2026-08-23,
-plan `docs/superpowers/plans/2026-08-23-frontend-shell-v1.md`), which provided
-only the application shell, navigation and presentation states. That milestone
-is a historical record; its scope limits ("shell only", "no domain use cases")
-no longer describe the product and do not govern current work.
+`FRONTEND_SHELL_V1` and its 2026-08-23 plan record the initial shell milestone.
+Those historical limits no longer describe the current product. Future roadmap
+work is not promoted into this document before its capabilities are integrated.

@@ -222,7 +222,8 @@ def test_schema_consumers_are_counted_before_any_orphan_verdict(tmp_path):
     schemas = audit(repo, config=_config())["schemas"]
     assert schemas["schemas/base.schema.json"]["consumer_kinds"] == ["SCHEMA_REF"]
     assert "SCHEMA_VERSIONS" in schemas["schemas/versioned.schema.json"]["consumer_kinds"]
-    assert "RUNTIME_VALIDATOR" in schemas["schemas/validated.schema.json"]["consumer_kinds"]
+    assert "PYTHON_REFERENCE" in schemas["schemas/validated.schema.json"]["consumer_kinds"]
+    assert "RUNTIME_VALIDATOR" not in schemas["schemas/validated.schema.json"]["consumer_kinds"]
     assert "FIXTURE_REGISTRY" in schemas["schemas/fixtured.schema.json"]["consumer_kinds"]
     for path in ("base", "versioned", "validated", "fixtured"):
         assert schemas[f"schemas/{path}.schema.json"]["status"] == "LIVE"
@@ -423,3 +424,98 @@ def test_index_reader_accepts_skip_hash_and_refuses_sparse_checkout(tmp_path):
     _git(repo, "sparse-checkout", "set", "--no-cone", "a/")
     with pytest.raises(git_worktree.GitWorktreeError, match="sparse checkout"):
         git_worktree.read_index(repo)
+
+
+def test_private_index_paths_are_excluded_before_filesystem_access(tmp_path, monkeypatch):
+    private = "referencias/privadas/never-open.json"
+    original_stat = Path.stat
+    original_read = Path.read_bytes
+
+    def guarded_stat(path, *args, **kwargs):
+        assert "privadas" not in path.parts
+        return original_stat(path, *args, **kwargs)
+
+    def guarded_read(path, *args, **kwargs):
+        assert "privadas" not in path.parts
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", guarded_stat)
+    monkeypatch.setattr(Path, "read_bytes", guarded_read)
+    repo = repository_hygiene.load_repository(tmp_path, (private, "../outside.json", "C:/outside.json"))
+    assert repo.files == ()
+    assert repo.raw(private) is None
+    assert repo.text(private) is None
+    assert repo.raw("../outside.json") is None
+
+
+def test_auditor_refuses_untracked_and_linked_reads(tmp_path, monkeypatch):
+    (tmp_path / "public.txt").write_text("synthetic", encoding="utf-8")
+    repo = repository_hygiene.load_repository(tmp_path, ("public.txt",))
+    assert repo.raw("untracked.txt") is None
+    original_lstat = Path.lstat
+
+    def linked_stat(path, *args, **kwargs):
+        result = original_lstat(path, *args, **kwargs)
+        if path.name == "public.txt":
+            from types import SimpleNamespace
+            return SimpleNamespace(st_mode=0o120777, st_file_attributes=0, st_size=0)
+        return result
+
+    monkeypatch.setattr(Path, "lstat", linked_stat)
+    assert repo.raw("public.txt") is None
+
+
+def test_fixture_indirect_private_consumer_is_never_opened(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, {
+        **BASE, "app/__init__.py": "", "app/main.py": "",
+        "tests/fixtures/core-fixtures.json": json.dumps({"fixtures": [{
+            "arquivo": "tests/fixtures/example.json", "dominio": "X", "schema": None,
+            "consumer": "referencias/privadas/never-open.py::test_x", "finalidade": "x",
+            "expected": "VALID", "provenance": "SYNTHETIC"}]}),
+        "tests/fixtures/example.json": "{}",
+    })
+    original_stat = Path.stat
+
+    def guarded_stat(path, *args, **kwargs):
+        assert "privadas" not in path.parts
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", guarded_stat)
+    original_is_file = Path.is_file
+
+    def guarded_is_file(path, *args, **kwargs):
+        assert "privadas" not in path.parts
+        return original_is_file(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "is_file", guarded_is_file)
+    findings = audit(repo, config=_config())["findings"]
+    assert any(item.get("registry_code") == "FIXTURE_NAO_EXERCITADA" for item in findings)
+
+
+def test_maturity_readiness_does_not_promote_historical_candidate():
+    declaration = json.loads((ROOT / "config/product-maturity-v1.json").read_text(encoding="utf-8"))
+    assert declaration["human_rc_ready"] is False
+    assert declaration["historical_rc_candidate"]["human_rc_ready"] is True
+    status = product_maturity.evaluate(declaration, "f" * 40)
+    assert status["human_rc_ready"] is False
+    assert status["human_rc_accepted"] is False
+    assert product_maturity.evaluate(declaration, None)["contract_errors"]
+
+
+def test_reader_refuses_ancestor_reparse_point(tmp_path, monkeypatch):
+    directory = tmp_path / "public"
+    directory.mkdir()
+    (directory / "data.json").write_text("{}", encoding="utf-8")
+    repo = repository_hygiene.load_repository(tmp_path, ("public/data.json",))
+    original_lstat = Path.lstat
+
+    def reparse(path, *args, **kwargs):
+        result = original_lstat(path, *args, **kwargs)
+        if path.name == "public":
+            from types import SimpleNamespace
+            return SimpleNamespace(st_mode=result.st_mode, st_file_attributes=0x400)
+        assert path.name != "data.json", "must stop at ancestor, before inspecting child"
+        return result
+
+    monkeypatch.setattr(Path, "lstat", reparse)
+    assert repo.raw("public/data.json") is None

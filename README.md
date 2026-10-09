@@ -93,7 +93,7 @@ O estado temporal — candidato congelado, rodadas do Human RC, resultado de CI 
 não fica neste README, porque fica falso a cada merge:
 
 - roadmap canônico e checkpoints: issue de roadmap vigente no GitHub
-  (atualmente #256, `MASTER_PRODUCT_ENGINEERING_ROADMAP_V7`);
+  (os registros de #256 preservam o roadmap V7);
 - aceitação humana no Windows: #238 e
   [`docs/HUMAN_RC_WINDOWS_V2.md`](docs/HUMAN_RC_WINDOWS_V2.md);
 - declaração de maturidade: [`config/product-maturity-v1.json`](config/product-maturity-v1.json)

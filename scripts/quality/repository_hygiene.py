@@ -22,6 +22,7 @@ import ast
 import hashlib
 import json
 import re
+import stat
 import sys
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -85,6 +86,21 @@ class Repository:
     head: str | None
     _text: dict[str, str | None] = field(default_factory=dict)
 
+    def safe_file(self, path: str) -> Path | None:
+        if path not in self._file_set or not public_path(path) or path in self.symlinks:
+            return None
+        target = self.root
+        try:
+            # Do not resolve links: reject every component before opening a file.
+            for part in PurePosixPath(path).parts:
+                target = target / part
+                metadata = target.lstat()
+                if stat.S_ISLNK(metadata.st_mode) or getattr(metadata, "st_file_attributes", 0) & 0x400:
+                    return None
+            return target if stat.S_ISREG(metadata.st_mode) else None
+        except OSError:
+            return None
+
     def exists(self, path: str) -> bool:
         return path in self._file_set
 
@@ -99,19 +115,32 @@ class Repository:
     def text(self, path: str) -> str | None:
         if path not in self._text:
             value: str | None = None
-            if PurePosixPath(path).suffix.lower() in TEXT_SUFFIXES and path not in self.symlinks:
+            if PurePosixPath(path).suffix.lower() in TEXT_SUFFIXES:
                 try:
-                    value = (self.root / path).read_text(encoding="utf-8")
+                    raw = self.raw(path)
+                    value = raw.decode("utf-8") if raw is not None else None
                 except (OSError, UnicodeDecodeError):
                     value = None
             self._text[path] = value
         return self._text[path]
 
     def raw(self, path: str) -> bytes | None:
+        target = self.safe_file(path)
+        if target is None:
+            return None
         try:
-            return (self.root / path).read_bytes()
+            return target.read_bytes()
         except OSError:
             return None
+
+
+def public_path(path: str) -> bool:
+    normalized = path.replace("\\", "/")
+    candidate = PurePosixPath(normalized)
+    return (normalized == path and not candidate.is_absolute() and ":" not in path
+            and ".." not in candidate.parts and bool(candidate.parts)
+            and normalized.casefold() != "referencias/privadas"
+            and not normalized.casefold().startswith("referencias/privadas/"))
 
 
 def load_repository(root: Path, files: tuple[str, ...] | None = None) -> Repository:
@@ -125,8 +154,9 @@ def load_repository(root: Path, files: tuple[str, ...] | None = None) -> Reposit
         head = live_head(root)
     except (GitWorktreeError, OSError):
         head = None
-    present = tuple(sorted(path for path in files if (root / path).is_file() or path in symlinks))
-    return Repository(root, present, symlinks, head)
+    # Retain missing public indexed paths so unreadable authority cannot vanish.
+    public = tuple(sorted(path for path in files if public_path(path)))
+    return Repository(root, public, symlinks, head)
 
 
 def _starts(path: str, prefixes) -> bool:
@@ -505,7 +535,7 @@ def _consumer_kind(path: str, schema_path: str) -> str:
     if path.startswith(".agents/"):
         return "SKILL"
     if path.endswith(".py"):
-        return "RUNTIME_VALIDATOR"
+        return "PYTHON_REFERENCE"  # a textual mention does not prove validation
     if path.endswith(FRONTEND_CODE_SUFFIXES):
         return "FRONTEND"
     return "DOCUMENTATION"
@@ -564,7 +594,7 @@ def fixture_findings(repo: Repository) -> tuple[list[dict], list[dict]]:
     findings: list[dict] = []
     violations: list[dict] = []
     seen: set[str] = set()
-    for item in validate_fixture_registry(repo.root):
+    for item in validate_fixture_registry(repo.root, files=repo.files, read_text=repo.text):
         code = item["motivo"]
         if code == "FIXTURE_ORFA" and not repo.exists(item["teste"]):
             continue  # untracked local file: outside WORKTREE_BYTES_OF_GIT_INDEX_PATHS
@@ -778,7 +808,7 @@ def _primary_class(path: str, config: dict, python: dict, frontend: dict, schema
             return "GENERATED_EVIDENCE"
     if path in schemas:
         kinds = set(schemas[path]["consumer_kinds"])
-        if kinds & {"RUNTIME_VALIDATOR", "FRONTEND"}:
+        if kinds & {"PYTHON_REFERENCE", "FRONTEND"}:
             return "RUNTIME"
         return "ASSURANCE" if kinds - {"DOCUMENTATION"} else "UNREACHABLE_CANDIDATE"
     for entry in config["file_classes"]:
@@ -860,7 +890,7 @@ def _skill_candidates(skills: list[dict]) -> list[dict]:
 def audit(root: Path = ROOT, *, files: tuple[str, ...] | None = None, config: dict | None = None) -> dict:
     repo = load_repository(root, files)
     if config is None:
-        config = json.loads((Path(root) / AUTHORITY_CONFIG).read_text(encoding="utf-8"))
+        config = json.loads(repo.text(AUTHORITY_CONFIG) or "")
     python, python_violations = python_reachability(repo, config)
     frontend, frontend_violations, asset_findings = frontend_reachability(repo, config)
     schemas, schema_violations = schema_reachability(repo)
@@ -880,15 +910,19 @@ def audit(root: Path = ROOT, *, files: tuple[str, ...] | None = None, config: di
     )
     findings.sort(key=lambda item: (item["classification"], item["path"]))
     violations = sorted(
-        python_violations + frontend_violations + schema_violations + fixture_violations
+        [_violation("PUBLIC_FILE_UNREADABLE", path, "indexed public file missing, linked or unreadable")
+         for path in repo.files if repo.safe_file(path) is None]
+        + python_violations + frontend_violations + schema_violations + fixture_violations
         + skill_violations + document_violations,
         key=lambda item: (item["code"], item["path"], item["detail"]),
     )
-    large = [
-        {"path": path, "bytes": (repo.root / path).stat().st_size}
-        for path in repo.files
-        if path not in repo.symlinks and (repo.root / path).stat().st_size >= config["large_file_bytes"]
-    ]
+    large = []
+    for path in repo.files:
+        target = repo.safe_file(path)
+        if target is not None:
+            size = target.lstat().st_size
+            if size >= config["large_file_bytes"]:
+                large.append({"path": path, "bytes": size})
     python_status: dict[str, int] = defaultdict(int)
     for record in python.values():
         python_status[record["status"]] += 1
@@ -949,7 +983,7 @@ def audit(root: Path = ROOT, *, files: tuple[str, ...] | None = None, config: di
 
 
 def validate_output(report: dict, root: Path = ROOT) -> list[str]:
-    schema = json.loads((Path(root) / OUTPUT_SCHEMA).read_text(encoding="utf-8"))
+    schema = json.loads(load_repository(root).text(OUTPUT_SCHEMA) or "")
     return [error.message for error in jsonschema.Draft202012Validator(schema).iter_errors(report)]
 
 
@@ -984,6 +1018,19 @@ def render_markdown(report: dict) -> str:
                      f"{item['recommended_action']} | {item['evidence']} | {known or '—'} |")
     lines += ["", "## Violações de invariante (bloqueantes)", ""]
     lines += [f"- `{item['code']}` `{item['path']}`: {item['detail']}" for item in report["invariant_violations"]] or ["- nenhuma"]
+    lines += ["", "## Inventário público completo", "",
+              "Reachability é conservadora: imports e menções literais preservam possíveis consumidores;",
+              "não provam execução. Frontend usa referências textuais, sem resolver aliases dinâmicos.",
+              "PYTHON_REFERENCE em schemas não prova RUNTIME_VALIDATOR. Ausência de aresta nunca prova remoção segura.",
+              "Caminhos privados são excluídos antes de I/O; arquivos públicos ilegíveis falham o contrato.",
+              "", "| PATH | CLASSIFICATION | CONSUMERS / REFERENCES |", "|---|---|---|"]
+    for path, classification in report["files"].items():
+        record = report["python"]["modules"].get(path) or report["frontend"]["modules"].get(path) or report["schemas"].get(path) or {}
+        consumers = record.get("consumers", [])
+        if isinstance(consumers, dict):
+            consumers = [value for group in consumers.values() for value in group]
+        escaped = ", ".join(sorted(set(consumers))).replace("|", "\\|").replace("\n", " ")
+        lines.append(f"| `{path.replace('|', '&#124;')}` | {classification} | {escaped or 'NOT_RESOLVED; classification from authority/path policy'} |")
     return "\n".join(lines) + "\n"
 
 

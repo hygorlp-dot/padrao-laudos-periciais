@@ -35,7 +35,9 @@ UI/Data Layer nem a aceitação Human RC. O commit validado e o estado das rodad
   PROFESSIONAL_OVERRIDE`.
 - Provider, contexto/source, saída estruturada, revalidação, auditoria
   append-only e limites de tokens/custo são obrigatórios.
-- Dados privados permanecem em `referencias/privadas/`; `PRIVATE_EGRESS = FALSE`.
+- Dados reais do produto ficam na raiz privada local configurada na instalação;
+  `referencias/privadas/` é uma área local do repositório, nunca versionada.
+  `PRIVATE_EGRESS = FALSE`.
 - Recovery não promove automaticamente e não trata estado verificado como
   promovível sem decisão explícita.
 
@@ -58,6 +60,12 @@ Field/Mobile, AI Gateway/proposals e o oracle longitudinal sintético.
 Pendentes: Human RC no Windows, execução de caso real e
 release/packaging distribuível. A dívida histórica de duração do `verify_core`
 permanece registrada no Issue #192 e não é alterada por este manual.
+
+A maturidade distingue a evidência de um candidato histórico do estado
+operacional vivo. `HUMAN_RC_READY = FALSE`: mudanças materiais posteriores
+exigem novo candidato; a readiness antiga não representa o HEAD atual e o
+aceite humano continua pendente. A declaração versionada aponta a evidência
+histórica, enquanto `python -m scripts.quality.product_maturity` lê o HEAD vivo.
 
 ## Histórico
 

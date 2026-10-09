@@ -165,7 +165,7 @@
         "additionalProperties": false,
         "required": ["code", "path", "detail"],
         "properties": {
-          "code": {"enum": ["PYTHON_UNREADABLE", "PYTHON_UNPARSEABLE", "RUNTIME_ROOT_MISSING", "FRONTEND_ENTRYPOINT_MISSING", "SCHEMA_UNREADABLE", "FIXTURE_REGISTRY_UNREADABLE", "SKILL_ROUTER_UNREADABLE", "ROUTER_SKILL_MISSING", "AUTHORITY_MISSING", "HISTORICAL_STATUS_MISSING", "AGENT_WRAPPER_DRIFT", "AUTHORITY_STALE_MARKER", "DURABLE_DOCUMENT_TEMPORAL_COUPLING"]},
+          "code": {"enum": ["PUBLIC_FILE_UNREADABLE", "PYTHON_UNREADABLE", "PYTHON_UNPARSEABLE", "RUNTIME_ROOT_MISSING", "FRONTEND_ENTRYPOINT_MISSING", "SCHEMA_UNREADABLE", "FIXTURE_REGISTRY_UNREADABLE", "SKILL_ROUTER_UNREADABLE", "ROUTER_SKILL_MISSING", "AUTHORITY_MISSING", "HISTORICAL_STATUS_MISSING", "AGENT_WRAPPER_DRIFT", "AUTHORITY_STALE_MARKER", "DURABLE_DOCUMENT_TEMPORAL_COUPLING"]},
           "path": {"type": "string"},
           "detail": {"type": "string"}
         }
@@ -176,7 +176,7 @@
     "count": {"type": "integer", "minimum": 0},
     "counts": {"type": "object", "additionalProperties": {"$ref": "#/$defs/count"}},
     "fileClass": {"enum": ["CURRENT_AUTHORITY", "HISTORICAL", "RUNTIME", "ASSURANCE", "TEST_ONLY", "LEGACY_BUT_LIVE", "REFERENCE", "CONFIGURATION", "GENERATED_EVIDENCE", "MANUAL_TOOL", "UNREACHABLE_CANDIDATE", "UNCLASSIFIED"]},
-    "schemaConsumer": {"enum": ["FIXTURE_REGISTRY", "SCHEMA_VERSIONS", "CORE_BOUNDARY", "SCHEMA_REF", "GATE", "RUNTIME_VALIDATOR", "FIXTURE", "TEST", "SKILL", "FRONTEND", "DOCUMENTATION"]},
+    "schemaConsumer": {"enum": ["FIXTURE_REGISTRY", "SCHEMA_VERSIONS", "CORE_BOUNDARY", "SCHEMA_REF", "GATE", "PYTHON_REFERENCE", "FIXTURE", "TEST", "SKILL", "FRONTEND", "DOCUMENTATION"]},
     "finding": {
       "type": "object",
       "required": ["path", "classification", "evidence", "known_consumers", "unknown_consumers", "risk", "recommended_action", "confidence"],

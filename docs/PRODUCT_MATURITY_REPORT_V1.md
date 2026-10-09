@@ -4,14 +4,14 @@ This report is derived from `config/product-maturity-v1.json` and the
 first-party longitudinal product-integrity oracle. It records implementation
 truth; it is not authorization to begin a later stage.
 
-## Current-effective result
+## Implemented foundations and historical evidence
 
 - Evidence base: `config/product-maturity-v1.json` → `evidence_base_sha`. It names the
   commit whose fresh post-main evidence (protected CI and final oracle) supports this
   declaration; it is **evidence, not the live HEAD**. A tracked file cannot carry the
   SHA of the commit that contains it, so the live HEAD is never stored: run
   `python -m scripts.quality.product_maturity` to read it from `.git`; the declaration is
-  always reported as `HISTORICAL_EVIDENCE` (validated on an earlier commit, as any commit
+  reported as `HISTORICAL_EVIDENCE` when HEAD differs from the evidence base (validated on an earlier commit, as any commit
   that records it must be), together with both SHAs. The frozen
   `FINAL_RC_CANDIDATE_SHA` and each Human RC round are recorded in Issues #256 and #238.
 - Roadmap V7 (#256), pre-RC closure:
@@ -39,11 +39,12 @@ truth; it is not authorization to begin a later stage.
   SHA-256 (#202, #203). Word stays authoritative; any refusal leaves the Word
   and no PDF.
 - Stage 10 is `IMPLEMENTED_PROPOSAL_ONLY`; it is not autonomous authority.
-- `HUMAN_RC_READY = TRUE`: every automated pre-RC step is closed. Human acceptance
-  (`HUMAN_RC_WINDOWS_V2`, #238) has not passed: Rounds 1 and 2 stopped on P1 findings
-  (#266, #268), which were fixed together with #269–#273, and each later round is
-  recorded in #238. `HUMAN_RC_ACCEPTED = FALSE`, no real case has been run and there
-  is no installer (`PACKAGING_GAP`).
+- Operational `HUMAN_RC_READY = FALSE`: material changes occurred after the
+  historical candidate. No current RC candidate is declared (`current_rc_candidate = null`).
+  `historical_rc_candidate` preserves the earlier readiness and its SHA without
+  promoting that evidence to the live HEAD. Human acceptance remains false;
+  Human RC rounds and their findings are recorded in #238. No real case has
+  been run and there is no installer (`PACKAGING_GAP`).
 - `PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE` because Stage 10 is proposal-only
   and human acceptance remains outstanding.
 - Repository visibility: GitHub reports the repository as public while earlier text
@@ -54,8 +55,8 @@ truth; it is not authorization to begin a later stage.
 
 Earlier reports recorded stale protected/PR SHAs and Stage 10 as
 `NOT_IMPLEMENTED_OR_NOT_PROVEN`. Those statements remain historical records;
-the current-effective state above is derived from merged main and the fresh
-post-main oracle.
+the implemented foundations above retain historical oracle evidence. They do
+not assert that those old executions prove a new live HEAD or a current candidate.
 
 ## Longitudinal assurance boundary
 
@@ -107,7 +108,7 @@ append-only audit and token/cost ceilings are covered by first-party tests.
   60-second threshold; the post-main run observed 345.693 seconds. Semantic
   gates passed and the timing debt remains explicitly visible rather than being
   hidden by retries.
-- Human RC readiness: `TRUE`; professional acceptance (#238) is still required.
+- Human RC readiness: `FALSE`; a new candidate and professional acceptance (#238) are still required.
 - Historical timing debt (#192) is superseded by the hybrid attribution policy
   (`docs/arquitetura/decisoes/ADR-hybrid-timing-attribution-v1.md`); the 60-second
   reference is unchanged and the runtime cost is tracked in Issue #259.

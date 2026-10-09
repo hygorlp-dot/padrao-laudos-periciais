@@ -4,8 +4,8 @@
 > produto está em [`PRODUCT.md`](../PRODUCT.md); esta página não descreve
 > limitações do produto.
 
-Todos os contratos usam JSON Schema Draft 2020-12 e rejeitam propriedades não
-declaradas. Alegações, documentos, constatações, inferências e resultados
+Os contratos usam JSON Schema Draft 2020-12. Os limites de propriedades e
+condicionais são definidos por cada schema, não por esta página. Alegações, documentos, constatações, inferências e resultados
 inconclusivos permanecem semanticamente separados.
 
 ## `LEGACY_SCHEMA_CAN_STILL_BE_LIVE`
