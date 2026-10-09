@@ -19,6 +19,12 @@ const SOURCES = [
 ];
 
 describe("pré-verificação jurídico-editorial (#272)", () => {
+  test("a clean preflight from another revision is unavailable for the current document", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, { report_revision: 1, profile_id: "P", profile_label: "Sintético", blocking: false, sources: [], findings: [] })));
+    render(<ReportPreflightPanel workspaceId={ID} reportRevision={2} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível conferir o texto agora");
+    expect(screen.queryByText(/Nenhuma pendência editorial aberta/)).not.toBeInTheDocument();
+  });
   test("an open pending marker is stated as blocking emission, with the exact excerpt", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, {
       report_revision: 3, profile_id: "SISTEMA_PERICIAL_CNJ_TRF5_V1", profile_label: "Sistema Pericial — CNJ/TRF5", blocking: true, sources: SOURCES,
@@ -38,7 +44,7 @@ describe("pré-verificação jurídico-editorial (#272)", () => {
   test("a clean report says so and counts warnings", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json(200, { report_revision: 1, profile_id: "P", profile_label: "Sistema Pericial — CNJ/TRF5", blocking: false, sources: SOURCES, findings: [] })));
     render(<ReportPreflightPanel workspaceId={ID} reportRevision={1} />);
-    expect(await screen.findByText(/Nenhuma pendência aberta\. Nenhum aviso de linguagem\./)).toBeInTheDocument();
+    expect(await screen.findByText(/Nenhuma pendência editorial aberta\. Nenhum aviso de linguagem\./)).toBeInTheDocument();
   });
 });
 

@@ -27,7 +27,7 @@ from scripts.backend_contract.report_foundation import (
     ReviewAction,
     report_snapshot_to_mapping,
 )
-from tests.test_report_foundation_v1 import bound_report, upstreams
+from tests.test_report_foundation_v1 import bound_report, pathology_upstream, upstreams
 
 
 def _superseded():
@@ -94,3 +94,54 @@ def test_a_current_report_or_a_moved_revision_opens_no_version() -> None:
     with pytest.raises(RepositoryConflict):
         _service(_superseded())[0].execute(stored.workspace_id, expected_revision=3)
     assert appended == []
+
+
+def test_new_version_recaptures_sources_without_reusing_old_review_or_sheet_roles():
+    from scripts.backend_contract.professional_report_presentation import capture_report_authorities, ProfessionalReportDetails
+    records, case, inspection, technical, _ = upstreams()
+    stored = _superseded()
+    capture = capture_report_authorities(stored, case=case, inspection=inspection, technical=technical, pathology=None)
+    stored = replace(stored, presentation=replace(capture, details=ProfessionalReportDetails(objective="Objetivo sintético aprovado anteriormente.")))
+    moved = (records[0], SimpleNamespace(**{**vars(records[1]), "revision": 3, "checksum_sha256": "e" * 64}), records[2], records[3])
+    draft = _service(stored, records=moved)[0].execute(stored.workspace_id, expected_revision=4)[1]
+    assert next(s.revision for s in draft.presentation.sources if s.kind == "inspection") == 3
+    assert draft.presentation.details == stored.presentation.details
+    assert draft.presentation.sheet_figures == () and draft.presentation.repair_budget is None
+    assert draft.state is ReportState.DRAFT and draft.review_decisions == ()
+    assert next(s.revision for s in stored.presentation.sources if s.kind == "inspection") == 2
+
+
+@pytest.mark.parametrize("changed", [True, False])
+def test_new_version_keeps_answers_only_for_unchanged_captured_question_literals(changed):
+    records, case, *_ = upstreams()
+    stored = _superseded()
+    original = replace(stored.answers[0], question_text=case.questions[0].text)
+    stored = replace(stored, answers=(original, *stored.answers[1:]))
+    current_case = replace(case, questions=(replace(case.questions[0], text="Quesito sintético corrigido."), *case.questions[1:])) if changed else case
+    reader = SimpleNamespace(execute=lambda _: (records[0], current_case))
+    service, appended = _service(stored)
+    service = replace(service, get_case_analysis=reader, save_snapshot=replace(service.save_snapshot, get_case_analysis=reader))
+
+    record, draft, dropped = service.execute(stored.workspace_id, expected_revision=4)
+
+    assert record.revision == 5 and len(appended) == 1
+    assert draft.state is ReportState.DRAFT and draft.review_decisions == ()
+    assert dropped["answers"] == int(changed)
+    assert draft.answers == (stored.answers[1:] if changed else stored.answers)
+    assert stored.answers[0].question_text == case.questions[0].text
+
+
+@pytest.mark.parametrize("excluded", ["unapproved", "stale"])
+def test_new_version_omits_pathology_excluded_from_its_authority_binding(excluded):
+    pathology_record, pathology = pathology_upstream()
+    pathology = replace(pathology, reviews=()) if excluded == "unapproved" else replace(pathology, upstream_stale=True, upstream_stale_reasons=("technical snapshot changed",))
+    reader = SimpleNamespace(execute=lambda _: (pathology_record, pathology))
+    stored = _superseded()
+    service, appended = _service(stored)
+    service = replace(service, get_construction_defect_analysis=reader, save_snapshot=replace(service.save_snapshot, get_construction_defect_analysis=reader))
+
+    _record, draft, _dropped = service.execute(stored.workspace_id, expected_revision=4)
+
+    assert len(appended) == 1 and draft.state is ReportState.DRAFT
+    assert draft.source_snapshot.construction_defect_analysis_snapshot_id is None
+    assert {source.kind for source in draft.presentation.sources} == {"case", "inspection", "technical"}

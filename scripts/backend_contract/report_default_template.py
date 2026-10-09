@@ -41,10 +41,11 @@ _PAGE_HEIGHT = 16838
 _ZIP_TIME = (2026, 1, 1, 0, 0, 0)
 
 
-def default_template_manifest() -> TemplateBindingManifest:
+def default_template_manifest(*, professional: bool = False) -> TemplateBindingManifest:
+    bindings = _BINDINGS + tuple((field, "[[" + field + "]]") for field in ("EXPERT_COVER_NAME", "PARTICIPANTS_ACTIVE", "PARTICIPANTS_PASSIVE", "ACTION_TYPE", "PROTOCOL_OPENING", "REPORT_CITY_DATE")) if professional else _BINDINGS
     return TemplateBindingManifest(
         "1.0.0", DEFAULT_TEMPLATE_ID, "DOCX",
-        tuple(TemplateBinding(field, placeholder) for field, placeholder in _BINDINGS),
+        tuple(TemplateBinding(field, placeholder) for field, placeholder in bindings),
     )
 
 
@@ -83,7 +84,7 @@ def _control(tag: str, identity: int, content: str) -> str:
     )
 
 
-def _document(profile: EditorialProfile) -> str:
+def _document(profile: EditorialProfile, *, professional: bool = False) -> str:
     margins = (
         _twips(profile.margin_top_cm), _twips(profile.margin_right_cm),
         _twips(profile.margin_bottom_cm), _twips(profile.margin_left_cm),
@@ -107,6 +108,20 @@ def _document(profile: EditorialProfile) -> str:
         _paragraph(_run("[[EXPERT_TITLE]]"), "Signature"),
         _paragraph(_run("[[EXPERT_REGISTRATION]]"), "Signature"),
     ))
+    if professional:
+        first_page = "".join((
+            _paragraph(_run("[[COURT]]", bold=True), "CoverText"),
+            _paragraph(_run("AUTOS: [[PROCESS_NUMBER]]")),
+            _paragraph(_run("AUTOR: [[PARTICIPANTS_ACTIVE]]")),
+            _paragraph(_run("RÉU: [[PARTICIPANTS_PASSIVE]]")),
+            _paragraph(_run("TIPO DE AÇÃO: [[ACTION_TYPE]]")),
+            _paragraph(_run("PERITO: [[EXPERT_COVER_NAME]]")),
+            _paragraph(_run("LAUDO PERICIAL"), "Title"),
+            _paragraph(_run("[[PROTOCOL_OPENING]]")),
+            _paragraph(_run("[[REPORT_CITY_DATE]]"), "CoverText"),
+        ))
+        marker = _paragraph(_run("SUMÁRIO"), "TOCHeading", page_break_before=True)
+        body = first_page + body[body.index(marker):]
     section = (
         '<w:sectPr><w:headerReference w:type="default" r:id="rIdHeader1"/>'
         '<w:footerReference w:type="default" r:id="rIdFooter1"/>'
@@ -132,7 +147,7 @@ def _style(style_id: str, name: str, *, paragraph: str = "", run: str = "", base
     )
 
 
-def _styles(profile: EditorialProfile) -> str:
+def _styles(profile: EditorialProfile, *, professional: bool = False) -> str:
     typography = profile.effective_typography
     font = escape(profile.font_family)
     fonts = f'<w:rFonts w:ascii="{font}" w:hAnsi="{font}" w:cs="{font}" w:eastAsia="{font}"/>'
@@ -166,6 +181,7 @@ def _styles(profile: EditorialProfile) -> str:
         '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/>'
         f'<w:pPr><w:ind w:firstLine="{_twips(profile.first_line_indent_cm)}"/><w:jc w:val="{justify}"/></w:pPr>'
         f"<w:rPr>{fonts}{size(profile.body_font_pt)}</w:rPr></w:style>"
+        + ('<w:style w:type="table" w:styleId="ProfessionalChapterBand"><w:name w:val="Professional Chapter Band"/><w:tcPr><w:shd w:val="clear" w:fill="D9D9D9"/></w:tcPr></w:style>' if professional else '')
         + headings
         + tocs
         + _style("Title", "Title", paragraph='<w:spacing w:before="2400" w:after="480"/><w:ind w:firstLine="0"/><w:jc w:val="center"/>', run=f"<w:b/><w:bCs/>{size(typography.heading1_pt + 6)}")
@@ -189,17 +205,17 @@ def _header() -> str:
     )
 
 
-def _footer() -> str:
+def _footer(*, professional: bool = False) -> str:
     # "3 de 12": one literal between the two fields, the shape the fidelity
     # oracle binds per page.
-    content = _field("PAGE", "1") + _run(" de ") + _field("NUMPAGES", "1")
+    content = (_run("Página ") if professional else "") + _field("PAGE", "1") + _run(" de ") + _field("NUMPAGES", "1")
     return (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
         f'<w:ftr xmlns:w="{_W_NS}">{_paragraph(content, "Footer")}</w:ftr>'
     )
 
 
-def default_report_template(profile: EditorialProfile) -> bytes:
+def default_report_template(profile: EditorialProfile, *, professional: bool = False) -> bytes:
     """The default template for ``profile``, byte-identical for the same profile."""
     if type(profile) is not EditorialProfile:
         raise TypeError("expected EditorialProfile")
@@ -237,15 +253,15 @@ def default_report_template(profile: EditorialProfile) -> bytes:
             '<Relationship Id="rIdFooter1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footer" Target="footer1.xml"/>'
             "</Relationships>"
         ),
-        "word/document.xml": _document(profile),
-        "word/styles.xml": _styles(profile),
+        "word/document.xml": _document(profile, professional=professional),
+        "word/styles.xml": _styles(profile, professional=professional),
         "word/settings.xml": (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             f'<w:settings xmlns:w="{_W_NS}"><w:defaultTabStop w:val="708"/><w:autoHyphenation w:val="false"/>'
             '<w:characterSpacingControl w:val="doNotCompress"/></w:settings>'
         ),
         "word/header1.xml": _header(),
-        "word/footer1.xml": _footer(),
+        "word/footer1.xml": _footer(professional=professional),
         "docProps/core.xml": (
             '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
             '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" '
@@ -303,10 +319,11 @@ _EMU_PER_CM = 360_000
 _RASTER_DPI = 150
 
 
-def branded_template_manifest() -> TemplateBindingManifest:
+def branded_template_manifest(*, professional: bool = False) -> TemplateBindingManifest:
+    bindings = _BRANDED_BINDINGS + tuple((field, "[[" + field + "]]") for field in ("ACTION_TYPE", "PROTOCOL_OPENING", "REPORT_CITY_DATE")) if professional else _BRANDED_BINDINGS
     return TemplateBindingManifest(
         "1.0.0", BRANDED_TEMPLATE_ID, "DOCX",
-        tuple(TemplateBinding(field, placeholder) for field, placeholder in _BRANDED_BINDINGS),
+        tuple(TemplateBinding(field, placeholder) for field, placeholder in bindings),
     )
 
 
@@ -534,7 +551,7 @@ def _part(root: str, content: str) -> str:
     )
 
 
-def branded_report_template(profile: EditorialProfile, branding: TemplateBranding) -> bytes:
+def branded_report_template(profile: EditorialProfile, branding: TemplateBranding, *, professional: bool = False) -> bytes:
     """Modelo padrao com a identidade visual da pericia; deterministico."""
     if type(profile) is not EditorialProfile or type(branding) is not TemplateBranding:
         raise TypeError("expected EditorialProfile and TemplateBranding")
@@ -616,10 +633,14 @@ def branded_report_template(profile: EditorialProfile, branding: TemplateBrandin
     body.append(paragraph(_run("[[COURT]]"), "CoverText"))
     body.append(paragraph(_run("Polo ativo: ", bold=True) + _run("[[PARTICIPANTS_ACTIVE]]"), "CoverParties"))
     body.append(paragraph(_run("Polo passivo: ", bold=True) + _run("[[PARTICIPANTS_PASSIVE]]"), "CoverParties"))
+    if professional:
+        body.append(paragraph(_run("Tipo de ação: ", bold=True) + _run("[[ACTION_TYPE]]"), "CoverParties"))
+        body.append(paragraph(_run("[[PROTOCOL_OPENING]]"), "Normal"))
+        body.append(paragraph(_run("[[REPORT_CITY_DATE]]"), "CoverCity"))
     if cover.enabled and cover.show_expert:
         body.append(paragraph(_run(branding.expert.full_name, bold=True), "CoverExpert"))
         body.append(paragraph(_run(branding.expert.professional_title), "CoverText"))
-    if cover.enabled and cover.show_city_year and branding.city_year:
+    if not professional and cover.enabled and cover.show_city_year and branding.city_year:
         body.append(paragraph(_run(branding.city_year), "CoverCity"))
     toc_placeholder = (
         "<w:p><w:pPr><w:pStyle w:val=\"TOC1\"/></w:pPr>"
@@ -665,6 +686,8 @@ def branded_report_template(profile: EditorialProfile, branding: TemplateBrandin
         f'<w:document xmlns:w="{_W_NS}" xmlns:r="{_R_NS}"><w:body>{"".join(body)}{section}</w:body></w:document>'
     )
     styles = _branded_styles(profile, branding, alignment)
+    if professional:
+        styles = styles.replace('</w:styles>', '<w:style w:type="table" w:styleId="ProfessionalChapterBand"><w:name w:val="Professional Chapter Band"/><w:tcPr><w:shd w:val="clear" w:fill="D9D9D9"/></w:tcPr></w:style></w:styles>')
 
     def relationships(extra: list[tuple[str, str]]) -> str:
         image = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"

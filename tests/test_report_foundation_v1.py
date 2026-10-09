@@ -287,6 +287,8 @@ def test_start_creates_an_empty_draft_bound_to_all_four_authorities():
     service.execute(WorkspaceId.parse(case.workspace_id))
     started = captured["snapshot"]
     assert started.state is ReportState.DRAFT
+    assert started.presentation is not None
+    assert {source.kind for source in started.presentation.sources} == {"case", "inspection", "technical"}
     assert started.claims == started.answers == started.review_decisions == ()
     assert started.coverage.complete is False
     assert started.source_snapshot.technical_snapshot_id == technical.snapshot_id
@@ -321,9 +323,34 @@ def test_start_binds_an_available_effective_pathology_snapshot_exactly():
     service.execute(WorkspaceId.parse(case.workspace_id))
 
     source = captured["snapshot"].source_snapshot
+    assert {item.kind for item in captured["snapshot"].presentation.sources} == {"case", "inspection", "technical", "pathology"}
     assert source.construction_defect_analysis_snapshot_id == pathology.snapshot_id
     assert source.construction_defect_analysis_revision == pathology_record.revision
     assert source.construction_defect_analysis_digest == report_upstream_digest(pathology)
+
+
+@pytest.mark.parametrize("excluded", ["unapproved", "stale"])
+def test_start_omits_pathology_excluded_from_its_authority_binding(excluded):
+    records, case, inspection, technical, profile = upstreams()
+    pathology_record, pathology = pathology_upstream()
+    pathology = replace(pathology, reviews=()) if excluded == "unapproved" else replace(pathology, upstream_stale=True, upstream_stale_reasons=("technical snapshot changed",))
+    captured = {}
+    save = SimpleNamespace(execute=lambda _workspace, snapshot, expected, **_kwargs: captured.update(snapshot=snapshot) or SimpleNamespace(revision=1))
+    service = StartReportSnapshot(
+        SimpleNamespace(execute=lambda _: (records[0], case)),
+        SimpleNamespace(execute=lambda _: (records[1], inspection)),
+        SimpleNamespace(execute=lambda _: (records[2], technical)),
+        SimpleNamespace(execute=lambda _: (records[3], profile)), save,
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+        get_construction_defect_analysis=SimpleNamespace(execute=lambda _: (pathology_record, pathology)),
+    )
+
+    service.execute(WorkspaceId.parse(case.workspace_id))
+
+    started = captured["snapshot"]
+    assert started.source_snapshot.construction_defect_analysis_snapshot_id is None
+    assert {source.kind for source in started.presentation.sources} == {"case", "inspection", "technical"}
+    assert report_snapshot_from_mapping(report_snapshot_to_mapping(started)) == started
 
 
 def test_empty_draft_can_add_canonical_claim_context_and_answer_commands():
@@ -485,6 +512,14 @@ def test_get_marks_upstream_change_stale_and_reopen_cannot_preserve_approval():
     assert reopened.upstream_stale is True
     assert reopened.state is ReportState.DRAFT
     assert reopened.coverage.complete is False
+    from scripts.backend_contract.application.report_foundation import captured_report_review_history
+    history = captured_report_review_history(stored, reopened)
+    assert history["captured_state"] == "APPROVED"
+    assert history["source_revision"] == 4
+    assert history["report_id"] == snapshot.report_id
+    assert history["last_review"]["action"] == "APPROVE"
+    assert reopened.review_decisions == ()
+    assert stored.payload["state"] == "APPROVED"
 
 
 def test_get_marks_report_stale_when_bound_pathology_revision_changes():
