@@ -329,6 +329,30 @@ def test_start_binds_an_available_effective_pathology_snapshot_exactly():
     assert source.construction_defect_analysis_digest == report_upstream_digest(pathology)
 
 
+@pytest.mark.parametrize("excluded", ["unapproved", "stale"])
+def test_start_omits_pathology_excluded_from_its_authority_binding(excluded):
+    records, case, inspection, technical, profile = upstreams()
+    pathology_record, pathology = pathology_upstream()
+    pathology = replace(pathology, reviews=()) if excluded == "unapproved" else replace(pathology, upstream_stale=True, upstream_stale_reasons=("technical snapshot changed",))
+    captured = {}
+    save = SimpleNamespace(execute=lambda _workspace, snapshot, expected, **_kwargs: captured.update(snapshot=snapshot) or SimpleNamespace(revision=1))
+    service = StartReportSnapshot(
+        SimpleNamespace(execute=lambda _: (records[0], case)),
+        SimpleNamespace(execute=lambda _: (records[1], inspection)),
+        SimpleNamespace(execute=lambda _: (records[2], technical)),
+        SimpleNamespace(execute=lambda _: (records[3], profile)), save,
+        SimpleNamespace(new_uuid=lambda: UUID("99999999-9999-4999-8999-999999999999")),
+        get_construction_defect_analysis=SimpleNamespace(execute=lambda _: (pathology_record, pathology)),
+    )
+
+    service.execute(WorkspaceId.parse(case.workspace_id))
+
+    started = captured["snapshot"]
+    assert started.source_snapshot.construction_defect_analysis_snapshot_id is None
+    assert {source.kind for source in started.presentation.sources} == {"case", "inspection", "technical"}
+    assert report_snapshot_from_mapping(report_snapshot_to_mapping(started)) == started
+
+
 def test_empty_draft_can_add_canonical_claim_context_and_answer_commands():
     snapshot = replace(bound_report(), claims=(), answers=(), review_decisions=(), state=ReportState.DRAFT, context_matrix=tuple(replace(item, status=ContextStatus.MISSING, source_id=None, note="Missing") for item in bound_report().context_matrix), coverage=ReportCoverage(14, 0, 0, 0, 0, 8, 0, 6, 0, False, ("Draft",)))
     current = {"snapshot": snapshot, "revision": 4}

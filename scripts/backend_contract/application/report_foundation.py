@@ -996,8 +996,12 @@ class StartReportVersion:
                 dropped_claims += 1
         kept_claims = tuple(claims)
         answers, dropped_answers = [], 0
+        current_questions = {question.item_id: question for question in case.questions}
         for answer in stored.answers:
             try:
+                question = current_questions.get(answer.question_id)
+                if question is None or (answer.question_text is not None and answer.question_text != question.text):
+                    raise ValueError("answer lost its captured question literal")
                 if lost_table and TABLE_TOKEN.search(answer.text):
                     raise ValueError("answer lost its cited table")
                 if not set(answer.claim_ids) <= {item.claim_id for item in kept_claims}:

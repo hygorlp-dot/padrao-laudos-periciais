@@ -213,7 +213,7 @@ def validate_capture_binding(report):
 
 def capture_report_authorities(report, *, case, inspection, technical, pathology):
     values = {"case": case, "inspection": inspection, "technical": technical}
-    if pathology is not None:
+    if pathology is not None and report.source_snapshot.construction_defect_analysis_snapshot_id is not None:
         values["pathology"] = pathology
     sources = tuple(CapturedReportAuthority(kind, getattr(report.source_snapshot, _SOURCES[kind][2] + "_revision"), _canonical(_SOURCES[kind][1](value))) for kind, value in values.items())
     captured = ProfessionalReportCapture(sources)
