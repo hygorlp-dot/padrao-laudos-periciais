@@ -20,10 +20,12 @@ autoridade e o que ainda depende de aceitação profissional humana.
 11. Fechar o Workspace, criar Backup e executar Verify → Stage → promoção humana
     explícita → Recovery/Reopen.
 
-O percurso acima foi provado por oracle longitudinal sintética pós-main na
-superfície HTTP `/app-api`, sem chamadas diretas aos serviços. Isso não prova a
-UI/Data Layer nem a aceitação Human RC. Foram 11 testes no main
-`27175535933a`; o terminal não faz parte do fluxo normal exercitado pelo oracle.
+O percurso acima é provado por oráculos sintéticos sobre a superfície HTTP
+`/app-api` (`tests/test_product_integration_oracle_v1.py`) e sobre o processo real
+do produto (`tests/test_v7_final_rc_oracle_v1.py`), sem chamadas diretas aos
+serviços; o terminal não faz parte do fluxo normal exercitado. Isso não prova a
+UI/Data Layer nem a aceitação Human RC. O commit validado e o estado das rodadas ficam em
+`config/product-maturity-v1.json` e nas Issues #256 e #238, não neste manual.
 
 ## Autoridade e segurança
 
@@ -33,7 +35,9 @@ UI/Data Layer nem a aceitação Human RC. Foram 11 testes no main
   PROFESSIONAL_OVERRIDE`.
 - Provider, contexto/source, saída estruturada, revalidação, auditoria
   append-only e limites de tokens/custo são obrigatórios.
-- Dados privados permanecem em `referencias/privadas/`; `PRIVATE_EGRESS = FALSE`.
+- Dados reais do produto ficam na raiz privada local configurada na instalação;
+  `referencias/privadas/` é uma área local do repositório, nunca versionada.
+  `PRIVATE_EGRESS = FALSE`.
 - Recovery não promove automaticamente e não trata estado verificado como
   promovível sem decisão explícita.
 
@@ -56,6 +60,12 @@ Field/Mobile, AI Gateway/proposals e o oracle longitudinal sintético.
 Pendentes: Human RC no Windows, execução de caso real e
 release/packaging distribuível. A dívida histórica de duração do `verify_core`
 permanece registrada no Issue #192 e não é alterada por este manual.
+
+A maturidade distingue a evidência de um candidato histórico do estado
+operacional vivo. `HUMAN_RC_READY = FALSE`: mudanças materiais posteriores
+exigem novo candidato; a readiness antiga não representa o HEAD atual e o
+aceite humano continua pendente. A declaração versionada aponta a evidência
+histórica, enquanto `python -m scripts.quality.product_maturity` lê o HEAD vivo.
 
 ## Histórico
 

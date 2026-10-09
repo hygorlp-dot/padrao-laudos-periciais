@@ -1,44 +1,87 @@
 # Contratos de dados
 
-Esta pasta contém os contratos de dados iniciais do projeto em JSON Schema Draft 2020-12.
+> Status: CURRENT AUTHORITY para o papel de cada família de schema. O estado do
+> produto está em [`PRODUCT.md`](../PRODUCT.md); esta página não descreve
+> limitações do produto.
 
-## Arquivos
+Os contratos usam JSON Schema Draft 2020-12. Os limites de propriedades e
+condicionais são definidos por cada schema, não por esta página. Alegações, documentos, constatações, inferências e resultados
+inconclusivos permanecem semanticamente separados.
 
-- `plano-redacao.schema.json`: finalidade e cobertura de QT, QUE, PAT,
-  evidências, certeza e ressalvas antes da redação.
-- `laudo-redacao.schema.json`: modelo semântico do laudo e claims rastreáveis,
-  sem propriedades de layout Word.
+## `LEGACY_SCHEMA_CAN_STILL_BE_LIVE`
 
-- `processo.schema.json`: dados extraídos dos autos, separados em documentos, alegações, quesitos, decisões, conflitos e pendências.
-- `vistoria.schema.json`: planejamento e registro da vistoria, incluindo participantes, métodos, equipamentos, limitações, fotografias e constatações de campo.
-- `patologia.schema.json`: unidade técnica `PAT-NNN`, suas evidências, análise causal, classificações, conclusão e elegibilidade orçamentária.
-- `laudo.schema.json`: agregação rastreável do laudo, com referências às patologias, quesitos, orçamento, normas e validação final.
-- `pje-comum.schema.json`: definições reutilizáveis de proveniência, confiança, paginação, reconciliação, conflitos e elementos extraídos do PJe.
-- `manifesto-pje.schema.json`: inventário e segmentação do PDF consolidado, sem duplicar o conteúdo integral dos documentos.
-- `documento-pje.schema.json`: conteúdo estruturado de um documento PJe e de suas seções e anexos internos.
-- `delimitacao-pericial.schema.json`: classificação do tipo de perícia,
-  delimitação técnica, quesitos, cobertura, ressalvas, conflitos, módulos e
-  plano pericial preliminar.
-- `inventario-referencias.schema.json`: catálogo incremental por hash das
-  fontes privadas.
-- `conhecimento-referencial.schema.json` e
-  `conhecimento-normativo.schema.json`: derivados privados com níveis e
-  proveniência.
-- `plano-vistoria.schema.json`: atividades, medições, fotografias,
-  equipamentos, cobertura, autonomia e gate pré-vistoria.
-- `inventario-vistoria.schema.json`: arquivos de campo e metadados incrementais.
-- `analise-motor-vicios.schema.json`: manifestações, hipóteses, PAT, QT,
-  quesitos, autoauditoria e gate de redação.
-- `fonte-online.schema.json`: proveniência, vigência e controle de uso de
-  fontes técnicas pesquisadas online.
-- `auditoria-grounding-pericial.schema.json`: claim, evidências, saliência e
-  veredito de grounding.
-- `trilha-auditoria-agente.schema.json`: execução profissional auditável sem
-  chain-of-thought ou raciocínio privado.
-- `review-multiagente.schema.json`: output estruturado de revisão independente,
-  com vínculo ao HEAD, prova de independência, findings e ranking auditável.
+Um schema antigo não é órfão só porque o frontend moderno não o usa. Ele
+continua vivo quando é consumido por validadores, fixtures
+(`tests/fixtures/core-fixtures.json`), `config/schema-versions.json`, fronteiras
+do Core (`config/core-boundaries.json`), baseline estável
+(`config/core-stable-baseline-v1.json`), golden corpus, gates ou Skills. A
+reachability de cada schema é auditada por
+`python -m scripts.quality.repository_hygiene` (seção `schemas`); nenhum schema
+é removido sem prova positiva de ausência de todos esses consumidores.
 
-Os schemas rejeitam propriedades não declaradas. Alegações, documentos, constatações, inferências e resultados inconclusivos devem permanecer semanticamente separados.
+## Famílias
+
+### 1. Contratos semânticos do Core (legados e vivos)
+
+Contratos do Core Pericial protegido, validados por `scripts/validar_schemas.py`,
+pelos validadores dos módulos do Core e pelas fronteiras/baseline do Core.
+
+- `pje-comum.schema.json`: definições reutilizáveis de proveniência, confiança,
+  paginação, reconciliação, conflitos e elementos extraídos do PJe.
+- `manifesto-pje.schema.json`: inventário e segmentação do PDF consolidado.
+- `documento-pje.schema.json`: conteúdo estruturado de um documento PJe.
+- `processo.schema.json`: dados extraídos dos autos (documentos, alegações,
+  quesitos, decisões, conflitos e pendências).
+- `delimitacao-pericial.schema.json`: tipo de perícia, delimitação técnica,
+  quesitos, cobertura, ressalvas e plano preliminar.
+- `inventario-referencias.schema.json`, `conhecimento-referencial.schema.json`,
+  `conhecimento-normativo.schema.json`: catálogo por hash e derivados privados
+  com níveis e proveniência.
+- `fonte-online.schema.json`: proveniência e vigência de fontes técnicas
+  pesquisadas online.
+- `plano-vistoria.schema.json`, `inventario-vistoria.schema.json`,
+  `vistoria.schema.json`: planejamento, arquivos de campo e registro da vistoria.
+- `analise-motor-vicios.schema.json`, `patologia.schema.json`: motor de vícios,
+  hipóteses e unidade técnica `PAT-NNN`.
+- `plano-redacao.schema.json`, `laudo-redacao.schema.json`,
+  `laudo.schema.json`: plano de redação, modelo semântico do laudo e agregação
+  rastreável (sem layout Word).
+
+### 2. Contratos de snapshot do produto
+
+Revisões append-only gravadas pela Application Layer e expostas pela Local API.
+
+- `judicial-domain-model-v1.schema.json`: domínio judicial plural (polos, papéis,
+  representação).
+- `case-analysis-snapshot-v1.schema.json`: Análise do Caso.
+- `pericial-planning-snapshot-v1.schema.json`: Planejamento.
+- `inspection-session-v1.schema.json`: Vistoria.
+- `technical-snapshot-v1.schema.json`: cadeia técnica (evidências e constatações).
+- `construction-defect-analysis-v1.schema.json`: Análise de vícios (PAT).
+- `report-snapshot-v1.schema.json`, `report-template-manifest-v1.schema.json`:
+  laudo e vinculação do modelo Word.
+- `delivery-snapshot-v1.schema.json`: entrega Word autoritativa e PDF derivado.
+- `budget-snapshot-v1.schema.json`: orçamento, financeiramente separado.
+
+### 3. Contratos de backup, recuperação e offline
+
+- `workspace-backup-v1.schema.json`: pacote de backup verificável da perícia.
+- `offline-inspection-package-v1.schema.json`: pacote de vistoria offline e sua
+  sincronização.
+
+### 4. Contratos de agente, revisão e assurance
+
+- `auditoria-grounding-pericial.schema.json`: claim, evidências e veredito de
+  grounding.
+- `trilha-auditoria-agente.schema.json`: trilha profissional auditável, sem
+  raciocínio privado.
+- `review-multiagente.schema.json`: revisão independente vinculada ao HEAD.
+- `skill-router-v3.schema.json`: manifesto fechado de roteamento de Skills.
+- `architecture-baseline-v1.schema.json`, `capability-policy-v1.schema.json`,
+  `capability-exception-v1.schema.json`, `quality-finding-v1.schema.json`:
+  gates protegidos de arquitetura e capability.
+- `repository-hygiene-v1.schema.json`: saída do auditor
+  `REPOSITORY_HYGIENE_V1`.
 
 ## Dependência externa
 
@@ -55,33 +98,19 @@ O validador confere os próprios schemas e os exemplos em
 `-valido.json` ou `-valida.json` devem ser aceitos; os demais exemplos dessas
 pastas são casos negativos e devem ser rejeitados.
 
-## Fluxo de dados previsto
+## Limites dos contratos
 
-```text
-PDF PJe
-→ manifesto-pje.json
-→ documento-pje.json
-→ delimitacao-pericial.json
-→ conhecimento pertinente
-→ plano-vistoria.json
-→ processo.json
-→ vistoria.json
-→ motor técnico
-→ PAT-NNN
-→ gate de redação
-→ laudo.json futuro
-```
+- Os schemas não substituem a validação técnica do perito.
+- Relações entre arquivos distintos exigem validação complementar além do
+  schema (por exemplo, a integridade da delimitação contra o corpus-fonte).
+- Alterações nos enums e nas condicionais dependem de decisão canônica
+  documentada; versões suportadas e migradores ficam em
+  `config/schema-versions.json` (versão futura falha fechada).
 
-Os contratos e mecanismos até o gate de redação estão implementados. A
-execução semântica permanece orquestrada pelas Skills e condicionada à
-evidência disponível.
+## Histórico
 
-## Limitações atuais
-
-- Os schemas são contratos iniciais e não substituem a validação técnica do perito.
-- A integridade interna da delimitação possui validador complementar; relações
-  com arquivos distintos ainda exigem conferência contra o corpus-fonte.
-- Não há OCR, motores especializados adicionais, laudo completo ou
-  automação Word.
-- Não há orçamento final nem respostas finais formatadas aos quesitos.
-- Alterações nos enums e nas condicionais dependem de decisão canônica documentada.
+O fluxo inicial previsto era `PDF PJe → manifesto-pje.json → documento-pje.json
+→ delimitacao-pericial.json → plano-vistoria.json → processo.json →
+vistoria.json → motor técnico → PAT-NNN → gate de redação`, orquestrado por
+Skills. Ele permanece como origem dos contratos da família 1; o fluxo atual do
+produto está em [`PRODUCT.md`](../PRODUCT.md).

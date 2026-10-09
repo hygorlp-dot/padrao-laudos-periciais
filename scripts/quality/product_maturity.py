@@ -1,0 +1,91 @@
+"""Product maturity declaration versus the live repository HEAD.
+
+`config/product-maturity-v1.json` is a tracked DECLARATION. Its
+`evidence_base_sha` names the commit whose fresh post-main evidence (CI and
+oracle) supports the declaration. A tracked file can never carry the SHA of
+the commit that contains it, so the live HEAD is never stored: it is read from
+`.git` when this command runs.
+
+    python -m scripts.quality.product_maturity
+
+answers three questions without self-reference:
+- which commit was validated (`evidence_base_sha`);
+- which commit is HEAD now (`observed_repository_head`, live);
+- whether the declaration is current or historical: it is always
+  `HISTORICAL_EVIDENCE`, because the commit that records an evidence SHA can
+  never be that SHA. `LIVE_HEAD_UNAVAILABLE` when `.git` cannot be read; a HEAD
+  equal to the evidence SHA (a declaration written but not yet committed) is
+  `SELF_REFERENTIAL_DECLARATION`, a contract error until it is committed.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from pathlib import Path
+
+from .git_worktree import GitWorktreeError, live_head
+
+ROOT = Path(__file__).resolve().parents[2]
+DECLARATION = Path("config/product-maturity-v1.json")
+EVIDENCE_SEMANTICS = "HISTORICAL_VALIDATED_COMMIT_NOT_LIVE_HEAD"
+FORBIDDEN_KEYS = ("current_main_sha", "current_head_sha", "live_head")
+SELF_REFERENTIAL = "SELF_REFERENTIAL_DECLARATION"
+HISTORICAL_EVIDENCE = "HISTORICAL_EVIDENCE"
+LIVE_HEAD_UNAVAILABLE = "LIVE_HEAD_UNAVAILABLE"
+
+
+def contract_errors(declaration: dict) -> list[str]:
+    """Violations of the non-self-referential contract of the tracked file."""
+    errors = [f"forbidden live-state key: {key}" for key in FORBIDDEN_KEYS if key in declaration]
+    evidence = declaration.get("evidence_base_sha")
+    if not isinstance(evidence, str) or not re.fullmatch(r"[0-9a-f]{40}", evidence):
+        errors.append("evidence_base_sha must be a full commit SHA")
+    if declaration.get("evidence_base_semantics") != EVIDENCE_SEMANTICS:
+        errors.append(f"evidence_base_semantics must be {EVIDENCE_SEMANTICS}")
+    return errors
+
+
+def evaluate(declaration: dict, head: str | None) -> dict:
+    errors = contract_errors(declaration)
+    evidence = declaration.get("evidence_base_sha")
+    if head is None:
+        status = LIVE_HEAD_UNAVAILABLE
+        errors.append("live HEAD unavailable; operational readiness cannot be established")
+    elif head == evidence:
+        status = SELF_REFERENTIAL
+        errors.append("declaration not yet committed: evidence_base_sha equals the live HEAD; commit it so it becomes historical evidence")
+    else:
+        status = HISTORICAL_EVIDENCE
+    return {
+        "report": "PRODUCT_MATURITY_LIVE_STATUS_V1",
+        "evidence_base_sha": evidence,
+        "observed_repository_head": head,
+        "declaration_status": status,
+        "contract_errors": errors,
+        "human_rc_ready": declaration.get("human_rc_ready") is True and not errors,
+        "human_rc_accepted": declaration.get("human_rc_accepted") is True and not errors,
+        "historical_rc_candidate": declaration.get("historical_rc_candidate"),
+    }
+
+
+def live_status(root: Path = ROOT) -> dict:
+    declaration = json.loads((root / DECLARATION).read_text(encoding="utf-8"))
+    try:
+        head = live_head(root)
+    except (GitWorktreeError, OSError):
+        head = None
+    return evaluate(declaration, head)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--root", type=Path, default=ROOT)
+    arguments = parser.parse_args(argv)
+    result = live_status(arguments.root)
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 1 if result["contract_errors"] else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
