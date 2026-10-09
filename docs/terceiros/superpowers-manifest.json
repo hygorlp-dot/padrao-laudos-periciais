@@ -15,7 +15,12 @@
     "receiving-code-review": "b5e154fc3ec7a6a0b1e710eebacc2168620cc428",
     "writing-plans": "6239ac643c14531e67ded0f1a2885c5072d426c6",
     "executing-plans": "1484ffb29998ba1db2a7b6bf0e641081eb8612e9",
-    "using-superpowers": "a5e27b759e1c907c5076340848308f6aa37f33d4"
+    "using-superpowers": "a5e27b759e1c907c5076340848308f6aa37f33d4",
+    "brainstorming": "03d4c6657cd20ba0fce9d270fc688150bd191c3b",
+    "using-git-worktrees": "d2b8357b922667a091bfe967840abf5ae84ce99c",
+    "subagent-driven-development": "5d44ced88725298e847c62c67a726dcc29e20d00",
+    "dispatching-parallel-agents": "15697cb0726c26a66bff737494e8b5266667ba0c",
+    "finishing-a-development-branch": "3b1205aa5038c71946077dd63b9e71b447729e70"
   },
   "blobs": {
     ".agents/skills/test-driven-development/SKILL.md": "4320d8879a639d0536c2239bb80c9d7257ad8947",
@@ -42,6 +47,83 @@
     ".agents/skills/using-superpowers/references/antigravity-tools.md": "2e1eac90534af6e1f27df4e18410be8a7b442448",
     ".agents/skills/using-superpowers/references/codex-tools.md": "b14b58582155ec9e0335a786636adeaca25a77d5",
     ".agents/skills/using-superpowers/references/gemini-tools.md": "b01b65238a50981aeed22ae52ee20f8b55d16b42",
-    ".agents/skills/using-superpowers/references/pi-tools.md": "0c1f21713a45255ece4144fd2fee353e4ed4f90e"
+    ".agents/skills/using-superpowers/references/pi-tools.md": "0c1f21713a45255ece4144fd2fee353e4ed4f90e",
+    ".agents/skills/brainstorming/SKILL.md": "8176fe4f403e87793678edad4d0b52a2793f5236",
+    ".agents/skills/brainstorming/spec-document-reviewer-prompt.md": "60993129de3c445efeff53987b5297dc1acf3eb1",
+    ".agents/skills/dispatching-parallel-agents/SKILL.md": "3fa091b348bbe0a18eaa0e17e9092c97f7005cbe",
+    ".agents/skills/finishing-a-development-branch/SKILL.md": "fa8aecaf8813f1b19d19996f7957d1b0121f2d9c",
+    ".agents/skills/subagent-driven-development/SKILL.md": "f7bbf6a01b519807ec00baf5e98522bed33f8834",
+    ".agents/skills/subagent-driven-development/implementer-prompt.md": "5c8ecd61fba036263bf88d0af24d47125780efa0",
+    ".agents/skills/subagent-driven-development/re-review-prompt.md": "d49c1825f01e79641ba37e5e942d1d2bbaad1a3c",
+    ".agents/skills/subagent-driven-development/scripts/review-package": "fa7625f053dc852200ddd497662508ff1ae40bb1",
+    ".agents/skills/subagent-driven-development/scripts/sdd-workspace": "ff6b9839a8bc09c84291000b1e0645567ef53415",
+    ".agents/skills/subagent-driven-development/scripts/task-brief": "b49fc546c85e1d6f6c8b523d6c887c55d98ed989",
+    ".agents/skills/subagent-driven-development/task-reviewer-prompt.md": "5c619bc510440b7bf156e78c4dfc60f198963cf0",
+    ".agents/skills/using-git-worktrees/SKILL.md": "1381dacb3516b94382dd6ec736ede21ee8ede2b3"
+  },
+  "tree_sources": {
+    "brainstorming": {
+      "repository": "https://github.com/obra/superpowers",
+      "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+      "upstream_path": "skills/brainstorming",
+      "upstream_tree": "03d4c6657cd20ba0fce9d270fc688150bd191c3b",
+      "local_path": ".agents/skills/brainstorming",
+      "integration": "RESTRICTED",
+      "local_allowlist": [
+        "SKILL.md",
+        "spec-document-reviewer-prompt.md"
+      ],
+      "excluded_paths": [
+        "scripts/frame-template.html",
+        "scripts/helper.js",
+        "scripts/server.cjs",
+        "scripts/start-server.sh",
+        "scripts/stop-server.sh",
+        "visual-companion.md"
+      ],
+      "excluded_capabilities": [
+        "brainstorming-server",
+        "remote-brand-image"
+      ],
+      "local_modifications": {
+        "SKILL.md": {
+          "upstream_blob": "e3f17885f8d5f87d7a92f0469141662b476e1288",
+          "change": "visual companion step and section replaced by an unavailability notice (BRAINSTORMING_POLICY = TEXTUAL_AND_LOCAL_ONLY)"
+        }
+      },
+      "human_decision": "OPTION_A (#276): BRAINSTORMING_SERVER = DENIED, REMOTE_BRAND_IMAGE = DENIED"
+    },
+    "using-git-worktrees": {
+      "repository": "https://github.com/obra/superpowers",
+      "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+      "upstream_path": "skills/using-git-worktrees",
+      "upstream_tree": "d2b8357b922667a091bfe967840abf5ae84ce99c",
+      "local_path": ".agents/skills/using-git-worktrees",
+      "integration": "VERBATIM"
+    },
+    "subagent-driven-development": {
+      "repository": "https://github.com/obra/superpowers",
+      "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+      "upstream_path": "skills/subagent-driven-development",
+      "upstream_tree": "5d44ced88725298e847c62c67a726dcc29e20d00",
+      "local_path": ".agents/skills/subagent-driven-development",
+      "integration": "VERBATIM"
+    },
+    "dispatching-parallel-agents": {
+      "repository": "https://github.com/obra/superpowers",
+      "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+      "upstream_path": "skills/dispatching-parallel-agents",
+      "upstream_tree": "15697cb0726c26a66bff737494e8b5266667ba0c",
+      "local_path": ".agents/skills/dispatching-parallel-agents",
+      "integration": "VERBATIM"
+    },
+    "finishing-a-development-branch": {
+      "repository": "https://github.com/obra/superpowers",
+      "commit": "8ca22dba9a94f28898bbce59f2537ff4d87c747d",
+      "upstream_path": "skills/finishing-a-development-branch",
+      "upstream_tree": "3b1205aa5038c71946077dd63b9e71b447729e70",
+      "local_path": ".agents/skills/finishing-a-development-branch",
+      "integration": "VERBATIM"
+    }
   }
 }

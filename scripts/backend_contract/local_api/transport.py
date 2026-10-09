@@ -13,7 +13,7 @@ from urllib.parse import unquote_to_bytes, urlsplit
 from ..application.document_ingestion import PROCESSING_STATES, READY as PROCESSING_READY
 from ..application.photo_library import DuplicatePhoto, photo_library_to_mapping
 from ..application.site_location import LocationInputError, site_location_to_mapping
-from ..application.property_record import PROPERTY_FIELDS, property_record_to_mapping
+from ..application.property_record import PROPERTY_FIELDS, cluster_property_proposals, property_record_to_mapping
 from ..application.content import (
     DOCUMENT_IO_CHUNK_BYTES,
     MAX_DOCUMENT_BYTES,
@@ -34,6 +34,7 @@ from ..application.models import (
     WorkspaceId,
     thaw_payload,
 )
+from ..application.workflow_status import workflow_status_to_mapping
 from ..application.ports import (
     ArtifactRevisionNotFound,
     InvalidCaseDocument,
@@ -192,6 +193,7 @@ class LocalApiServices:
     save_property_record: object | None = None
     get_property_proposals: object | None = None
     get_process_participants: object | None = None
+    get_process_number_classification: object | None = None
     decide_process_participants: object | None = None
     installation_settings: object | None = None
     workspace_settings: object | None = None
@@ -246,6 +248,7 @@ class LocalApiServices:
     promote_workspace_recovery: object | None = None
     discard_workspace_recovery: object | None = None
     abandon_workspace_recovery: object | None = None
+    get_workflow_status: object | None = None
 
 
 def _workspace_dto(record: PericiaWorkspace) -> dict:
@@ -331,6 +334,7 @@ def _participants_dto(view) -> dict:
         "proposals": [item_dto(item) for item in view.proposals],
         "pending_documents": list(view.pending_documents),
         "interrupted_pages": [{"filename": filename, "page": page} for filename, page in view.interrupted_pages],
+        "unread_pages": [{"filename": filename, "page": page} for filename, page in view.unread_pages],
         "stale_participant_ids": list(view.stale_participant_ids),
         "legacy_blocked_poles": [pole.value for pole in view.legacy_blocked_poles],
         "duplicates": [{"proposal_id": item.proposal_id, "matches_id": item.matches_id, "matches_name": item.matches_name} for item in view.duplicates],
@@ -900,7 +904,7 @@ class LocalApi:
                 )
             raw_segments, segments = _target_segments(target)
             normalized_method = method.upper()
-            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "property-record", "process-participants", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot"}
+            private_route = len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] in {"materials", "pje-intake", "case-analysis", "pericial-planning", "inspection-session", "inspection-photos", "offline-inspection", "offline-sync", "offline-device", "technical-snapshot", "construction-defect-analysis", "expert-profile", "site-location", "property-record", "process-participants", "process-number", "photo-library", "report-snapshot", "delivery-templates", "delivery-supporting-files", "delivery-snapshot", "budget-snapshot", "workflow-status"}
             private_route = private_route or (len(raw_segments) >= 2 and raw_segments[:2] == ("v1", "installation")) or (len(raw_segments) >= 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "settings-snapshot")
             if (normalized_method == "POST" or private_route) and not hmac.compare_digest(request_headers.get("x-local-api-token", ""), self._token):
                 return _error(
@@ -1038,8 +1042,15 @@ class LocalApi:
                     else:
                         proposals, pending = self._services.get_property_proposals.execute(workspace_id), ()
                     values_by_field = {field: {p.value for p in proposals if p.field == field} for field, *_ in PROPERTY_FIELDS}
+                    # #288: o mesmo valor (normalizado por campo) vira um grupo com
+                    # todas as evidencias, ordenado pela hierarquia das pecas.
+                    clusters = cluster_property_proposals(tuple(proposals))
                     return _json_response(200, {"workspace_id": str(workspace_id), "proposals": [
                         {**asdict(p), "state": "CONFLICTING" if len(values_by_field[p.field]) > 1 else "PROPOSED"} for p in proposals
+                    ], "clusters": [
+                        {**{key: value for key, value in asdict(cluster).items() if key != "evidences"},
+                         "evidences": [asdict(item) for item in cluster.evidences]}
+                        for cluster in clusters
                     ], "pending_documents": list(pending)})
                 if normalized_method == "GET":
                     try:
@@ -1066,6 +1077,20 @@ class LocalApi:
                     # Campos cuja pagina de origem o perito excluiu depois de confirmar.
                     "stale_fields": stale_fields,
                 })
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "process-number":
+                # Classificação do número principal entre os números dos autos
+                # (#286): proposta para o perito, nunca gravada aqui.
+                workspace_id = self._workspace_id(raw_segments[2])
+                self._services.get_workspace.execute(workspace_id)
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.get_process_number_classification is None:
+                    return _error(503, "PROCESS_NUMBER_UNAVAILABLE")
+                from ..application.process_number_classification import process_number_classification_dto
+                return _json_response(200, process_number_classification_dto(
+                    self._services.get_process_number_classification.execute(workspace_id)
+                ))
 
             if len(raw_segments) in {4, 5} and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "process-participants":
                 workspace_id = self._workspace_id(raw_segments[2])
@@ -1307,6 +1332,15 @@ class LocalApi:
                     raise ValueError("Report draft amendment request is invalid")
                 record, snapshot = self._services.amend_report_draft.execute(workspace_id, **dto)
                 return _json_response(200, {"revision": record.revision, "updated_at": record.created_at, "snapshot": report_snapshot_to_validated_mapping(snapshot)})
+
+            if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "workflow-status":
+                # Projecao somente leitura (#291): nenhum outro metodo existe aqui.
+                if normalized_method != "GET":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                if self._services.get_workflow_status is None:
+                    return _error(503, "WORKFLOW_STATUS_UNAVAILABLE")
+                status = self._services.get_workflow_status.execute(self._workspace_id(raw_segments[2]))
+                return _json_response(200, workflow_status_to_mapping(status))
 
             if len(raw_segments) == 4 and raw_segments[:2] == ("v1", "workspaces") and raw_segments[3] == "budget-snapshot":
                 workspace_id = self._workspace_id(raw_segments[2])

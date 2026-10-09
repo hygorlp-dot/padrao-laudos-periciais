@@ -340,7 +340,7 @@ def test_legacy_scalar_parties_become_a_projection_and_are_materialized_on_first
 def test_excluded_source_stops_proposals_and_marks_confirmed_participant_stale():
     from scripts.backend_contract.application.case_document_texts import CaseDocumentText, LogicalDocumentSpan
     from scripts.backend_contract.application.process_participants import GetProcessParticipants, ParticipantProposals
-    page = SimpleNamespace(number=2, text=_HEADER + "\nALFA (AUTOR)\nBETA (REU)\n", extraction_mode=SimpleNamespace(value="NATIVE_TEXT"))
+    page = SimpleNamespace(number=2, text=_HEADER + "\nALFA (AUTOR)\nBETA (REU)\n", extraction_mode=SimpleNamespace(value="NATIVE_TEXT"), processing_status=SimpleNamespace(value="AVAILABLE"))
     available = LogicalDocumentSpan("DOC-1", "Petição", "PETICAO_INICIAL", 1, 3, True)
     document = CaseDocumentText(_CONTENT, "a" * 64, "autos.pdf", (page,), (available,), False)
     texts = SimpleNamespace(execute=lambda _w: (document,))
@@ -431,7 +431,7 @@ def _document(*pages, logical=()):
 
 
 def _text_page(text, number=1):
-    return SimpleNamespace(number=number, text=text, extraction_mode=SimpleNamespace(value="NATIVE_TEXT"))
+    return SimpleNamespace(number=number, text=text, extraction_mode=SimpleNamespace(value="NATIVE_TEXT"), processing_status=SimpleNamespace(value="AVAILABLE"))
 
 
 def _proposal_set(*pages):

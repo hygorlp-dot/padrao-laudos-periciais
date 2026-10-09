@@ -75,31 +75,95 @@ def _import(runtime, workspace_id, content, filename="autos.pdf"):
 
 
 def _materials(runtime, workspace_id):
+    """Listagem PELA PONTE: e o comportamento sob teste onde ela e usada."""
     status, _, body = request(runtime, "GET", f"/app-api/v1/workspaces/{workspace_id}/materials")
     assert status == 200, body
     return json.loads(body)["items"]
 
 
-def test_red_slow_derivation_over_bridge_timeout_is_not_a_terminal_failure(tmp_path):
-    """RED de #266: bytes aceitos + derivacao mais longa que o timeout do bridge."""
+def _persisted_materials(runtime, workspace_id):
+    """Consulta AUXILIAR de persistencia, direto na Local API (#296).
+
+    Onde a listagem nao e o que o teste prova, ela nao pode depender do prazo
+    curto (1,5 s) da ponte: a derivacao ainda escreve na mesma conexao SQLite
+    (RLock compartilhado) e a leitura pode atravessar esse prazo, com 503 da
+    ponte sem relacao com o contrato do teste. Que isso ocorreu no runner
+    Windows e hipotese da #296, nao fato provado; a reproducao controlada do
+    mecanismo esta em `test_red_auxiliary_read_does_not_depend_on_the_bridge_deadline`.
+    """
+    from tests.test_local_api_v1 import http_request
+
+    status, _, body = http_request(
+        runtime._local_api.server, "GET", f"/v1/workspaces/{workspace_id}/materials",
+        headers={"X-Local-API-Token": TOKEN},
+    )
+    assert status == 200, body
+    return json.loads(body)["items"]
+
+
+def _hold_store(runtime, seconds):
+    """Ocupa a conexao SQLite real por um tempo finito (escrita concorrente simulada)."""
+    ready, release = threading.Event(), threading.Event()
+
+    def hold():
+        with runtime._local_api._store._lock:
+            ready.set()
+            release.wait(seconds)
+
+    thread = threading.Thread(target=hold, name="busy-store", daemon=True)
+    thread.start()
+    assert ready.wait(30), "nao foi possivel ocupar a conexao SQLite em 30 s"
+    return thread, release
+
+
+def _red_slow_derivation(tmp_path, *, busy_store_seconds=0.0):
     slow = SlowPjeIntake(delay=3.0)
     runtime = build_product_runtime(
         tmp_path / "product.db", frontend_build(tmp_path), token=TOKEN, private_root=tmp_path / "private",
         pje_intake=slow, config=ProductBridgeConfig(upstream_timeout_seconds=1.5),
     )
     runtime.start()
+    holder = None
     try:
         workspace_id = _workspace(runtime)
         content = _synthetic_pje(tmp_path)
+        # A importacao continua passando pela ponte: e ela que o RED prova.
         status, _, body = _import(runtime, workspace_id, content)
         assert slow.finished.wait(30), "a derivacao nunca terminou"
+        if busy_store_seconds:
+            holder = _hold_store(runtime, busy_store_seconds)
         # A ordem causal do finding: a fonte foi persistida e a derivacao terminou.
-        materials = _materials(runtime, workspace_id)
+        started = time.monotonic()
+        materials = _persisted_materials(runtime, workspace_id)
+        if holder is not None:
+            # Sem esta prova, o teste passaria mesmo que a listagem deixasse de
+            # usar a conexao ocupada: a leitura TEM de ter esperado alem do
+            # prazo da ponte (1,5 s) e, ainda assim, responder.
+            assert time.monotonic() - started >= 1.5, "a conexao ocupada nao alcancou a leitura auxiliar"
         assert len(materials) == 1
         # Contrato: se a fonte foi aceita, a resposta nao pode ser falha terminal.
         assert status < 500, f"falso erro terminal {status} sobre fonte ja persistida: {body[:200]!r}"
     finally:
+        if holder is not None:
+            thread, release = holder
+            release.set()
+            thread.join(10)
         runtime.close()
+
+
+def test_red_slow_derivation_over_bridge_timeout_is_not_a_terminal_failure(tmp_path):
+    """RED de #266: bytes aceitos + derivacao mais longa que o timeout do bridge."""
+    _red_slow_derivation(tmp_path)
+
+
+def test_red_auxiliary_read_does_not_depend_on_the_bridge_deadline(tmp_path):
+    """#296: banco ocupado alem do prazo da ponte na conferencia de persistencia.
+
+    Reproducao controlada da fragilidade: com a listagem PELA PONTE, o mesmo
+    cenario respondia 503 LOCAL_API_UNAVAILABLE na conferencia, e nao na
+    importacao que o teste prova.
+    """
+    _red_slow_derivation(tmp_path, busy_store_seconds=3.0)
 
 
 # ----------------------------------------------------------------- T1-T10 (#266)
@@ -207,12 +271,21 @@ def test_t1_small_document_is_ready_in_the_same_response(tmp_path):
 
 
 def test_t2_t3_t8_slow_document_is_accepted_processing_and_ready_later_through_the_bridge(tmp_path):
+    _slow_document_bridge_lifecycle(tmp_path)
+
+
+def test_ready_poll_auxiliary_read_survives_busy_store_beyond_bridge_deadline(tmp_path):
+    _slow_document_bridge_lifecycle(tmp_path, busy_read_seconds=3.0)
+
+
+def _slow_document_bridge_lifecycle(tmp_path, *, busy_read_seconds=0.0):
     gate = GatedPjeIntake()
     runtime = build_product_runtime(
         tmp_path / "t2.db", frontend_build(tmp_path), token=TOKEN, private_root=tmp_path / "t2-private",
         pje_intake=gate, config=ProductBridgeConfig(upstream_timeout_seconds=1.5),
     )
     runtime.start()
+    holder = None
     try:
         workspace_id = _workspace(runtime)
         content = _synthetic_pje(tmp_path)
@@ -230,12 +303,19 @@ def test_t2_t3_t8_slow_document_is_accepted_processing_and_ready_later_through_t
         # Enquanto processa, nao ha inventario logico sobre o qual agir.
         assert request(runtime, "GET", root + "/pje-intake")[0] == 404
         gate.release.set()
+        if busy_read_seconds:
+            holder = _hold_store(runtime, busy_read_seconds)
+        polling_started = time.monotonic()
 
         def ready():
-            status, _, raw = request(runtime, "GET", root + "/material-processing")
-            return json.loads(raw)["items"][0]["state"] == "READY"
+            # Espera auxiliar, como a conferencia de persistencia da #296:
+            # nao depende do prazo curto usado para provar a importacao.
+            # As recargas PROCESSING acima e o inventario abaixo seguem na ponte.
+            return _states(runtime._local_api, workspace_id)[material["content_id"]] == "READY"
 
         _until(ready)
+        if holder is not None:
+            assert time.monotonic() - polling_started >= 1.5, "a leitura auxiliar nao aguardou a conexao ocupada"
         # T8: o inventario pronto continua ligado a fonte exata.
         status, _, raw = request(runtime, "GET", root + "/pje-intake")
         inventory = json.loads(raw)["intakes"][0]["inventory"]
@@ -244,6 +324,9 @@ def test_t2_t3_t8_slow_document_is_accepted_processing_and_ready_later_through_t
         assert inventory["source_sha256"] == material["checksum_sha256"]
         assert inventory["workspace_id"] == workspace_id
     finally:
+        if holder is not None:
+            holder[1].set()
+            holder[0].join(10)
         gate.release.set()
         runtime.close()
 
@@ -444,6 +527,52 @@ class _Record:
     def __init__(self, workspace_id="w", content_id="c"):
         self.workspace_id = workspace_id
         self.content_id = content_id
+
+
+@pytest.mark.parametrize("accept_seconds", [0.0, 0.2, 0.5, 0.8])
+@pytest.mark.parametrize("lookup_seconds", [0.0, 0.1])
+def test_ingestion_grace_budget_includes_acceptance_and_derivation_lookup(monkeypatch, accept_seconds, lookup_seconds):
+    """Relogio controlado: nenhuma latencia de runner decide o contrato #309."""
+    from scripts.backend_contract.application import document_ingestion as ingestion
+
+    now = [100.0]
+    record = _Record()
+
+    class Importer:
+        def accept(self, **_kwargs):
+            now[0] += accept_seconds
+            return record, True
+
+        def is_derived(self, _record):
+            return False
+
+        def needs_derivation(self, _record):
+            now[0] += lookup_seconds
+            return True
+
+    class PendingDerivation:
+        def wait(self, seconds):
+            assert seconds >= 0
+            now[0] += seconds
+            return False
+
+    queue = ingestion.DocumentDerivationQueue(lambda *_args: None)
+    submitted = []
+
+    def submit(value):
+        submitted.append(value)
+        return PendingDerivation()
+
+    monkeypatch.setattr(ingestion, "monotonic", lambda: now[0], raising=False)
+    monkeypatch.setattr(queue, "submit", submit)
+    monkeypatch.setattr(queue, "state_of", lambda _record: ingestion.PROCESSING)
+    service = ingestion.CaseDocumentIngestion(Importer(), queue, None, grace_seconds=0.5)
+    result = service.import_document(workspace_id="w", original_filename="synthetic.pdf", content=b"synthetic", media_type="application/pdf")
+
+    assert result == (record, True, ingestion.PROCESSING)
+    assert submitted == [record], "janela esgotada nao pode descartar a derivacao"
+    # Aceite duravel nao e abortado; apenas a espera opcional usa o saldo.
+    assert now[0] - 100.0 == pytest.approx(max(0.5, accept_seconds + lookup_seconds))
 
 
 def test_queue_coalesces_requests_for_the_same_source_and_reports_failure():

@@ -19,6 +19,7 @@ from __future__ import annotations
 import threading
 from collections import deque
 from collections.abc import Callable
+from time import monotonic
 
 from .ports import PrivateContentNotFound
 
@@ -147,10 +148,10 @@ class DocumentDerivationQueue:
 class CaseDocumentIngestion:
     """Aceite duravel + derivacao no executor local, com estado honesto por fonte.
 
-    `grace_seconds` e o quanto a requisicao espera a derivacao antes de responder
-    "aceito, processando": tem de ser menor que o timeout do transporte, para que
-    a resposta sempre chegue antes dele e um documento pequeno continue saindo
-    pronto na mesma resposta.
+    `grace_seconds` limita a janela de aceite e espera opcional pela derivacao.
+    O aceite duravel nao e interrompido se ultrapassar essa janela, mas nenhuma
+    espera adicional e somada a ele. A janela deve ser menor que o timeout do
+    transporte; documento pequeno pode continuar pronto na mesma resposta.
     """
 
     def __init__(self, importer, queue: DocumentDerivationQueue, documents, *, grace_seconds: float):
@@ -176,21 +177,24 @@ class CaseDocumentIngestion:
             return READY
         return FAILED if running == FAILED else INTERRUPTED
 
-    def _derive_within_grace(self, record) -> str:
+    def _derive_within_grace(self, record, *, deadline: float | None = None) -> str:
         if not self._importer.needs_derivation(record):
             # Fonte pronta e completa: nada a agendar, nada a esperar atras de
             # outra derivacao longa no worker unico.
             return READY
-        self._queue.submit(record).wait(self._grace_seconds)
+        done = self._queue.submit(record)
+        wait_seconds = self._grace_seconds if deadline is None else max(0.0, deadline - monotonic())
+        done.wait(wait_seconds)
         return self.state(record)
 
     def import_document(self, *, workspace_id, original_filename, content, media_type):
         """FASE 1 sincrona; FASE 2 agendada. Devolve (fonte, criada, estado)."""
+        deadline = monotonic() + self._grace_seconds
         record, created = self._importer.accept(
             workspace_id=workspace_id, original_filename=original_filename,
             content=content, media_type=media_type,
         )
-        return record, created, self._derive_within_grace(record)
+        return record, created, self._derive_within_grace(record, deadline=deadline)
 
     def states(self, workspace_id):
         return tuple((record, self.state(record)) for record in self._documents.execute(workspace_id))

@@ -6,10 +6,14 @@ from ..property_record import (
     PROPERTY_FIELDS, PROPERTY_RECORD_ID, PROPERTY_RECORD_KIND, PropertyRecord, PropertyValue,
     property_record_from_mapping, property_record_to_mapping, property_proposals,
 )
+from ..property_clusters import cluster_property_proposals
 from .models import thaw_payload
 from .ports import ArtifactRevisionNotFound, RepositoryConflict, RepositoryIntegrityError
 
-__all__ = ["GetPropertyRecord", "SavePropertyRecord", "GetPropertyProposals", "PROPERTY_FIELDS", "property_record_to_mapping"]
+__all__ = [
+    "GetPropertyRecord", "SavePropertyRecord", "GetPropertyProposals", "PROPERTY_FIELDS", "property_record_to_mapping",
+    "cluster_property_proposals",
+]
 
 
 @dataclass(frozen=True, slots=True)

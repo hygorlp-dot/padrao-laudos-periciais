@@ -18,6 +18,18 @@ function jsonResponse(status: number, value: object) {
   });
 }
 
+// A situação do fluxo (#291) é consultada por rota e método; as demais
+// respostas seguem a sequência de cada teste.
+function withWorkflowStatus(spy: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>, status = 503) {
+  return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/workflow-status") && (init?.method ?? "GET") === "GET") {
+      return Promise.resolve(jsonResponse(status, { error: { code: "WORKFLOW_STATUS_UNAVAILABLE" } }));
+    }
+    return spy(input, init);
+  });
+}
+
 beforeEach(() => {
   window.history.replaceState(null, "", "/");
   vi.unstubAllGlobals();
@@ -64,7 +76,7 @@ describe("pericia directory", () => {
       .fn()
       .mockResolvedValueOnce(jsonResponse(200, { items: [WORKSPACE] }))
       .mockResolvedValueOnce(jsonResponse(200, WORKSPACE));
-    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubGlobal("fetch", withWorkflowStatus(fetchSpy));
     const user = userEvent.setup();
     render(<App />);
 
@@ -218,7 +230,7 @@ describe("workspace-aware routing", () => {
       .mockResolvedValueOnce(
         jsonResponse(404, { error: { code: "PERICIAL_PLANNING_NOT_FOUND", message: "internal" } }),
       );
-    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubGlobal("fetch", withWorkflowStatus(fetchSpy));
 
     render(<App />);
 
@@ -277,7 +289,7 @@ describe("workspace-aware routing", () => {
           ),
         }),
       );
-    vi.stubGlobal("fetch", fetchSpy);
+    vi.stubGlobal("fetch", withWorkflowStatus(fetchSpy));
 
     render(<App />);
 

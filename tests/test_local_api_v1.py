@@ -44,6 +44,8 @@ from scripts.backend_contract.local_api.composition import (
     build_local_api,
 )
 
+from tests.request_worker_probe import live_request_workers
+
 
 WORKSPACE_UUID = UUID("11111111-1111-4111-8111-111111111111")
 WORKSPACE_ID = WorkspaceId(WORKSPACE_UUID)
@@ -2316,8 +2318,7 @@ def test_slow_drip_cannot_extend_total_request_deadline(tmp_path, request_prefix
     dripper = Thread(target=drip_body)
     dripper.start()
     for _ in range(50):
-        request_threads = getattr(runtime.server._server, "_threads", ())
-        if any(thread.is_alive() for thread in request_threads):
+        if live_request_workers(runtime.server._server):
             break
         Event().wait(0.01)
     else:

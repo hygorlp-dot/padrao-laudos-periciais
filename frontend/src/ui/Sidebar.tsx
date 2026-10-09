@@ -1,15 +1,26 @@
 import { navigate } from "../app/router";
 import { WORKFLOW_ROUTES, workspacePath, type ShellRoute, type WorkflowGroup } from "../routes/routeCatalog";
+import type { WorkflowStageStatus } from "../data/workflowStatus";
+import { STAGE_STATE_SYMBOL, STAGE_STATE_TEXT, stageDescription } from "./workflowStatusText";
+
+// Situação das etapas vinda da projeção do backend. Enquanto carrega, nada é
+// afirmado; se a consulta falha, cada etapa diz "não verificada" e os links
+// continuam funcionando normalmente.
+export type SidebarStageStatus =
+  | { kind: "loading" }
+  | { kind: "unavailable" }
+  | { kind: "ready"; stages: ReadonlyMap<string, WorkflowStageStatus> };
 
 type SidebarProps = {
   currentPath: string;
   workspaceId?: string;
   workspaceName?: string;
+  stageStatus?: SidebarStageStatus;
 };
 
 const GROUP_ORDER: readonly WorkflowGroup[] = ["Processo", "Perícia", "Laudo", "Gestão"];
 
-export function Sidebar({ currentPath, workspaceId, workspaceName }: SidebarProps) {
+export function Sidebar({ currentPath, workspaceId, workspaceName, stageStatus }: SidebarProps) {
   const home = WORKFLOW_ROUTES.filter((route) => route.kind === "home");
   const groups = GROUP_ORDER.map((group) => ({
     group,
@@ -23,12 +34,26 @@ export function Sidebar({ currentPath, workspaceId, workspaceName }: SidebarProp
         ? "/"
         : undefined;
     const isActive = href === currentPath;
+    const stage = workspaceId && route.kind === "stage" ? route.path.slice(1) : undefined;
+    const status = stage && stageStatus?.kind === "ready" ? stageStatus.stages.get(stage) : undefined;
+    const description = !stage || !stageStatus || stageStatus.kind === "loading"
+      ? undefined
+      : status
+        ? stageDescription(status)
+        : STAGE_STATE_TEXT.UNAVAILABLE;
+    const state = status?.state ?? (description ? "UNAVAILABLE" : undefined);
+    const descriptionId = description ? `workflow-state-${stage}` : undefined;
     const content = (
       <>
         <span className="workflow-index" aria-hidden="true">
           {route.index}
         </span>
         <span>{route.label}</span>
+        {state && STAGE_STATE_SYMBOL[state] ? (
+          <span className="workflow-state-mark" data-state={state} aria-hidden="true" title={STAGE_STATE_TEXT[state]}>
+            {STAGE_STATE_SYMBOL[state]}
+          </span>
+        ) : null}
       </>
     );
     return (
@@ -39,6 +64,7 @@ export function Sidebar({ currentPath, workspaceId, workspaceName }: SidebarProp
             data-active={isActive || undefined}
             href={href}
             aria-current={isActive ? "page" : undefined}
+            aria-describedby={descriptionId}
             onClick={navigate}
           >
             {content}
@@ -48,6 +74,11 @@ export function Sidebar({ currentPath, workspaceId, workspaceName }: SidebarProp
             {content}
           </span>
         )}
+        {descriptionId ? (
+          <span id={descriptionId} className="visually-hidden">
+            {description}
+          </span>
+        ) : null}
       </li>
     );
   };

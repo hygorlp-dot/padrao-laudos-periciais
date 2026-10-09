@@ -8,6 +8,9 @@ import { ProcessCaseView } from "./ProcessCaseView";
 // O painel de participantes tem testes próprios; aqui ele não disputa as
 // respostas encadeadas do formulário do processo.
 vi.mock("./ParticipantsPanel", () => ({ ParticipantsPanel: () => null }));
+// A classificação do número principal (#286) tem testes próprios; aqui fica
+// indisponível, e o campo mostra a lista sem classificação (dita na tela).
+vi.mock("../data/processNumber", () => ({ getProcessNumberClassification: () => Promise.reject(new Error("indisponível")) }));
 
 const ID = "11111111-1111-4111-8111-111111111111";
 const OTHER_ID = "22222222-2222-4222-8222-222222222222";
@@ -414,7 +417,9 @@ describe("process case form", () => {
 
     const number = await screen.findByRole("textbox", { name: "Número do processo" });
     expect(number).toHaveValue("");
-    const firstCandidate = screen.getByRole("button", {
+    // #286: a lista sem classificação só aparece depois que a classificação
+    // (mockada aqui como indisponível) responde; antes disso, nada é oferecido.
+    const firstCandidate = await screen.findByRole("button", {
       name: `Usar ${DATA.numero_processo} — autos.pdf, página 2`,
     });
     const secondCandidate = screen.getByRole("button", {

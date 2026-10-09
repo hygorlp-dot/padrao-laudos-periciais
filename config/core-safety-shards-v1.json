@@ -118,7 +118,8 @@
         "tests/test_publication_privacy_e1b.py",
         "tests/test_report_references_findings_v1.py",
         "tests/test_source_span_confirmation_v1.py",
-        "tests/test_superpowers_safety.py"
+        "tests/test_superpowers_safety.py",
+        "tests/test_word16_branded_fidelity_v1.py"
       ]
     }
   ]
