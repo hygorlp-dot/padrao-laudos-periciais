@@ -22,14 +22,13 @@ describe("delivery foundation workbench", () => {
     vi.stubGlobal("fetch", vi.fn((input) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [item] }) : response(200, item))));
     render(<DeliveryFoundationView workspaceId={ID} />);
     expect(await screen.findByRole("heading", { name: "Entrega do laudo" })).toBeInTheDocument();
-    expect(screen.getByText("Entregue")).toBeInTheDocument();
+    expect(screen.getAllByText("Registrada como entregue")[0]).toBeInTheDocument();
     expect(screen.queryByText("DELIVERED")).not.toBeInTheDocument();
-    expect(screen.getByText(/Revisão 5, aprovada/)).toBeInTheDocument();
+    expect(screen.getByText("Laudo aprovado · revisão 5")).toBeInTheDocument();
     // Identidades e hashes continuam auditáveis, fora da primeira camada.
-    expect(screen.getByText("REPORT-1").closest("details")).not.toHaveAttribute("open");
-    expect(screen.getByText(`SHA-256 ${"c".repeat(64)}`).closest("details")).not.toBeNull();
+    expect(screen.getAllByText("REPORT-1")[0].closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("c".repeat(64)).closest("details")).not.toBeNull();
     expect(screen.getAllByRole("link", { name: "Baixar Word" })[0]).toHaveAttribute("href", expect.stringContaining("/delivery-snapshot/artifacts/"));
-    expect(screen.getByRole("heading", { name: "Assinatura" })).toBeInTheDocument();
     expect(screen.getByText(/O sistema não assina o laudo/)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /protocolar|pje|enviar ao tribunal/i })).not.toBeInTheDocument();
   });
@@ -39,14 +38,14 @@ describe("delivery foundation workbench", () => {
     const item = { revision: 6, updated_at: "2026-08-31T12:00:00Z", snapshot: stale };
     vi.stubGlobal("fetch", vi.fn((input) => Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [item] }) : response(200, item))));
     render(<DeliveryFoundationView workspaceId={ID} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Entrega desatualizada");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Esta entrega ficou desatualizada.");
     expect(screen.queryByRole("button", { name: "Finalizar arquivos" })).not.toBeInTheDocument();
   });
 
   test("requires a private Word template when no delivery exists", async () => {
     vi.stubGlobal("fetch", vi.fn(() => Promise.resolve(response(404, {}))));
     render(<DeliveryFoundationView workspaceId={ID} />);
-    expect(await screen.findByRole("heading", { name: "Iniciar entrega" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Preparar entrega" })).toBeInTheDocument();
     expect(screen.getByLabelText("Modelo Word (.docx ou .docm)")).toBeRequired();
     expect(screen.getByRole("button", { name: "Usar este modelo e iniciar" })).toBeDisabled();
   });
@@ -60,7 +59,7 @@ describe("delivery foundation workbench", () => {
       return Promise.resolve(response(404, {}));
     }));
     render(<DeliveryFoundationView workspaceId={ID} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Usar o modelo padrão do produto" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Usar modelo padrão" }));
     expect(await screen.findByRole("heading", { name: "Entrega do laudo" })).toBeInTheDocument();
     const start = calls.find((call) => call.url.endsWith("/delivery-snapshot") && call.body);
     expect(JSON.parse(start!.body!)).toMatchObject({ template_content_id: "55555555-5555-4555-8555-555555555555", manifest: { template_id: "PRODUCT-DEFAULT-REPORT-V1" } });
@@ -75,7 +74,7 @@ describe("delivery foundation workbench", () => {
       return Promise.resolve(response(404, {}));
     }));
     render(<DeliveryFoundationView workspaceId={ID} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Usar o modelo padrão do produto" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Usar modelo padrão" }));
     expect(await screen.findByRole("heading", { name: "Entrega do laudo" })).toBeInTheDocument();
     const start = calls.find((call) => call.url.endsWith("/delivery-snapshot") && call.body);
     const manifest = JSON.parse(start!.body!).manifest;
@@ -94,9 +93,9 @@ describe("delivery foundation workbench", () => {
   test("offers Word rendering with a derived PDF and states which artifact is authoritative", async () => {
     serve(draftWith([]));
     render(<DeliveryFoundationView workspaceId={ID} />);
-    expect(await screen.findByRole("button", { name: "Gerar Word e PDF" })).toBeEnabled();
-    expect(screen.getByText(/O Word é gerado a partir do laudo aprovado e é o documento oficial/)).toBeInTheDocument();
-    expect(screen.getByText(/só aparece depois de conferido/)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Gerar arquivos do laudo" })).toBeEnabled();
+    expect(screen.getByText(/O Word é gerado a partir do laudo aprovado/)).toBeInTheDocument();
+    expect(screen.getByText(/conferência com o Word/)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Baixar PDF" })).not.toBeInTheDocument();
     expect(screen.queryByText(/conferido contra ele/)).not.toBeInTheDocument();
   });
@@ -104,25 +103,25 @@ describe("delivery foundation workbench", () => {
   test("distinguishes the authoritative Word from the derived PDF and downloads the persisted artifacts", async () => {
     serve(draftWith([word, pdf]));
     render(<DeliveryFoundationView workspaceId={ID} />);
-    expect(await screen.findByText("Laudo em Word · documento oficial")).toBeInTheDocument();
-    expect(screen.getByText("Laudo em PDF · derivado do Word")).toBeInTheDocument();
-    expect(screen.getByText(/PDF gerado a partir do Word pelo Microsoft Word desta máquina e conferido contra ele/)).toBeInTheDocument();
+    expect(await screen.findByText("Laudo em Word")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "PDF derivado do Word" })).toBeInTheDocument();
+    expect(screen.getByText(/Gerado a partir deste Word e conferido pelo sistema/)).toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "Baixar PDF" })[0]).toHaveAttribute("href", expect.stringContaining(`/delivery-snapshot/artifacts/${pdf.content_id}`));
     expect(screen.getAllByRole("link", { name: "Baixar Word" })[0]).toHaveAttribute("href", expect.stringContaining(`/delivery-snapshot/artifacts/${word.content_id}`));
-    expect(screen.getByRole("button", { name: "Gerar novamente Word e PDF" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Gerar novamente" })).toBeEnabled();
   });
 
   test("reports an unavailable PDF as unavailable, never as success, and offers no PDF download", async () => {
     serve(draftWith([word]));
     render(<DeliveryFoundationView workspaceId={ID} />);
-    expect(await screen.findByText("Não foi possível gerar o PDF.")).toBeInTheDocument();
-    expect(screen.getByText("O documento Word continua válido e pode ser baixado.")).toBeInTheDocument();
+    expect(await screen.findByText("PDF indisponível")).toBeInTheDocument();
+    expect(screen.getByText(/O Word está pronto e pode ser baixado/)).toBeInTheDocument();
     expect(screen.queryByText(/conferido contra ele/)).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Baixar PDF" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("link", { name: "Baixar Word" }).length).toBeGreaterThan(0);
     // Recuperação oferecida no próprio lugar: tentar de novo e ver os detalhes.
-    expect(screen.getAllByRole("button", { name: "Tentar novamente" }).length).toBeGreaterThan(0);
-    expect(screen.getByText("Ver detalhes")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Tentar gerar o PDF novamente" }).length).toBeGreaterThan(0);
+    expect(screen.getByText("Ver detalhes da conversão")).toBeInTheDocument();
   });
 
   test("shows a busy render and an error, not success, when rendering fails", async () => {
@@ -133,15 +132,15 @@ describe("delivery foundation workbench", () => {
       return Promise.resolve(String(input).endsWith("/history") ? response(200, { items: [item] }) : response(200, item));
     }));
     render(<DeliveryFoundationView workspaceId={ID} />);
-    fireEvent.click(await screen.findByRole("button", { name: "Gerar Word e PDF" }));
-    const busy = await screen.findByRole("button", { name: "Gerando Word e PDF…" });
-    expect(busy).toBeDisabled();
+    fireEvent.click(await screen.findByRole("button", { name: "Gerar arquivos do laudo" }));
+    const busy = await screen.findByRole("button", { name: "Gerar arquivos do laudo" });
+    expect(busy).toHaveAttribute("aria-disabled", "true");
     expect(busy).toHaveAttribute("aria-busy", "true");
     fail(response(503, {}));
-    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível gerar o Word desta entrega.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Não foi possível confirmar a geração do Word.");
     // A falha não apaga a tela: o contexto da entrega continua visível e recuperável.
     expect(screen.getByRole("heading", { name: "Entrega do laudo" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Tentar novamente" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Verificar entrega" })).toBeEnabled();
     await waitFor(() => expect(screen.queryByText(/conferido contra ele/)).not.toBeInTheDocument());
     expect(screen.queryByRole("link", { name: "Baixar PDF" })).not.toBeInTheDocument();
   });
@@ -149,7 +148,7 @@ describe("delivery foundation workbench", () => {
   test("blocks rendering while the delivery is stale", async () => {
     serve({ ...draftWith([word, pdf]), state: "STALE", stale_origin_state: "DRAFT", stale_reasons: ["REPORT_DIGEST_CHANGED"] });
     render(<DeliveryFoundationView workspaceId={ID} />);
-    expect(await screen.findByRole("alert")).toHaveTextContent("Entrega desatualizada");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Esta entrega ficou desatualizada.");
     expect(screen.queryByRole("button", { name: /Gerar/ })).not.toBeInTheDocument();
   });
 });

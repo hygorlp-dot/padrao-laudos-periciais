@@ -8,6 +8,7 @@ export type DeliverySnapshot = {
   artifacts: DeliveryArtifact[]; package: { manifest_version: "1.0.0"; artifact_ids: string[] };
   decisions: Array<{ decision_id: string; action: string; professional_id: string; reason: string; timestamp: string; supersedes_decision_id: string | null }>;
   state: DeliveryState; stale_reasons: string[]; stale_origin_state: Exclude<DeliveryState, "STALE"> | null; supersedes_delivery_id: string | null;
+  derived_pdf_renderer?: { renderer_type: "MICROSOFT_WORD_DESKTOP_COM"; renderer_version: string; platform: "win32" };
 };
 export type DeliveryEnvelope = { revision: number; updated_at: string; snapshot: DeliverySnapshot };
 export type TemplateMetadata = { workspace_id: string; content_id: string; original_filename: string; byte_size: number; checksum_sha256: string; media_type: string };
@@ -24,17 +25,34 @@ export const BRANDED_TEMPLATE_ID = "PRODUCT-DEFAULT-REPORT-V2";
 const DEFAULT_BINDINGS = ["PROCESS_NUMBER", "COURT", "EXPERT_FULL_NAME", "EXPERT_TITLE", "EXPERT_REGISTRATION"];
 const BRANDED_BINDINGS = ["PROCESS_NUMBER", "COURT", "PARTICIPANTS_ACTIVE", "PARTICIPANTS_PASSIVE", "EXPERT_FULL_NAME", "EXPERT_TITLE", "EXPERT_REGISTRATION"];
 const UPLOADED_BINDINGS = ["EXPERT_FULL_NAME", "EXPERT_REGISTRATION", "REPORT_ID"];
-export function templateManifest(templateId: string, outputKind: "DOCX" | "DOCM"): TemplateManifest { const fields = templateId === DEFAULT_TEMPLATE_ID ? DEFAULT_BINDINGS : templateId === BRANDED_TEMPLATE_ID ? BRANDED_BINDINGS : UPLOADED_BINDINGS; return { schema_version: "1.0.0", template_id: templateId, output_kind: outputKind, bindings: fields.map((field) => ({ field, placeholder: `[[${field}]]` })) }; }
+export function templateManifest(templateId: string, outputKind: "DOCX" | "DOCM", professional = false): TemplateManifest {
+  const baseFields = templateId === DEFAULT_TEMPLATE_ID ? DEFAULT_BINDINGS : templateId === BRANDED_TEMPLATE_ID ? BRANDED_BINDINGS : UPLOADED_BINDINGS;
+  const fields = professional && templateId === DEFAULT_TEMPLATE_ID ? [...baseFields, "EXPERT_COVER_NAME", "PARTICIPANTS_ACTIVE", "PARTICIPANTS_PASSIVE", "ACTION_TYPE", "PROTOCOL_OPENING", "REPORT_CITY_DATE"]
+    : professional && templateId === BRANDED_TEMPLATE_ID ? [...baseFields, "ACTION_TYPE", "PROTOCOL_OPENING", "REPORT_CITY_DATE"] : baseFields;
+  return { schema_version: "1.0.0", template_id: templateId, output_kind: outputKind, bindings: fields.map((field) => ({ field, placeholder: `[[${field}]]` })) };
+}
 // O servidor decide o modelo da perícia: V1 (perícia antiga), V2 com a identidade
 // visual capturada, ou o modelo Word personalizado escolhido na instalação.
-export async function createDefaultTemplate(workspaceId: string) { const value = await decode(await fetch(`${base(workspaceId)}/delivery-templates/default`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}" })) as { template: TemplateMetadata; manifest: TemplateManifest }; const manifest = value?.manifest; if (!value?.template?.content_id || typeof manifest?.template_id !== "string" || !manifest.template_id || (manifest.output_kind !== "DOCX" && manifest.output_kind !== "DOCM")) throw new DeliveryApiError("invalid"); const expected = templateManifest(manifest.template_id, manifest.output_kind); if (JSON.stringify(expected.bindings) !== JSON.stringify(manifest.bindings)) throw new DeliveryApiError("invalid"); return value; }
+export async function createDefaultTemplate(workspaceId: string) { const value = await decode(await fetch(`${base(workspaceId)}/delivery-templates/default`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: "{}" })) as { template: TemplateMetadata; manifest: TemplateManifest }; const manifest = value?.manifest; if (!value?.template?.content_id || typeof manifest?.template_id !== "string" || !manifest.template_id || (manifest.output_kind !== "DOCX" && manifest.output_kind !== "DOCM")) throw new DeliveryApiError("invalid"); const variants = [false, true].map((professional) => templateManifest(manifest.template_id, manifest.output_kind, professional)); if (!variants.some((expected) => JSON.stringify(expected.bindings) === JSON.stringify(manifest.bindings))) throw new DeliveryApiError("invalid"); return value; }
 export async function getDeliverySnapshot(workspaceId: string, signal?: AbortSignal) { return envelope(await decode(await fetch(`${base(workspaceId)}/delivery-snapshot`, { method: "GET", credentials: "same-origin", cache: "no-store", signal })), workspaceId); }
 export async function getDeliveryHistory(workspaceId: string, signal?: AbortSignal) { const value = await decode(await fetch(`${base(workspaceId)}/delivery-snapshot/history`, { method: "GET", credentials: "same-origin", cache: "no-store", signal })) as { items: unknown[] }; if (!Array.isArray(value.items)) throw new DeliveryApiError("invalid"); return value.items.map((item) => envelope(item, workspaceId)); }
 export async function uploadDeliveryTemplate(workspaceId: string, file: File) { const response = await fetch(`${base(workspaceId)}/delivery-templates`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": file.type, "X-Document-Filename": file.name }, body: file }); return await decode(response) as TemplateMetadata; }
 export async function uploadDeliverySupportingFile(workspaceId: string, file: File) { const response = await fetch(`${base(workspaceId)}/delivery-supporting-files`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": file.type, "X-Document-Filename": file.name }, body: file }); return await decode(response) as TemplateMetadata; }
 async function command(workspaceId: string, path: string, body: object) { return envelope(await decode(await fetch(`${base(workspaceId)}/delivery-snapshot${path}`, { method: "POST", credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })), workspaceId); }
 export async function startDeliverySnapshot(workspaceId: string, template: TemplateMetadata, manifest: TemplateManifest) { return command(workspaceId, "", { template_content_id: template.content_id, manifest }); }
-export async function renderDeliveryPackage(workspaceId: string, value: DeliveryEnvelope) { return command(workspaceId, "/render", { expected_revision: value.revision, manifest: templateManifest(value.snapshot.template_id, value.snapshot.template_format) }); }
+export async function renderDeliveryPackage(workspaceId: string, value: DeliveryEnvelope) {
+  const { snapshot } = value;
+  let professional = false;
+  if (snapshot.template_id === DEFAULT_TEMPLATE_ID || snapshot.template_id === BRANDED_TEMPLATE_ID) {
+    // Os dois formatos públicos de manifesto já existem no backend. O Report
+    // vinculado informa qual serialização enviar, inclusive após reabrir a UI;
+    // nenhuma cache, fallback de render ou nova autoridade é criada aqui.
+    const report = await decode(await fetch(`${base(workspaceId)}/report-snapshot`, { credentials: "same-origin", cache: "no-store" })) as { revision: number; snapshot: { report_id: string; presentation?: unknown } };
+    if (report?.revision !== snapshot.binding.report_revision || report.snapshot?.report_id !== snapshot.binding.report_snapshot_id) throw new DeliveryApiError("invalid");
+    professional = report.snapshot.presentation != null;
+  }
+  return command(workspaceId, "/render", { expected_revision: value.revision, manifest: templateManifest(snapshot.template_id, snapshot.template_format, professional) });
+}
 export async function attachDeliveryPackageArtifact(workspaceId: string, value: DeliveryEnvelope, contentId: string, role: "ANNEX" | "PHOTO_APPENDIX" | "TECHNICAL_APPENDIX" | "SUPPORTING_FILE") { return command(workspaceId, "/package-artifacts", { expected_revision: value.revision, content_id: contentId, role }); }
 export async function reviewDeliverySnapshot(workspaceId: string, value: DeliveryEnvelope, action: "MARK_READY_FOR_REVIEW" | "APPROVE" | "SUPERSEDE", reason: string) { return command(workspaceId, "/reviews", { expected_revision: value.revision, action, professional_id: value.snapshot.binding.professional_id, reason }); }
 export async function finalizeDeliverySnapshot(workspaceId: string, value: DeliveryEnvelope, reason: string) { return command(workspaceId, "/finalize", { expected_revision: value.revision, professional_id: value.snapshot.binding.professional_id, reason }); }

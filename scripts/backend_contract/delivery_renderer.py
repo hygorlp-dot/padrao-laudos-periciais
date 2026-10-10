@@ -921,6 +921,12 @@ def _captured_professional_report_blocks(report):
             output.extend(Block("PARAGRAPH", p, lead if index == 0 else "") for index, p in enumerate(_presentation_paragraphs(text)))
 
     def heading(level, text):
+        # Empty neighboring chapters otherwise become adjacent band tables.
+        # Native Word joins their painted borders, so a faithful PDF cannot
+        # match the two separately bound grids. Keep their layout separation
+        # explicit without inventing prose or relaxing the fidelity oracle.
+        if level == 1 and output and output[-1].kind == "HEADING_1":
+            output.append(Block("PARAGRAPH", ""))
         output.append(Block("HEADING_" + str(level), text))
 
     def content(*kinds):
