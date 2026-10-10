@@ -117,3 +117,21 @@ motion, aviso de bundle preexistente); theming 3/4 (tokens existentes, sem nova
 promessa de dark mode); responsive 4/4 nas classes desktop exigidas; integrity
 4/4. Total 17/20 no escopo auditado, P0=0/P1=0. Sem agenda de redesign adicional.
 FILES_DELETED=0; HUMAN_RC_READY=FALSE; #291 continua aberta.
+
+## Reparo causal de leitura transitória
+
+A conferência do descriptor deve distinguir leitura temporariamente bloqueada
+de divergência comprovada. O bloqueio exclusivo real de `RECOVERY_SESSION_V1`
+no Windows reproduziu conversão indevida de promoção parcial em irretomável.
+O teste RED falhou em duas variantes; a correção limitada mantém a recusa da
+operação enquanto a leitura estiver indisponível, preservando o journal e a
+possibilidade de retomar. GREEN: quatro testes PASS, incluindo o mesmo recovery
+após liberar o lock e após restart, sem duplicar conteúdos ou alterar seus hashes.
+
+O candidato `8f67987d6324da4935bdcbad3489c3bd6cc8650f` teve gate integral PASS
+(16 etapas, 1936.151 s, timing ATTRIBUTION_REQUIRED), arquitetura sem findings,
+170 testes de confiança PASS e publicação privada limpa. Esse candidato foi
+bloqueado pela revisão independente: sua evidência permanece registrada, mas
+não transfere aprovação ao HEAD reparado. A revisão é invalidada pela correção;
+novo gate proporcional, CI e revisões finais devem ficar vinculados ao SHA novo.
+Frontend e QA continuam aplicáveis por identidade dos arquivos, sem reabrir UX.

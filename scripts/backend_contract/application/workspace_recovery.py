@@ -3452,6 +3452,10 @@ class PromoteWorkspaceRecovery:
             descriptor = _descriptor_da_raiz(Path(staging.root), custody)
         finally:
             custody.close()
+        if descriptor is _SIDECAR_TRAVADO:
+            # Indisponibilidade não prova divergência e não pode tornar uma
+            # promoção parcial permanentemente irretomável.
+            raise OSError("o descriptor da recuperação está temporariamente indisponível")
         plano = {
             "workspace_id": str(staged_workspace.workspace_id),
             "workspace_name": staged_workspace.name,
