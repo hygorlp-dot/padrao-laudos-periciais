@@ -1,4 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { navigate } from "../app/router";
+import { workspacePath } from "../routes/routeCatalog";
+import { TechnicalDetails } from "../ui/TechnicalDetails";
+import "../styles/recovery-editorial.css";
 
 import {
   abandonRecovery,
@@ -38,6 +42,7 @@ type RestoreState =
   | { kind: "verified"; summary: BackupSummary }
   | { kind: "staging"; summary: BackupSummary }
   | { kind: "staged"; staged: StagedRecovery }
+  | { kind: "review"; staged: StagedRecovery }
   | { kind: "promoting"; staged: StagedRecovery }
   | { kind: "discarding"; staged: StagedRecovery }
   | { kind: "promoted"; summary: BackupSummary }
@@ -49,6 +54,9 @@ type RestoreState =
       staged?: StagedRecovery;
       incomplete?: boolean;
       unresumable?: boolean;
+      uncertain?: boolean;
+      invalid?: boolean;
+      resuming?: boolean;
     };
 
 function message(error: unknown) {
@@ -76,6 +84,13 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
   const [pendingError, setPendingError] = useState<string | null>(null);
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement | null>(null);
+  const operation = useRef(false);
+  const stageTitle = useRef<HTMLHeadingElement | null>(null);
+  const busy = ["verifying", "staging", "promoting", "discarding"].includes(restore.kind) || (restore.kind === "error" && restore.resuming === true);
+
+  useEffect(() => {
+    if (!operation.current && ["verified", "staged", "review", "promoted", "error"].includes(restore.kind)) stageTitle.current?.focus();
+  }, [restore.kind]);
 
   useEffect(() => {
     if (workspaceId) return;
@@ -92,7 +107,8 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
   }, [workspaceId]);
 
   async function onExport() {
-    if (!workspaceId) return;
+    if (!workspaceId || operation.current) return;
+    operation.current = true;
     setBackup({ kind: "working" });
     try {
       const { blob, filename } = await exportWorkspaceBackup(workspaceId);
@@ -109,35 +125,45 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
       setBackup({ kind: "done", filename });
     } catch (error) {
       setBackup({ kind: "error", message: message(error) });
+    } finally {
+      operation.current = false;
     }
   }
 
   async function onVerify() {
-    if (!selected) return;
+    if (!selected || operation.current) return;
+    operation.current = true;
     setRestore({ kind: "verifying" });
     try {
       setRestore({ kind: "verified", summary: await verifyBackup(selected) });
     } catch (error) {
-      setRestore({ kind: "error", message: message(error) });
+      setRestore({ kind: "error", message: message(error), invalid: error instanceof RecoveryApiError && ["invalid-backup", "incompatible-backup"].includes(error.kind) });
+    } finally {
+      operation.current = false;
     }
   }
 
   async function onStage(summary: BackupSummary) {
-    if (!selected) return;
+    if (!selected || operation.current) return;
+    operation.current = true;
     setRestore({ kind: "staging", summary });
     try {
       setRestore({ kind: "staged", staged: await stageRecovery(selected) });
     } catch (error) {
-      setRestore({ kind: "error", message: message(error) });
+      setRestore({ kind: "error", message: message(error), uncertain: true });
+    } finally {
+      operation.current = false;
     }
   }
 
   async function onPromote(staged: StagedRecovery) {
-    if (!confirmed) return;
+    if (!confirmed || operation.current || !staged.promotable) return;
+    operation.current = true;
     setRestore({ kind: "promoting", staged });
     try {
       const summary = await promoteRecovery(staged.recovery_id, { confirm: true });
       setConfirmed(false);
+      setPending((items) => items.filter((item) => item.recovery_id !== staged.recovery_id));
       setRestore({ kind: "promoted", summary });
     } catch (error) {
       setRestore({
@@ -146,16 +172,22 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
         staged,
         incomplete: isIncomplete(error),
         unresumable: isUnresumable(error),
+        uncertain: !(error instanceof RecoveryApiError) || ["unavailable", "invalid-response", "local-failure"].includes(error.kind),
       });
+    } finally {
+      operation.current = false;
     }
   }
 
   /** Retomada: a confirmação explícita já foi dada quando a promoção começou. */
   async function onResume(staged: StagedRecovery) {
-    setRestore({ kind: "promoting", staged });
+    if (operation.current) return;
+    operation.current = true;
+    setRestore({ kind: "error", message: "A promoção interrompida está sendo retomada.", staged, incomplete: true, resuming: true });
     try {
       const summary = await promoteRecovery(staged.recovery_id, { confirm: true });
       setConfirmed(false);
+      setPending((items) => items.filter((item) => item.recovery_id !== staged.recovery_id));
       setRestore({ kind: "promoted", summary });
     } catch (error) {
       setRestore({
@@ -164,7 +196,10 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
         staged,
         incomplete: isIncomplete(error),
         unresumable: isUnresumable(error),
+        uncertain: !(error instanceof RecoveryApiError) || ["unavailable", "invalid-response", "local-failure"].includes(error.kind),
       });
+    } finally {
+      operation.current = false;
     }
   }
 
@@ -176,6 +211,8 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
   }
 
   async function onDiscard(staged: StagedRecovery, acceptIncomplete?: true) {
+    if (operation.current) return;
+    operation.current = true;
     setRestore({ kind: "discarding", staged });
     try {
       await discardRecovery(
@@ -195,11 +232,16 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
         unresumable: isUnresumable(error),
       });
       return;
+    } finally {
+      operation.current = false;
     }
+    setPending((items) => items.filter((item) => item.recovery_id !== staged.recovery_id));
     resetRestore();
   }
 
   async function onAbandon(staged: StagedRecovery) {
+    if (operation.current) return;
+    operation.current = true;
     setRestore({ kind: "discarding", staged });
     try {
       await abandonRecovery(staged.recovery_id);
@@ -211,11 +253,16 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
         unresumable: true,
       });
       return;
+    } finally {
+      operation.current = false;
     }
+    setPending((items) => items.filter((item) => item.recovery_id !== staged.recovery_id));
     resetRestore();
   }
 
   async function actOnPending(item: PendingRecovery, action: "DISCARD" | "ABANDON") {
+    if (operation.current) return;
+    operation.current = true;
     setPendingAction(item.recovery_id);
     setPendingError(null);
     try {
@@ -226,6 +273,7 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
       setPendingError(message(error));
     } finally {
       setPendingAction(null);
+      operation.current = false;
     }
   }
 
@@ -235,6 +283,9 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
     }
     if (item.reason === "promotion_cannot_converge" || item.reason === "staging_identity_mismatch") {
       return "Esta promoção não pode mais convergir. Abandonar remove somente a cópia preparada; a perícia ativa permanece como está.";
+    }
+    if (item.state === "RECOVERY_UNRESUMABLE" || (item.state === "FAILED_RECOVERABLE" && item.reason !== null)) {
+      return "Não foi possível validar o estado desta recuperação. A cópia foi preservada e só será removida por abandono explícito.";
     }
     if (item.state === "FAILED_RECOVERABLE") {
       return "Uma promoção foi interrompida. A cópia preservada permite retomar o que falta.";
@@ -246,9 +297,10 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
   }
 
   function openPending(item: PendingRecovery) {
-    if (item.summary === null) return;
+    if (item.summary === null || operation.current) return;
+    setConfirmed(false);
     setRestore({
-      kind: "staged",
+      kind: "review",
       staged: {
         recovery_id: item.recovery_id,
         summary: item.summary,
@@ -261,265 +313,152 @@ export function WorkspaceRecoveryView({ workspaceId }: WorkspaceRecoveryViewProp
 
   function discardButton(staged: StagedRecovery, disabled = false) {
     return (
-      <button type="button" onClick={() => onDiscard(staged)} disabled={disabled}>
+      <button className="text-action" type="button" onClick={() => onDiscard(staged)} disabled={disabled}>
         Descartar recuperação preparada
       </button>
     );
   }
 
-  function summaryList(summary: BackupSummary) {
-    return (
-      <dl className="recovery-summary">
-        <div><dt>Perícia</dt><dd>{summary.workspace_name}</dd></div>
-        <div><dt>Identidade</dt><dd><code>{summary.workspace_id}</code></dd></div>
-        <div><dt>Criada em</dt><dd>{summary.workspace_created_at}</dd></div>
-        <div><dt>Versão do produto</dt><dd>{summary.product_release}</dd></div>
-        <div><dt>Revisões</dt><dd>{summary.artifact_revisions}</dd></div>
-        <div><dt>Documentos privados</dt><dd>{summary.private_contents}</dd></div>
-      </dl>
-    );
+  async function refreshRecovery() {
+    if (operation.current) return;
+    operation.current = true;
+    setPendingAction("refresh");
+    try {
+      const items = await listPendingRecoveries();
+      setPending(items);
+      setPendingError(null);
+      resetRestore();
+    } catch (error) {
+      setPendingError(message(error));
+    } finally {
+      setPendingAction(null);
+      operation.current = false;
+    }
   }
 
-  return (
-    <section className="workspace-stage" aria-labelledby="recuperacao-titulo">
-      <h2 id="recuperacao-titulo">Backup e recuperação</h2>
+  function summaryList(summary: BackupSummary) {
+    return <>
+      <dl className="recovery-summary">
+        <div><dt>Perícia</dt><dd>{summary.workspace_name}</dd></div>
+        <div><dt>Criada em</dt><dd><time dateTime={summary.workspace_created_at}>{new Date(summary.workspace_created_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}</time></dd></div>
+        <div><dt>Revisões preservadas</dt><dd>{summary.artifact_revisions}</dd></div>
+        <div><dt>Documentos e arquivos privados</dt><dd>{summary.private_contents}</dd></div>
+      </dl>
+      <TechnicalDetails><dl className="recovery-summary">
+        <div><dt>Identidade da perícia</dt><dd><code>{summary.workspace_id}</code></dd></div>
+        <div><dt>SHA-256 do backup</dt><dd><code>{summary.backup_sha256}</code></dd></div>
+        <div><dt>Versão do produto</dt><dd>{summary.product_release}</dd></div>
+        <div><dt>Versão do armazenamento</dt><dd>{summary.storage_schema_version}</dd></div>
+      </dl></TechnicalDetails>
+    </>;
+  }
 
-      {!workspaceId && pending.length > 0 ? (
-        <section aria-labelledby="recuperacoes-pendentes-titulo">
-          <h3 id="recuperacoes-pendentes-titulo">Recuperações pendentes</h3>
-          <p>Estas cópias sobreviveram ao fechamento ou a uma interrupção e continuam isoladas.</p>
-          <ul>
-            {pending.map((item) => (
-              <li key={item.recovery_id}>
-                <p>{pendingMessage(item)}</p>
-                {item.summary ? summaryList(item.summary) : (
-                  <p><code>{item.recovery_id}</code> — resumo indisponível</p>
-                )}
-                {item.allowed_actions.includes("PROMOTE") && item.summary ? (
-                  <button type="button" onClick={() => openPending(item)}>
-                    {item.state === "STAGED"
-                      ? "Conferir recuperação preparada"
-                      : "Retomar promoção"}
-                  </button>
-                ) : null}
-                {(item.allowed_actions.includes("DISCARD") || item.allowed_actions.includes("RETRY_DISCARD")) ? (
-                  <button
-                    type="button"
-                    disabled={pendingAction === item.recovery_id}
-                    onClick={() => actOnPending(item, "DISCARD")}
-                  >
-                    Descartar recuperação preparada
-                  </button>
-                ) : null}
-                {(item.allowed_actions.includes("ABANDON") || item.allowed_actions.includes("RETRY_ABANDON")) ? (
-                  <button
-                    type="button"
-                    disabled={pendingAction === item.recovery_id}
-                    onClick={() => actOnPending(item, "ABANDON")}
-                  >
-                    Abandonar cópia de recuperação
-                  </button>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      {pendingError ? <p role="alert">{pendingError}</p> : null}
+  const reviewing = restore.kind === "review" || restore.kind === "promoting";
+  const staged = "staged" in restore ? restore.staged : undefined;
+  const phaseTitle = restore.kind === "verifying" ? "Verificar integridade"
+    : restore.kind === "verified" || restore.kind === "staging" ? "Preparar recuperação"
+    : restore.kind === "staged" ? "Recuperação preparada para revisão"
+    : reviewing ? "Revisar recuperação"
+    : restore.kind === "promoted" ? "Perícia recuperada"
+    : restore.kind === "error" ? restore.invalid ? "Backup não pôde ser validado" : "Não foi possível concluir esta etapa"
+    : selected ? "Verificar integridade" : "Selecionar backup";
 
-      {workspaceId ? (
-      <section aria-labelledby="backup-titulo">
-        <h3 id="backup-titulo">Criar backup</h3>
-        <p>
-          Gera um pacote com esta perícia — revisões, documentos e proveniência —
-          para você guardar onde quiser. O pacote fica só na sua máquina.
-        </p>
-        <button className="primary-action" type="button" onClick={onExport} disabled={backup.kind === "working"}>
-          {backup.kind === "working" ? "Gerando backup…" : "Criar backup"}
-        </button>
-        {backup.kind === "done" ? (
-          <p role="status">Backup gerado: {backup.filename}</p>
-        ) : null}
-        {backup.kind === "error" ? <p role="alert">{backup.message}</p> : null}
-      </section>
-      ) : null}
+  return <section className="workspace-stage recovery-editorial" aria-labelledby="recuperacao-titulo" aria-busy={busy || pendingAction !== null}>
+    <h2 id="recuperacao-titulo">Recuperar uma perícia</h2>
+    <p>Selecione um backup criado pelo Sistema Pericial. Nada será substituído nesta etapa.</p>
 
-      <section aria-labelledby="restaurar-titulo">
-        <h3 id="restaurar-titulo">Restaurar de um backup</h3>
-        <p>
-          A restauração acontece em etapas. Um backup verificado <strong>não</strong> é
-          uma perícia ativa, e a cópia recuperada fica <strong>isolada</strong> até você
-          promovê-la explicitamente. Nada existente é sobrescrito.
-        </p>
+    {workspaceId && <details className="recovery-backup"><summary>Criar backup desta perícia</summary>
+      <p>Gera um pacote com as revisões, documentos e proveniência desta perícia. O pacote fica só na sua máquina.</p>
+      <button className="text-action" type="button" onClick={onExport} aria-disabled={busy || backup.kind === "working" || pendingAction !== null}>Criar backup</button>
+      {backup.kind === "working" && <p role="status">Gerando backup…</p>}
+      {backup.kind === "done" && <p role="status">Backup gerado: {backup.filename}</p>}
+      {backup.kind === "error" && <p role="alert">{backup.message}</p>}
+    </details>}
 
-        <ol className="recovery-steps">
-          <li>Verificar backup</li>
-          <li>Preparar cópia recuperada</li>
-          <li>Conferir</li>
-          <li>Promover recuperação</li>
-        </ol>
+    {restore.kind === "idle" && pending.length > 0 && <section className="recovery-pending" aria-labelledby="recuperacoes-pendentes-titulo">
+      <h3 id="recuperacoes-pendentes-titulo">Recuperações pendentes</h3>
+      <p>Estas cópias sobreviveram ao fechamento ou a uma interrupção. A situação de cada promoção está indicada abaixo.</p>
+      <ul>{pending.map((item) => <li key={item.recovery_id}>
+        <p>{pendingMessage(item)}</p>
+        {item.summary ? summaryList(item.summary) : <p>Resumo indisponível.</p>}
+        {item.allowed_actions.includes("PROMOTE") && item.summary && <button className="text-action" type="button" aria-disabled={pendingAction !== null} onClick={() => openPending(item)}>{item.state === "STAGED" ? "Conferir recuperação preparada" : "Retomar promoção"}</button>}
+        {(item.allowed_actions.includes("DISCARD") || item.allowed_actions.includes("RETRY_DISCARD")) && <button className="text-action" type="button" disabled={pendingAction !== null} onClick={() => actOnPending(item, "DISCARD")}>Descartar recuperação preparada</button>}
+        {(item.allowed_actions.includes("ABANDON") || item.allowed_actions.includes("RETRY_ABANDON")) && <button className="text-action" type="button" disabled={pendingAction !== null} onClick={() => actOnPending(item, "ABANDON")}>Abandonar cópia de recuperação</button>}
+      </li>)}</ul>
+    </section>}
 
-        <label htmlFor="backup-file">Arquivo de backup</label>
-        <input
-          id="backup-file"
-          ref={fileInput}
-          type="file"
-          onChange={(event) => {
-            setSelected(event.target.files?.[0] ?? null);
-            setConfirmed(false);
-            setRestore({ kind: "idle" });
-          }}
-        />
+    {pendingError && <div className="recovery-alert" role="alert"><p>Não foi possível verificar a recuperação.</p><p>{pendingError}</p>
+      <button className="text-action" type="button" aria-disabled={pendingAction !== null} onClick={refreshRecovery}>Verificar recuperação</button>
+    </div>}
 
-        {restore.kind === "idle" || restore.kind === "verifying" ? (
-          <button
-            className="primary-action"
-            type="button"
-            onClick={onVerify}
-            disabled={!selected || restore.kind === "verifying"}
-          >
-            {restore.kind === "verifying" ? "Verificando…" : "1. Verificar backup"}
-          </button>
-        ) : null}
+    <section className="recovery-phase" aria-labelledby="recovery-phase-title">
+      <h3 id="recovery-phase-title" ref={stageTitle} tabIndex={-1}>{phaseTitle}</h3>
+      <label className="visually-hidden" htmlFor="backup-file">Arquivo de backup</label>
+      <input id="backup-file" className="visually-hidden" ref={fileInput} type="file" tabIndex={-1}
+        disabled={busy || backup.kind === "working" || pendingAction !== null || !["idle", "verified", "error"].includes(restore.kind)}
+        onChange={(event) => {
+          if (operation.current || !["idle", "verified", "error"].includes(restore.kind) || (restore.kind === "error" && restore.staged)) return;
+          setSelected(event.target.files?.[0] ?? null); setConfirmed(false); setRestore({ kind: "idle" });
+        }} />
 
-        {restore.kind === "verified" || restore.kind === "staging" ? (
-          <div>
-            <p role="status">
-              Backup verificado. Ele ainda <strong>não</strong> está ativo.
-            </p>
-            {summaryList(restore.summary)}
-            <button
-              className="primary-action"
-              type="button"
-              onClick={() => onStage(restore.summary)}
-              disabled={restore.kind === "staging"}
-            >
-              {restore.kind === "staging"
-                ? "Preparando cópia isolada…"
-                : "2. Preparar cópia recuperada"}
-            </button>
-          </div>
-        ) : null}
+      {selected && ["idle", "verifying", "verified", "staging"].includes(restore.kind) && <div className="recovery-selected"><strong>{selected.name}</strong><span>{selected.size.toLocaleString("pt-BR")} bytes</span></div>}
+      {restore.kind === "idle" && !selected && <button className="primary-action" type="button" aria-disabled={backup.kind === "working" || pendingAction !== null} onClick={() => { if (!operation.current) fileInput.current?.click(); }}>Selecionar backup</button>}
+      {(restore.kind === "idle" && selected || restore.kind === "verifying") && <>
+        {restore.kind === "verifying" && <p role="status">Verificando backup…</p>}
+        <button className="primary-action" type="button" aria-disabled={busy || backup.kind === "working" || pendingAction !== null} onClick={onVerify}>Verificar backup</button>
+        {!busy && <button className="text-action" type="button" onClick={() => fileInput.current?.click()}>Selecionar outro backup</button>}
+      </>}
 
-        {restore.kind === "staged" ||
-        restore.kind === "promoting" ||
-        restore.kind === "discarding" ? (
-          <div>
-            {restore.staged.promotable ? (
-              <>
-                <p role="status">
-                  {restore.staged.resuming
-                    ? "Esta é a RETOMADA de uma promoção interrompida: parte da perícia já foi gravada nesta instalação. A cópia isolada guarda o que falta."
-                    : "Cópia recuperada preparada em área isolada. Ela não é a perícia ativa e não substituiu nada. Confira antes de promover."}
-                </p>
-                {summaryList(restore.staged.summary)}
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={confirmed}
-                    onChange={(event) => setConfirmed(event.target.checked)}
-                  />
-                  Confirmo que quero promover esta recuperação e torná-la a perícia
-                  ativa.
-                </label>
-                <button
-                  className="authority-action"
-                  type="button"
-                  onClick={() => onPromote(restore.staged)}
-                  disabled={!confirmed || restore.kind !== "staged"}
-                >
-                  {restore.kind === "promoting"
-                    ? "Promovendo…"
-                    : "4. Promover recuperação"}
-                </button>
-              </>
-            ) : (
-              <>
-                {/* PREPARADO != PROMOVÍVEL. O produto diz o motivo agora, em vez
-                    de prometer uma promoção que recusaria depois. */}
-                <p role="alert">
-                  {notPromotableMessage(restore.staged.not_promotable_reason)}
-                </p>
-                {summaryList(restore.staged.summary)}
-              </>
-            )}
-            {!restore.staged.promotable && restore.staged.resuming ? (
-              <button type="button" onClick={() => onAbandon(restore.staged)}>
-                Abandonar cópia de recuperação
-              </button>
-            ) : restore.staged.resuming
-              ? null
-              : discardButton(restore.staged, restore.kind !== "staged")}
-          </div>
-        ) : null}
+      {(restore.kind === "verified" || restore.kind === "staging") && <>
+        <p role="status">{restore.kind === "staging" ? "Preparando recuperação…" : "Backup válido"}</p>
+        {summaryList(restore.summary)}
+        <p>Os dados serão preparados em uma área separada para revisão.</p>
+        <button className="primary-action" type="button" aria-disabled={busy} onClick={() => onStage(restore.summary)}>Preparar recuperação</button>
+      </>}
 
-        {restore.kind === "promoted" ? (
-          <div>
-            <p role="status">
-              Recuperação promovida. A perícia está ativa e pode ser aberta normalmente.
-            </p>
-            {summaryList(restore.summary)}
-          </div>
-        ) : null}
+      {staged && ["staged", "review", "promoting", "discarding"].includes(restore.kind) && <>
+        <p role="status">{restore.kind === "promoting" ? "Promovendo recuperação…" : restore.kind === "discarding" ? "Descartando recuperação preparada…" : staged.resuming
+          ? "Esta é a RETOMADA de uma promoção interrompida: parte da perícia já foi gravada nesta instalação. A cópia preservada guarda o que falta."
+          : "Os dados estão preparados em área isolada. A cópia ainda não é a perícia ativa."}</p>
+        {summaryList(staged.summary)}
+        {!staged.promotable ? <p role="alert">{notPromotableMessage(staged.not_promotable_reason)}</p>
+          : restore.kind === "staged" ? <button className="primary-action" type="button" onClick={() => { setConfirmed(false); setRestore({ kind: "review", staged }); }}>Revisar recuperação</button>
+          : reviewing && <>
+            <p>Este é o conteúdo que será promovido.</p>
+            <div className="recovery-confirmation"><h4>Confirmar promoção</h4>
+              <p>Promover esta recuperação tornará os dados preparados disponíveis como perícia recuperada. A promoção será executada somente após sua confirmação.</p>
+              <label><input type="checkbox" checked={confirmed} disabled={busy} onChange={(event) => setConfirmed(event.target.checked)} />Confirmo que quero promover esta recuperação.</label>
+            </div>
+            <button className="authority-action" type="button" disabled={!confirmed} aria-disabled={busy} onClick={() => onPromote(staged)}>Promover recuperação</button>
+          </>}
+        {!staged.promotable && staged.resuming ? <button className="text-action" type="button" disabled={busy} onClick={() => onAbandon(staged)}>Abandonar cópia de recuperação</button> : !staged.resuming && discardButton(staged, busy)}
+      </>}
 
-        {restore.kind === "error" ? (
-          <div>
-            <p role="alert">{restore.message}</p>
-            {/* "Nada foi promovido" só pode ser dito quando é verdade. Depois
-                que a promoção começou a gravar, a perícia viva EXISTE, ainda
-                que parcial — e a única saída honesta é concluí-la. */}
-            {restore.incomplete && restore.staged ? (
-              <>
-                <p>
-                  Parte da perícia já foi gravada nesta instalação. A cópia
-                  recuperada segue <strong>isolada</strong> e guarda o que falta:
-                  retome a promoção para concluir. <strong>Não</strong> descarte
-                  esta recuperação — ela é o que permite terminar.
-                </p>
-                {summaryList(restore.staged.summary)}
-                <button type="button" onClick={() => onResume(restore.staged!)}>
-                  Retomar promoção
-                </button>
-                {/* Saída CONSCIENTE: existe para quando a retomada é possível
-                    em tese e inviável na prática (disco cheio, e é a própria
-                    cópia que ocupa o espaço). Nunca é o caminho sugerido. */}
-                <button type="button" onClick={() => onDiscard(restore.staged!, true)}>
-                  Descartar mesmo assim, aceitando a perícia incompleta
-                </button>
-              </>
-            ) : restore.unresumable && restore.staged ? (
-              <>
-                <p>
-                  A perícia desta instalação divergiu do pacote, então esta
-                  promoção não converge mais. Nada além do que já foi gravado
-                  será alterado. A cópia preparada pode ser descartada.
-                </p>
-                {summaryList(restore.staged.summary)}
-                <button type="button" onClick={() => onAbandon(restore.staged!)}>
-                  Abandonar cópia de recuperação
-                </button>
-              </>
-            ) : restore.staged ? (
-              <>
-                <p>Nada foi promovido. Nenhuma perícia existente foi alterada.</p>
-                <p>
-                  A cópia recuperada preparada continua <strong>isolada</strong> nesta
-                  máquina. Enquanto ela existir, a saída é descartá-la explicitamente.
-                </p>
-                {summaryList(restore.staged.summary)}
-                {discardButton(restore.staged)}
-              </>
-            ) : (
-              <>
-                <p>Nada foi promovido. Nenhuma perícia existente foi alterada.</p>
-                <button type="button" onClick={resetRestore}>
-                  Recomeçar
-                </button>
-              </>
-            )}
-          </div>
-        ) : null}
-      </section>
+      {restore.kind === "promoted" && <>
+        <p role="status">Recuperação promovida. A perícia pode ser aberta normalmente.</p>
+        {summaryList(restore.summary)}
+        <a className="primary-action" href={workspacePath(restore.summary.workspace_id)} onClick={navigate}>Abrir perícia recuperada</a>
+      </>}
+
+      {restore.kind === "error" && <>
+        <div className={restore.resuming ? "recovery-status" : "recovery-alert"} role={restore.resuming ? "status" : "alert"}><p>{restore.resuming ? "Retomando promoção…" : restore.invalid ? "Este backup não pode ser usado com segurança." : restore.uncertain ? "Não foi possível verificar a recuperação." : "A operação não foi concluída."}</p><p>{restore.message}</p></div>
+        {restore.uncertain ? <>
+          <p>O resultado da operação não foi confirmado. Verifique as recuperações preservadas antes de enviar outro comando. Uma promoção concluída também pode ser encontrada na lista de perícias.</p>
+          <button className="primary-action" type="button" onClick={refreshRecovery} aria-disabled={pendingAction !== null}>Verificar recuperação</button>
+          <a className="text-action" href="/" onClick={navigate}>Ver perícias</a>
+        </> : restore.incomplete && restore.staged ? <>
+          <p>Parte da perícia já foi gravada nesta instalação. A cópia preservada guarda o que falta: retome a promoção para concluir.</p>
+          {summaryList(restore.staged.summary)}
+          <button className="primary-action" type="button" aria-disabled={busy} onClick={() => onResume(restore.staged!)}>Retomar promoção</button>
+          <TechnicalDetails summary="Opção de descarte excepcional"><p>O descarte remove a cópia que permite terminar esta promoção. A perícia poderá permanecer incompleta.</p><button type="button" onClick={() => onDiscard(restore.staged!, true)}>Descartar mesmo assim, aceitando a perícia incompleta</button></TechnicalDetails>
+        </> : restore.unresumable && restore.staged ? <>
+          <p>A perícia desta instalação divergiu do pacote, então esta promoção não converge mais. A cópia preparada pode ser abandonada.</p>
+          {summaryList(restore.staged.summary)}<button className="primary-action" type="button" onClick={() => onAbandon(restore.staged!)}>Abandonar cópia de recuperação</button>
+        </> : restore.staged ? <>
+          <p>A cópia recuperada preparada continua isolada. Enquanto ela existir, a saída é descartá-la explicitamente.</p>
+          {summaryList(restore.staged.summary)}{discardButton(restore.staged)}
+        </> : <button className="primary-action" type="button" onClick={resetRestore}>Selecionar outro backup</button>}
+      </>}
     </section>
-  );
+  </section>;
 }
