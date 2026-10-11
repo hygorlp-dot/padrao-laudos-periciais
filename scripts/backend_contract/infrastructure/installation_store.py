@@ -226,10 +226,24 @@ class SQLiteInstallationStore:
             raise RepositoryError("falha ao ler o histórico da configuração") from exc
         return tuple(_revision_from_row(tuple(row)) for row in rows)
 
-    def append_if_latest(self, *, setting_kind: str, setting_id: str, revision_id: str, created_at: str, payload: object, expected_revision: int | None) -> InstallationSettingRevision:
+    def append_if_latest(self, *, setting_kind: str, setting_id: str, revision_id: str, created_at: str, payload: object, expected_revision: int | None, expected_dependencies: tuple = ()) -> InstallationSettingRevision:
         kind, identity = _key(setting_kind, "tipo"), _key(setting_id, "identidade")
         if expected_revision is not None and (type(expected_revision) is not int or expected_revision < 1):
             raise ValueError("revisão esperada inválida")
+        dependencies = []
+        for dependency in expected_dependencies:
+            if type(dependency) is not tuple or len(dependency) != 4:
+                raise ValueError("dependência de configuração inválida")
+            dep_kind, dep_id, dep_revision, dep_checksum = dependency
+            dep_kind, dep_id = _key(dep_kind, "tipo"), _key(dep_id, "identidade")
+            if (dep_revision is None) != (dep_checksum is None) or (
+                dep_revision is not None and (
+                    type(dep_revision) is not int or dep_revision < 1
+                    or type(dep_checksum) is not str or _SHA256.fullmatch(dep_checksum) is None
+                )
+            ):
+                raise ValueError("revisão de dependência inválida")
+            dependencies.append((dep_kind, dep_id, dep_revision, dep_checksum))
         canonical = canonical_payload_json(payload)
         checksum = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
         revision_id = str(UUID(revision_id))
@@ -241,6 +255,16 @@ class SQLiteInstallationStore:
                 ).fetchone()[0]
                 if current != (expected_revision or 0):
                     raise RepositoryConflict("a configuração foi alterada em outra tela")
+                # Check the other setting in the same SQLite write transaction,
+                # including across connections/processes and absent rows.
+                for dep_kind, dep_id, dep_revision, dep_checksum in dependencies:
+                    row = self._connection.execute(
+                        "SELECT revision, checksum_sha256 FROM installation_setting_revisions WHERE setting_kind = ? AND setting_id = ? ORDER BY revision DESC LIMIT 1",
+                        (dep_kind, dep_id),
+                    ).fetchone()
+                    observed = (None, None) if row is None else tuple(row)
+                    if observed != (dep_revision, dep_checksum):
+                        raise RepositoryConflict("o modelo ou sua seleção foi alterado em outra tela")
                 self._connection.execute(
                     "INSERT INTO installation_setting_revisions (setting_kind, setting_id, revision_id, revision, created_at, checksum_sha256, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (kind, identity, revision_id, current + 1, created_at, checksum, canonical),
