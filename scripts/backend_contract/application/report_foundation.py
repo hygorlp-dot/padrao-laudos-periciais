@@ -173,13 +173,16 @@ def _binding(
     )
 
 
-def _reconcile(snapshot: ReportSnapshot, current: ReportSourceSnapshot) -> ReportSnapshot:
+def _reconcile(snapshot: ReportSnapshot, current: ReportSourceSnapshot, settings=None) -> ReportSnapshot:
     reasons = []
     captured_settings = snapshot.source_snapshot.workspace_settings_revision
     if captured_settings is None:
-        # Legacy rows retain their exact bytes. Only the initial case capture
-        # can precede an unbound report without a later settings refresh.
-        if current.workspace_settings_revision is not None and current.workspace_settings_revision > 1:
+        # Revision 1 may be an explicit first adoption in a legacy case.
+        # Preserve an unbound report only for a proven creation-time capture.
+        if current.workspace_settings_revision is not None and (
+            current.workspace_settings_revision != 1
+            or getattr(settings, "reason", None) != "WORKSPACE_CREATED"
+        ):
             reasons.append("workspace settings changed without a captured report binding")
     elif (
         captured_settings != current.workspace_settings_revision
@@ -516,7 +519,7 @@ def _current(workspace_id, services, get_construction_defect_analysis=None, get_
     pathology_record, pathology = _optional_pathology(
         workspace_id, get_construction_defect_analysis
     )
-    settings_record = None
+    settings_record = settings = None
     if get_workspace_settings is not None:
         settings_record, settings = get_workspace_settings.current(workspace_id)
         if (settings_record is None) != (settings is None) or (
@@ -546,6 +549,7 @@ def _current(workspace_id, services, get_construction_defect_analysis=None, get_
         profile,
         pathology_record,
         pathology,
+        settings,
         binding,
     )
 
@@ -600,7 +604,7 @@ class SaveReportSnapshot:
                 self.get_construction_defect_analysis,
                 self.get_workspace_settings,
             )
-            if _reconcile(snapshot, current[-1]).upstream_stale or _site_location_reasons(snapshot, self.get_site_location, workspace_id) or _property_reasons(snapshot, self.get_property_record, workspace_id) or _process_reasons(snapshot, self.get_process_record, workspace_id):
+            if _reconcile(snapshot, current[-1], current[-2]).upstream_stale or _site_location_reasons(snapshot, self.get_site_location, workspace_id) or _property_reasons(snapshot, self.get_property_record, workspace_id) or _process_reasons(snapshot, self.get_process_record, workspace_id):
                 raise ValueError("Report Snapshot upstream authority is stale")
             def baseline():
                 if expected_revision is None or allow_new_version:
@@ -621,7 +625,7 @@ class SaveReportSnapshot:
                 if allow_new_version:
                     # A new version replaces only a report that can no longer
                     # change itself, and starts every professional review again.
-                    stale = _reconcile(predecessor, current[-1]).upstream_stale or bool(_site_location_reasons(predecessor, self.get_site_location, workspace_id)) or bool(_property_reasons(predecessor, self.get_property_record, workspace_id)) or bool(_process_reasons(predecessor, self.get_process_record, workspace_id))
+                    stale = _reconcile(predecessor, current[-1], current[-2]).upstream_stale or bool(_site_location_reasons(predecessor, self.get_site_location, workspace_id)) or bool(_property_reasons(predecessor, self.get_property_record, workspace_id)) or bool(_process_reasons(predecessor, self.get_process_record, workspace_id))
                     if snapshot.state is not ReportState.DRAFT or snapshot.review_decisions or not (predecessor.state is ReportState.SUPERSEDED or stale):
                         raise ValueError("Report new version requires a superseded or stale predecessor")
                 elif not allow_review_transition and snapshot.review_decisions != predecessor.review_decisions:
@@ -686,7 +690,7 @@ class GetReportSnapshot:
             self.get_construction_defect_analysis,
             self.get_workspace_settings,
         )
-        return record, _with_process_staleness(_with_property_staleness(_with_site_location_staleness(_reconcile(snapshot, current[-1]), self.get_site_location, workspace_id), self.get_property_record, workspace_id), self.get_process_record, workspace_id)
+        return record, _with_process_staleness(_with_property_staleness(_with_site_location_staleness(_reconcile(snapshot, current[-1], current[-2]), self.get_site_location, workspace_id), self.get_property_record, workspace_id), self.get_process_record, workspace_id)
 
 
 def captured_report_review_history(record, current: ReportSnapshot) -> dict | None:
@@ -1007,7 +1011,7 @@ class StartReportVersion:
             self.get_workspace_settings,
         )
         case, inspection, technical, profile, pathology, binding = current[1], current[3], current[5], current[7], current[9], current[-1]
-        stale = _reconcile(stored, binding).upstream_stale or bool(_site_location_reasons(stored, self.get_site_location, workspace_id)) or bool(_property_reasons(stored, self.get_property_record, workspace_id)) or bool(_process_reasons(stored, self.get_process_record, workspace_id))
+        stale = _reconcile(stored, binding, current[-2]).upstream_stale or bool(_site_location_reasons(stored, self.get_site_location, workspace_id)) or bool(_property_reasons(stored, self.get_property_record, workspace_id)) or bool(_process_reasons(stored, self.get_process_record, workspace_id))
         if stored.state is not ReportState.SUPERSEDED and not stale:
             raise ValueError("a new report version requires a superseded or stale report")
         if case.source_inventory_stale or inspection.upstream_stale or technical.upstream_stale:

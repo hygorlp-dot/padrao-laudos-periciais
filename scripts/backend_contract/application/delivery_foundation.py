@@ -533,7 +533,10 @@ class StoreDefaultDeliveryTemplate:
                 or settings_record.checksum_sha256 != binding.workspace_settings_digest
             ):
                 raise ValueError("workspace settings changed since approved report")
-        elif settings_record is not None and settings_record.revision > 1:
+        elif settings_record is not None and (
+            settings_record.revision != 1
+            or getattr(settings, "reason", None) != "WORKSPACE_CREATED"
+        ):
             raise ValueError("workspace settings changed since approved report without a captured binding")
         if settings is None:
             content = default_report_template(report.editorial_profile, professional=report.presentation is not None)

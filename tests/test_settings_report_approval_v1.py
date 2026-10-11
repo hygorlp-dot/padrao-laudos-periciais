@@ -154,9 +154,9 @@ def test_refresh_without_profile_invalidates_approval_and_preserves_captured_his
             target.close()
 
 
-def _settings_reader(workspace_id, revision=1, digest="f" * 64):
+def _settings_reader(workspace_id, revision=1, digest="f" * 64, reason="WORKSPACE_CREATED"):
     record = SimpleNamespace(workspace_id=workspace_id, artifact_kind=WORKSPACE_SETTINGS_KIND, artifact_id=WORKSPACE_SETTINGS_ID, revision=revision, checksum_sha256=digest)
-    return SimpleNamespace(current=lambda _w: (record, SimpleNamespace(workspace_id=workspace_id)))
+    return SimpleNamespace(current=lambda _w: (record, SimpleNamespace(workspace_id=workspace_id, reason=reason)))
 
 
 def _report_reader(snapshot, settings):
@@ -187,6 +187,51 @@ def test_legacy_report_bytes_are_unchanged_but_a_later_case_refresh_requires_rev
     assert thaw_payload(stored.payload) == mapping
 
 
+@pytest.mark.parametrize("reason", ["UPDATED_FROM_INSTALLATION_DEFAULTS", None])
+def test_first_explicit_or_unproven_capture_cannot_keep_legacy_approval(reason):
+    report = bound_report()
+    reader, stored = _report_reader(report, _settings_reader(report.workspace_id, reason=reason))
+    observed = reader.execute(report.workspace_id)[1]
+    assert observed.upstream_stale and observed.state is ReportState.DRAFT
+    assert observed.review_decisions == ()
+    assert thaw_payload(stored.payload) == report_snapshot_to_mapping(report)
+
+
+def test_first_real_explicit_refresh_of_legacy_case_requires_review():
+    import hashlib
+    from uuid import uuid4
+    from scripts.backend_contract.application.installation_settings import WorkspaceSettings, SETTING_KINDS, default_payload
+    from scripts.backend_contract.application.ports import ArtifactRevisionNotFound
+    from scripts.backend_contract.installation_settings import SettingKind
+
+    report = bound_report()
+    rows = []
+    def latest(*_args):
+        if not rows:
+            raise ArtifactRevisionNotFound("absent")
+        return rows[-1]
+    def append(**kw):
+        assert kw["expected_revision"] is None and not rows
+        checksum = hashlib.sha256(json.dumps(kw["payload"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
+        row = SimpleNamespace(**{**kw, "payload": _freeze_payload(kw["payload"]), "revision": 1, "checksum_sha256": checksum})
+        rows.append(row)
+        return row
+    values = {kind: default_payload(kind) for kind in SETTING_KINDS}
+    values[SettingKind.DOCUMENT_PRESENTATION_PROFILE]["cover"]["title"] = "Synthetic first capture after approval"
+    installation = SimpleNamespace(consistent=nullcontext, effective=lambda: {"sources": {kind.value: None for kind in SETTING_KINDS}, "values": values}, asset_record=lambda _role: (None, None))
+    settings = WorkspaceSettings(installation, SimpleNamespace(append_if_latest=append), SimpleNamespace(execute=latest), None, nullcontext, SimpleNamespace(now=lambda: datetime.now(UTC)), SimpleNamespace(new_uuid=uuid4))
+    reader, stored = _report_reader(report, settings)
+    assert reader.execute(report.workspace_id)[1] == report
+    settings.update_from_defaults(report.workspace_id, include_profile=False, expected_snapshot_revision=None, expected_profile_revision=None)
+    record, capture = settings.current(report.workspace_id)
+    assert record.revision == 1 and capture.reason == "UPDATED_FROM_INSTALLATION_DEFAULTS"
+    observed = reader.execute(report.workspace_id)[1]
+    assert observed.upstream_stale and observed.state is ReportState.DRAFT and observed.review_decisions == ()
+    assert thaw_payload(stored.payload) == report_snapshot_to_mapping(report)
+    with pytest.raises(ValueError, match="approved report"):
+        StoreDefaultDeliveryTemplate(reader, SimpleNamespace(), settings, SimpleNamespace()).execute(report.workspace_id)
+
+
 @pytest.mark.parametrize("revision,digest", [(2, "f" * 64), (1, "a" * 64), (None, None)])
 def test_settings_revision_digest_or_missing_capture_cannot_resurrect_approval(revision, digest):
     report = bound_report()
@@ -214,12 +259,12 @@ def test_bound_report_reopens_with_its_case_capture_without_accessing_global_def
     assert reader.execute(report.workspace_id)[1] == report
 
 
-@pytest.mark.parametrize("revision,digest,legacy", [(2, "a" * 64, False), (1, "a" * 64, False), (None, None, False), (2, "a" * 64, True)])
-def test_template_cannot_consume_settings_that_advanced_after_the_approved_report_read(revision, digest, legacy):
+@pytest.mark.parametrize("revision,digest,legacy,reason", [(2, "a" * 64, False, "WORKSPACE_CREATED"), (1, "a" * 64, False, "WORKSPACE_CREATED"), (None, None, False, "WORKSPACE_CREATED"), (2, "a" * 64, True, "WORKSPACE_CREATED"), (1, "f" * 64, True, "UPDATED_FROM_INSTALLATION_DEFAULTS"), (1, "f" * 64, True, None)])
+def test_template_cannot_consume_settings_that_advanced_after_the_approved_report_read(revision, digest, legacy, reason):
     report = bound_report()
     if not legacy:
         report = replace(report, source_snapshot=replace(report.source_snapshot, workspace_settings_revision=1, workspace_settings_digest="f" * 64))
-    settings = SimpleNamespace(assets=(), presentation=DEFAULT_PRESENTATION, branding=DEFAULT_BRANDING, template_selection=SimpleNamespace(mode=TemplateMode.PRODUCT_DEFAULT))
+    settings = SimpleNamespace(assets=(), presentation=DEFAULT_PRESENTATION, branding=DEFAULT_BRANDING, template_selection=SimpleNamespace(mode=TemplateMode.PRODUCT_DEFAULT), reason=reason)
     record = SimpleNamespace(revision=revision, checksum_sha256=digest) if revision is not None else None
     if record is None:
         settings = None
