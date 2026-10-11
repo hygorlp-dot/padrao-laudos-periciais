@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { navigate } from "../app/router";
 import {
@@ -7,6 +7,7 @@ import {
   SettingsApiError,
   type WorkspaceSettingsView,
 } from "../data/installationSettings";
+import { CapturedSettingsSummary } from "./CapturedSettingsSummary";
 
 // Configurações capturadas por esta perícia (#270). Mudar o padrão da
 // instalação não altera a perícia; atualizar é um ato explícito, com as
@@ -36,12 +37,20 @@ const PROFILE_FIELDS: Record<string, string> = {
 };
 
 export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string }) {
+  return <WorkspaceSettingsContent key={workspaceId} workspaceId={workspaceId} />;
+}
+
+function WorkspaceSettingsContent({ workspaceId }: { workspaceId: string }) {
   const [view, setView] = useState<WorkspaceSettingsView | null>(null);
   const [failed, setFailed] = useState(false);
   const [version, setVersion] = useState(0);
   const [confirming, setConfirming] = useState(false);
   const [includeProfile, setIncludeProfile] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [uncertain, setUncertain] = useState(false);
+  const operation = useRef(false);
+  const confirmation = useRef<HTMLDivElement>(null);
+  const title = useRef<HTMLHeadingElement>(null);
   const [message, setMessage] = useState<{ kind: "status" | "alert"; text: string } | null>(null);
 
   useEffect(() => {
@@ -53,6 +62,10 @@ export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string })
     return () => controller.abort();
   }, [workspaceId, version]);
 
+  useEffect(() => {
+    if (confirming) confirmation.current?.querySelector<HTMLElement>("input, button")?.focus();
+  }, [confirming]);
+
   if (failed) {
     return (
       <section className="analysis-section workspace-settings" aria-labelledby="workspace-settings-title">
@@ -62,13 +75,14 @@ export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string })
       </section>
     );
   }
-  if (!view) return null;
+  if (!view) return <p role="status">Consultando as configurações desta perícia…</p>;
 
   const { differences } = view;
   if (differences === null) {
     return (
       <section className="analysis-section workspace-settings" aria-labelledby="workspace-settings-title">
         <h3 id="workspace-settings-title">Configurações desta perícia</h3>
+        <CapturedSettingsSummary key={view.revision} workspaceId={workspaceId} snapshot={view.snapshot} revision={view.revision} />
         <p className="field-hint">{view.revision ? `Cópia das configurações tirada em ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium" }).format(new Date(view.updated_at ?? ""))} (revisão ${view.revision}).` : "Perícia criada antes das configurações centrais."}</p>
         <p role="status">As Configurações da instalação não puderam ser abertas agora. Esta perícia continua com a cópia dela; a comparação e a atualização voltam quando as Configurações abrirem.</p>
       </section>
@@ -81,6 +95,8 @@ export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string })
   const profileRevision = differences.profile_revision;
 
   async function apply() {
+    if (operation.current || uncertain) return;
+    operation.current = true;
     setBusy(true);
     setMessage(null);
     try {
@@ -94,31 +110,43 @@ export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string })
       const profileKept = !includeProfile && (next.differences?.profile_changes.length ?? 0) > 0;
       setMessage({ kind: "status", text: includeProfile ? "Configurações e perfil atualizados. Um laudo já aprovado precisa ser revisado de novo." : profileKept ? "Configurações atualizadas; o perfil profissional desta perícia não mudou. A versão anterior continua no histórico." : "Configurações atualizadas; a versão anterior continua no histórico." });
     } catch (error) {
-      setMessage({ kind: "alert", text: error instanceof SettingsApiError && error.kind === "conflict" ? "As configurações desta perícia mudaram em outra tela. Os dados foram recarregados; confira de novo." : "Não foi possível atualizar. Esta perícia continua com as configurações anteriores." });
-      if (error instanceof SettingsApiError && error.kind === "conflict") setVersion((value) => value + 1);
+      // A resposta pode se perder depois da gravação. Observar antes de oferecer outro comando.
+      try {
+        setView(await getWorkspaceSettings(workspaceId));
+        setConfirming(false);
+        setIncludeProfile(false);
+        setMessage({ kind: "alert", text: error instanceof SettingsApiError && error.kind === "conflict" ? "Esta configuração mudou em outra janela. Os dados foram recarregados. Confira e salve novamente." : "A resposta da atualização não foi confirmada. As configurações da perícia foram recarregadas; confira o resultado antes de continuar." });
+      } catch {
+        setUncertain(true);
+        setMessage({ kind: "alert", text: "Não foi possível confirmar o resultado da atualização. Recarregue as configurações desta perícia antes de tentar outra atualização." });
+      }
     } finally {
+      operation.current = false;
       setBusy(false);
+      title.current?.focus();
     }
   }
 
   return (
     <section className="analysis-section workspace-settings" aria-labelledby="workspace-settings-title">
-      <h3 id="workspace-settings-title">Configurações desta perícia</h3>
+      <h3 id="workspace-settings-title" ref={title} tabIndex={-1}>Configurações desta perícia</h3>
       <p className="field-hint">
         {view.revision ? `Cópia das configurações tirada em ${new Intl.DateTimeFormat("pt-BR", { dateStyle: "medium" }).format(new Date(view.updated_at ?? ""))} (revisão ${view.revision}).` : "Perícia criada antes das configurações centrais."}{" "}
         Mudanças em <a className="text-action" href="/configuracoes" onClick={navigate}>Configurações</a> não alteram esta perícia sozinhas.
       </p>
+      <CapturedSettingsSummary key={view.revision} workspaceId={workspaceId} snapshot={view.snapshot} revision={view.revision} />
       {upToDate ? (
         <p className="settings-confirmation">Igual às configurações atuais.</p>
       ) : (
         <>
-          <p>As configurações atuais diferem desta perícia em:</p>
+          <p>Há configurações mais recentes disponíveis.</p>
+          <p className="field-hint">Uma atualização confirmada adotará as mudanças abaixo. As revisões anteriores e os documentos já emitidos serão preservados.</p>
           <ul className="workspace-settings__changes">
-            {settingsChanges.map((item) => <li key={item}>{CHANGE_LABELS[item] ?? item}</li>)}
-            {profileChanges.length ? <li>Perfil profissional: {profileChanges.map((item) => CHANGE_LABELS[item] ?? PROFILE_FIELDS[item] ?? item).join(", ")}</li> : null}
+            {settingsChanges.map((item) => <li key={item}>{CHANGE_LABELS[item] ?? "Outra configuração capturada"}</li>)}
+            {profileChanges.length ? <li>Perfil profissional: {[...new Set(profileChanges.map((item) => CHANGE_LABELS[item] ?? PROFILE_FIELDS[item] ?? "identificação"))].join(", ")}</li> : null}
           </ul>
           {confirming ? (
-            <div className="workspace-settings__confirm" role="group" aria-label="Confirmar atualização">
+            <div className="workspace-settings__confirm" ref={confirmation} role="group" aria-label="Confirmar atualização">
               {profileChanges.length ? (
                 <label className="checkbox-label">
                   <input type="checkbox" checked={includeProfile} disabled={busy} onChange={(event) => setIncludeProfile(event.target.checked)} />
@@ -126,16 +154,24 @@ export function WorkspaceSettingsPanel({ workspaceId }: { workspaceId: string })
                 </label>
               ) : null}
               <div className="action-row">
-                <button type="button" className="primary-action" disabled={busy || (settingsChanges.length === 0 && !includeProfile)} onClick={() => void apply()}>{busy ? "Atualizando…" : "Confirmar atualização"}</button>
-                <button type="button" className="text-action" disabled={busy} onClick={() => setConfirming(false)}>Cancelar</button>
+                <button type="button" className="primary-action" aria-busy={busy} disabled={busy || uncertain || (settingsChanges.length === 0 && !includeProfile)} onClick={() => void apply()}>Confirmar atualização</button>
+                <button type="button" className="text-action" disabled={busy} onClick={() => { setConfirming(false); setIncludeProfile(false); title.current?.focus(); }}>Cancelar</button>
               </div>
             </div>
           ) : (
-            <button type="button" className="text-action" onClick={() => setConfirming(true)}>Atualizar a partir das configurações</button>
+            <button type="button" className="text-action" disabled={busy || uncertain} onClick={() => setConfirming(true)}>Atualizar a partir das configurações</button>
           )}
         </>
       )}
       {message ? <p className={message.kind === "alert" ? "field-error" : "settings-confirmation"} role={message.kind === "alert" ? "alert" : "status"}>{message.text}</p> : null}
+      {uncertain ? <button type="button" className="text-action" disabled={busy} onClick={async () => {
+        if (operation.current) return;
+        operation.current = true;
+        setBusy(true);
+        try { setView(await getWorkspaceSettings(workspaceId)); setUncertain(false); setConfirming(false); setIncludeProfile(false); setMessage({ kind: "status", text: "Configurações recarregadas. Confira o resultado da atualização." }); }
+        catch { setMessage({ kind: "alert", text: "As configurações desta perícia continuam indisponíveis para conferência. Tente recarregar novamente." }); }
+        finally { operation.current = false; setBusy(false); title.current?.focus(); }
+      }}>Recarregar configurações desta perícia</button> : null}
     </section>
   );
 }

@@ -118,7 +118,7 @@ def _proxy_target(path: str, method: str) -> str | None:
             return f"/v1/installation/settings/{remainder[1]}/{remainder[2]}"
         if len(remainder) == 2 and remainder[0] == "assets" and remainder[1] in _ASSET_ROLES and method == "POST":
             return f"/v1/installation/assets/{remainder[1]}"
-        if len(remainder) == 3 and remainder[0] == "assets" and remainder[1] in _ASSET_ROLES and ((remainder[2] in {"content", "history"} and method == "GET") or (remainder[2] == "removal" and method == "POST")):
+        if len(remainder) == 3 and remainder[0] == "assets" and remainder[1] in _ASSET_ROLES and ((remainder[2] in {"content", "history"} and method == "GET") or (remainder[2] in {"removal", "restore"} and method == "POST")):
             return f"/v1/installation/assets/{remainder[1]}/{remainder[2]}"
         return None
     recovery_prefix = "/app-api/v1/recovery/"

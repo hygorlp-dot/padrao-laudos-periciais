@@ -4,9 +4,11 @@ import {
   assetContentUrl,
   downloadTestDocument,
   getInstallationSettings,
+  getAssetHistory,
   getSettingHistory,
   removeAsset,
   restoreSetting,
+  restoreAsset,
   saveSetting,
   SettingsApiError,
   uploadAsset,
@@ -61,7 +63,7 @@ const REJECTIONS: Record<string, string> = {
   ASSET_ANIMATED_IMAGE: "Imagens animadas não são aceitas.",
   ASSET_COLOR_MODE_NOT_SUPPORTED: "O modo de cor desta imagem não é aceito. Salve em RGB.",
   ASSET_TEMPLATE_INVALID: "Este arquivo não é um modelo Word válido (DOCX ou DOCM).",
-  ASSET_TEMPLATE_FIELDS: "O modelo precisa declarar a propriedade TEMPLATE_ID e conter os campos [[EXPERT_FULL_NAME]], [[EXPERT_REGISTRATION]] e [[REPORT_ID]], cada um uma única vez e nenhum outro.",
+  ASSET_TEMPLATE_FIELDS: "Este modelo não contém os campos de identificação necessários para gerar o laudo. Confira os requisitos em Detalhes técnicos do modelo e envie o arquivo corrigido.",
 };
 
 const SETTING_LABELS: Record<SettingKind, string> = {
@@ -76,7 +78,7 @@ const SETTING_LABELS: Record<SettingKind, string> = {
 function failure(error: unknown) {
   if (error instanceof SettingsApiError) {
     if (error.kind === "conflict" && error.code === "TEMPLATE_IN_USE") return "O modelo Word personalizado está em uso. Escolha o modelo padrão do produto antes de trocar ou remover o arquivo.";
-    if (error.kind === "conflict") return "Esta configuração mudou em outra janela. Os dados foram recarregados; confira e salve de novo.";
+    if (error.kind === "conflict") return "Esta configuração mudou em outra janela. Os dados foram recarregados. Confira e salve novamente.";
     if (error.kind === "rejected") return REJECTIONS[error.code] ?? "O arquivo foi recusado.";
     if (error.kind === "invalid") return "Confira os campos destacados: algum valor está fora do aceito.";
   }
@@ -102,23 +104,25 @@ function SettingSection({ id, title, description, state, children, history }: { 
   );
 }
 
-function History({ kind, revision, onRestore, busy }: { kind: SettingKind; revision: number | null; onRestore: (revision: number) => void; busy: boolean }) {
+function History({ kind, revision, onRestore, busy }: { kind: SettingKind | AssetRole; revision: number | null; onRestore: (revision: number) => void; busy: boolean }) {
   const [items, setItems] = useState<SettingRevision[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [open, setOpen] = useState(false);
+  const asset = kind in ASSET_LABELS || kind === "DEFAULT_WORD_TEMPLATE";
+  const label = asset ? kind === "DEFAULT_WORD_TEMPLATE" ? "arquivo do modelo Word" : ASSET_LABELS[kind as keyof typeof ASSET_LABELS].label.toLowerCase() : SETTING_LABELS[kind as SettingKind];
   useEffect(() => {
     if (!open) return;
     const controller = new AbortController();
-    getSettingHistory(kind, controller.signal).then(
+    (asset ? getAssetHistory(kind as AssetRole, controller.signal) : getSettingHistory(kind as SettingKind, controller.signal)).then(
       (value) => { if (!controller.signal.aborted) { setItems(value); setFailed(false); } },
       () => { if (!controller.signal.aborted) setFailed(true); },
     );
     return () => controller.abort();
-  }, [kind, open, revision]);
+  }, [kind, open, revision, asset]);
   if (revision === null) return null;
   return (
     <details className="settings-history" onToggle={(event) => setOpen(event.currentTarget.open)}>
-      <summary>Histórico de {SETTING_LABELS[kind]}</summary>
+      <summary>Histórico de {label}</summary>
       {failed ? <p role="alert">Não foi possível carregar o histórico.</p> : null}
       {open && !items && !failed ? <p role="status">Carregando histórico…</p> : null}
       {items ? (
@@ -126,6 +130,7 @@ function History({ kind, revision, onRestore, busy }: { kind: SettingKind; revis
           {[...items].reverse().map((item) => (
             <li key={item.revision_id}>
               <span>Revisão {item.revision} · {DATE.format(new Date(item.created_at))}</span>
+              {asset ? <span className="field-hint">{(item.payload as { removed?: boolean; filename?: string })?.removed ? "Sem arquivo" : (item.payload as { filename?: string })?.filename}</span> : null}
               {item.revision === revision ? <span className="field-hint">Em uso</span> : (
                 <button type="button" className="text-action" disabled={busy} onClick={() => onRestore(item.revision)}>
                   Voltar a esta versão
@@ -269,6 +274,8 @@ function ProfileSection({ overview, busy, save }: { overview: InstallationOvervi
           {flag("show_phone_header", "Telefone no cabeçalho")}
           {flag("show_email_header", "E-mail no cabeçalho")}
           {flag("show_email_footer", "E-mail no rodapé")}
+          {flag("show_registration_cover", "Registro no conselho na capa")}
+          {flag("show_registration_signature", "Registro no conselho na assinatura")}
         </div>
       </fieldset>
       {error ? <p className="field-error" role="alert">{error}</p> : null}
@@ -304,6 +311,13 @@ function AssetRow({ role, overview, busy, run }: { role: Exclude<AssetRole, "DEF
         <strong>{label}</strong>
         <span className="field-hint">{current.asset ? `${current.asset.filename} · ${current.asset.width} × ${current.asset.height} px` : "Nenhuma imagem"}</span>
         <span className="field-hint">{hint}</span>
+        {current.asset ? <details className="settings-asset__details"><summary>Detalhes técnicos de {label.toLowerCase()}</summary><dl>
+          <div><dt>Revisão</dt><dd>{current.revision}</dd></div>
+          <div><dt>Formato</dt><dd>{current.asset.media_type}</dd></div>
+          <div><dt>Identificador</dt><dd>{current.asset.asset_id}</dd></div>
+          <div><dt>SHA-256</dt><dd>{current.asset.sha256}</dd></div>
+        </dl></details> : null}
+        <History kind={role} revision={current.revision} busy={busy} onRestore={(revision) => void run(() => restoreAsset(role, revision, current.revision!), `${label} restaurado como nova revisão.`)} />
       </div>
       <div className="settings-asset__actions">
         <input
@@ -436,6 +450,7 @@ function DocumentSection({ overview, busy, save, run }: { overview: Installation
             {check("watermark", "enabled", "Usar marca d'água")}
             {check("watermark", "apply_cover", "Na capa")}
             {check("watermark", "apply_body", "No corpo do laudo")}
+            {check("watermark", "apply_attachments", "Nos anexos do documento")}
           </div>
           <label>Origem<select value={draft.watermark.kind} onChange={(event) => set("watermark", { kind: event.target.value as DocumentPresentation["watermark"]["kind"] })}><option value="SYMBOL">Símbolo</option><option value="IMAGE">Imagem da marca d'água</option><option value="TEXT">Texto</option></select></label>
           {draft.watermark.kind === "TEXT" ? <label>Texto<input value={text(draft.watermark.text)} maxLength={60} onChange={(event) => set("watermark", { text: event.target.value })} /></label> : null}
@@ -464,11 +479,11 @@ function DocumentSection({ overview, busy, save, run }: { overview: Installation
       <div className="settings-template" role="radiogroup" aria-label="Modelo Word das próximas perícias">
         <label className="settings-choice">
           <input type="radio" name="template-mode" checked={!custom} disabled={busy} onChange={() => chooseTemplate({ mode: "PRODUCT_DEFAULT", template_sha256: null })} />
-          <span><strong>Modelo padrão do produto</strong><span className="field-hint">Usa a capa, o cabeçalho, o rodapé e as imagens configurados acima.</span></span>
+          <span><strong>Modelo padrão do sistema</strong><span className="field-hint">Usa a capa, o cabeçalho, o rodapé e as imagens configurados acima.</span></span>
         </label>
         <label className="settings-choice">
           <input type="radio" name="template-mode" checked={custom} disabled={busy || !template.asset} onChange={() => template.asset && chooseTemplate({ mode: "CUSTOM", template_sha256: template.asset.sha256 })} />
-          <span><strong>Modelo Word personalizado</strong><span className="field-hint">Modelos Word personalizados preservam a identidade visual e a formatação existentes no arquivo.</span></span>
+          <span><strong>Meu modelo Word</strong><span className="field-hint">Modelos Word personalizados preservam a identidade visual e a formatação existentes no arquivo.</span></span>
         </label>
       </div>
       <div className="action-row">
@@ -478,7 +493,7 @@ function DocumentSection({ overview, busy, save, run }: { overview: Installation
           type="file"
           accept=".docx,.docm,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-word.document.macroEnabled.12"
           aria-label="Arquivo do modelo Word personalizado"
-          disabled={busy}
+          disabled={busy || custom}
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = "";
@@ -488,8 +503,11 @@ function DocumentSection({ overview, busy, save, run }: { overview: Installation
         <button type="button" className="text-action" disabled={busy || custom} aria-describedby={custom ? "template-in-use" : undefined} onClick={() => templateInput.current?.click()}>
           {template.asset ? `Trocar modelo Word (${template.asset.filename})` : "Enviar modelo Word"}
         </button>
+        {template.asset && template.revision !== null ? <button type="button" className="text-action" disabled={busy || custom} aria-describedby={custom ? "template-in-use" : undefined} onClick={() => void run(() => removeAsset("DEFAULT_WORD_TEMPLATE", template.revision!), "Modelo Word removido. O histórico foi preservado.")}>Remover modelo Word</button> : null}
       </div>
-      {custom ? <p className="field-hint" id="template-in-use">Para trocar o arquivo, escolha antes o modelo padrão do produto; as perícias já criadas continuam com o modelo que capturaram.</p> : null}
+      <details className="settings-history"><summary>Detalhes técnicos do modelo</summary><p className="field-hint">O arquivo DOCX ou DOCM precisa declarar a propriedade TEMPLATE_ID e conter os campos [[EXPERT_FULL_NAME]], [[EXPERT_REGISTRATION]] e [[REPORT_ID]], cada um uma única vez e nenhum outro.</p>{template.asset ? <p className="field-hint">SHA-256: {template.asset.sha256}</p> : null}</details>
+      <History kind="DEFAULT_WORD_TEMPLATE" revision={template.revision} busy={busy || custom} onRestore={(revision) => void run(() => restoreAsset("DEFAULT_WORD_TEMPLATE", revision, template.revision!), "Arquivo do modelo Word restaurado como nova revisão.")} />
+      {custom ? <p className="field-hint" id="template-in-use">Para trocar ou remover o arquivo, escolha antes o modelo padrão do sistema; as perícias já criadas continuam com o modelo que capturaram.</p> : null}
       {custom ? <p className="field-hint">Com o modelo personalizado, capa, cabeçalho, rodapé, marca d'água e fundo vêm do seu arquivo; os ajustes acima ficam guardados para quando voltar ao modelo do produto.</p> : null}
     </>
   );
@@ -556,6 +574,13 @@ export function SettingsView() {
   const [message, setMessage] = useState<{ kind: "status" | "alert"; text: string } | null>(null);
   const [generation, setGeneration] = useState(0);
   const [testState, setTestState] = useState<"idle" | "busy" | "failed" | "done">("idle");
+  const operation = useRef(false);
+  const returnFocus = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (returnFocus.current) document.getElementById(returnFocus.current)?.focus();
+    returnFocus.current = null;
+  }, [generation]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -567,21 +592,33 @@ export function SettingsView() {
   }, [version]);
 
   async function run(task: () => Promise<InstallationOverview>, done: string) {
+    if (operation.current) return false;
+    operation.current = true;
     setBusy(true);
+    setTestState("idle");
     setMessage(null);
     try {
       setOverview(await task());
       setMessage({ kind: "status", text: done });
       return true;
     } catch (error) {
-      setMessage({ kind: "alert", text: failure(error) });
       if (error instanceof SettingsApiError && error.kind === "conflict") {
-        setVersion((value) => value + 1);
-        // Recarregado do servidor: os formulários recomeçam do valor gravado.
-        setGeneration((value) => value + 1);
+        try {
+          const current = await getInstallationSettings();
+          returnFocus.current = document.activeElement?.closest(".settings-section")?.querySelector("h2")?.id ?? null;
+          setOverview(current);
+          // Só reiniciar os drafts depois de observar a autoridade vigente.
+          setGeneration((value) => value + 1);
+          setMessage({ kind: "alert", text: failure(error) });
+        } catch {
+          setLoadError(true);
+        }
+      } else {
+        setMessage({ kind: "alert", text: failure(error) });
       }
       return false;
     } finally {
+      operation.current = false;
       setBusy(false);
     }
   }
@@ -589,6 +626,9 @@ export function SettingsView() {
   const save: Save = (kind, payload, done) => run(() => saveSetting(kind, overview?.settings[kind].revision ?? null, payload), done);
 
   async function testDocument() {
+    if (operation.current) return;
+    operation.current = true;
+    setBusy(true);
     setTestState("busy");
     try {
       const { blob, filename } = await downloadTestDocument();
@@ -602,6 +642,9 @@ export function SettingsView() {
       setTestState("done");
     } catch {
       setTestState("failed");
+    } finally {
+      operation.current = false;
+      setBusy(false);
     }
   }
 
@@ -628,18 +671,19 @@ export function SettingsView() {
 
   const readiness = overview.readiness;
   const settings = overview.settings;
-  const restore = (kind: SettingKind) => (revision: number) => void run(() => restoreSetting(kind, revision, settings[kind].revision ?? 0), "Versão anterior restaurada como nova revisão.").then((ok) => { if (ok) setGeneration((value) => value + 1); });
+  const restore = (kind: SettingKind, revision: number) => run(() => restoreSetting(kind, revision, settings[kind].revision ?? 0), "Versão anterior restaurada como nova revisão.").then((ok) => { if (ok) setGeneration((value) => value + 1); });
   const editorialPreset = (settings.EDITORIAL_PROFILE_DEFAULT_V1.product_default as EditorialProfile | null | undefined) ?? EDITORIAL_PRESET;
   const legacyGeometry = (settings.EDITORIAL_PROFILE_DEFAULT_V1 as { legacy_geometry?: EditorialProfile }).legacy_geometry;
 
   return (
     <div className="settings-view" key={generation}>
       <p className="settings-lead">
-        O que você salva aqui vale para as perícias criadas a partir de agora. Cada perícia guarda uma cópia das configurações do dia em que foi criada e não muda sozinha.
+        As configurações desta página são os padrões para novas perícias. Alterações aqui não modificam perícias já existentes.
       </p>
+      <p className="field-hint">Cada perícia guarda uma cópia das configurações do dia em que foi criada. Só uma atualização confirmada dentro dela muda essa cópia.</p>
       <dl className="settings-readiness" aria-label="Situação das configurações">
         <div><dt>Perfil profissional</dt><dd data-state={readiness.expert_profile === "MISSING" ? "missing" : "ok"}>{readiness.expert_profile === "MISSING" ? "Falta preencher" : "Preenchido"}</dd></div>
-        <div><dt>Identidade visual</dt><dd>{readiness.branding === "CONFIGURED" ? "Configurada" : "Padrão do produto"}</dd></div>
+        <div><dt>Identidade visual</dt><dd>{identityState(overview)}</dd></div>
         <div><dt>Documento Word</dt><dd>{readiness.template === "CUSTOM" ? "Modelo personalizado" : readiness.document === "CONFIGURED" ? "Configurado" : "Padrão do produto"}</dd></div>
         <div><dt>Perfil editorial</dt><dd>{readiness.editorial === "CUSTOM" ? "Personalizado" : "Padrão do produto"}</dd></div>
         <div><dt>Linguagem jurídica</dt><dd>Sistema Pericial — CNJ/TRF5</dd></div>
@@ -657,7 +701,7 @@ export function SettingsView() {
         id="perfil" title="Perfil profissional"
         description={<p>Identificação usada nas perícias novas: cabeçalho, capa e fechamento do laudo.</p>}
         state={status(settings.EXPERT_PROFILE_DEFAULT_V1.configured, settings.EXPERT_PROFILE_DEFAULT_V1.revision, settings.EXPERT_PROFILE_DEFAULT_V1.created_at)}
-        history={<History kind="EXPERT_PROFILE_DEFAULT_V1" revision={settings.EXPERT_PROFILE_DEFAULT_V1.revision} busy={busy} onRestore={restore("EXPERT_PROFILE_DEFAULT_V1")} />}
+        history={<History kind="EXPERT_PROFILE_DEFAULT_V1" revision={settings.EXPERT_PROFILE_DEFAULT_V1.revision} busy={busy} onRestore={(revision) => void restore("EXPERT_PROFILE_DEFAULT_V1", revision)} />}
       >
         <ProfileSection overview={overview} busy={busy} save={save} />
       </SettingSection>
@@ -666,7 +710,7 @@ export function SettingsView() {
         id="identidade" title="Identidade visual"
         description={<p>Cores e imagens do seu escritório no laudo gerado pelo modelo do produto.</p>}
         state={identityState(overview)}
-        history={<History kind="BRANDING_PROFILE_V1" revision={settings.BRANDING_PROFILE_V1.revision} busy={busy} onRestore={restore("BRANDING_PROFILE_V1")} />}
+        history={<History kind="BRANDING_PROFILE_V1" revision={settings.BRANDING_PROFILE_V1.revision} busy={busy} onRestore={(revision) => void restore("BRANDING_PROFILE_V1", revision)} />}
       >
         <IdentitySection overview={overview} busy={busy} save={save} run={run} />
       </SettingSection>
@@ -675,7 +719,7 @@ export function SettingsView() {
         id="documento" title="Documento Word"
         description={<p>Capa, cabeçalho, rodapé, marca d'água e fundo do Word, ou um modelo Word seu.</p>}
         state={settings.DEFAULT_TEMPLATE_SELECTION_V1.payload.mode === "CUSTOM" ? "Modelo Word personalizado" : status(settings.DOCUMENT_PRESENTATION_PROFILE_V1.configured, settings.DOCUMENT_PRESENTATION_PROFILE_V1.revision, settings.DOCUMENT_PRESENTATION_PROFILE_V1.created_at)}
-        history={<History kind="DOCUMENT_PRESENTATION_PROFILE_V1" revision={settings.DOCUMENT_PRESENTATION_PROFILE_V1.revision} busy={busy} onRestore={restore("DOCUMENT_PRESENTATION_PROFILE_V1")} />}
+        history={<><History kind="DOCUMENT_PRESENTATION_PROFILE_V1" revision={settings.DOCUMENT_PRESENTATION_PROFILE_V1.revision} busy={busy} onRestore={(revision) => void restore("DOCUMENT_PRESENTATION_PROFILE_V1", revision)} /><History kind="DEFAULT_TEMPLATE_SELECTION_V1" revision={settings.DEFAULT_TEMPLATE_SELECTION_V1.revision} busy={busy} onRestore={(revision) => void restore("DEFAULT_TEMPLATE_SELECTION_V1", revision)} /></>}
       >
         <DocumentSection overview={overview} busy={busy} save={save} run={run} />
       </SettingSection>
@@ -684,7 +728,7 @@ export function SettingsView() {
         id="editorial" title="Perfil editorial"
         description={<p>{editorialSummary(settings.EDITORIAL_PROFILE_DEFAULT_V1.payload)}. Cada laudo começa com este perfil e pode ajustá-lo na etapa Laudo.</p>}
         state={status(settings.EDITORIAL_PROFILE_DEFAULT_V1.configured, settings.EDITORIAL_PROFILE_DEFAULT_V1.revision, settings.EDITORIAL_PROFILE_DEFAULT_V1.created_at)}
-        history={<History kind="EDITORIAL_PROFILE_DEFAULT_V1" revision={settings.EDITORIAL_PROFILE_DEFAULT_V1.revision} busy={busy} onRestore={restore("EDITORIAL_PROFILE_DEFAULT_V1")} />}
+        history={<History kind="EDITORIAL_PROFILE_DEFAULT_V1" revision={settings.EDITORIAL_PROFILE_DEFAULT_V1.revision} busy={busy} onRestore={(revision) => void restore("EDITORIAL_PROFILE_DEFAULT_V1", revision)} />}
       >
         <EditorialPanel
           profile={settings.EDITORIAL_PROFILE_DEFAULT_V1.payload}
@@ -700,18 +744,19 @@ export function SettingsView() {
         id="juridico" title="Linguagem jurídica"
         description={<p>Perfil editorial de referência “Sistema Pericial — CNJ/TRF5”: avisos de linguagem simples antes da emissão do laudo.</p>}
         state={status(settings.LEGAL_EDITORIAL_PROFILE_V1.configured, settings.LEGAL_EDITORIAL_PROFILE_V1.revision, settings.LEGAL_EDITORIAL_PROFILE_V1.created_at)}
-        history={<History kind="LEGAL_EDITORIAL_PROFILE_V1" revision={settings.LEGAL_EDITORIAL_PROFILE_V1.revision} busy={busy} onRestore={restore("LEGAL_EDITORIAL_PROFILE_V1")} />}
+        history={<History kind="LEGAL_EDITORIAL_PROFILE_V1" revision={settings.LEGAL_EDITORIAL_PROFILE_V1.revision} busy={busy} onRestore={(revision) => void restore("LEGAL_EDITORIAL_PROFILE_V1", revision)} />}
       >
         <LegalSection overview={overview} busy={busy} save={save} />
       </SettingSection>
 
-      <SettingSection id="teste" title="Documento de teste" description={<p>Gera um Word com dados fictícios, pelo mesmo caminho do laudo real, para você conferir a aparência. Nada é gravado em nenhuma perícia.</p>} state="Dados fictícios">
+      <SettingSection id="teste" title="Documento de teste" description={<p>Gera um Word com dados fictícios e as configurações salvas, pelo mesmo caminho do laudo real, para você conferir a aparência. Salve os ajustes antes de gerar. Nada é gravado em nenhuma perícia.</p>} state="Dados fictícios">
         <div className="action-row">
-          <button type="button" className="primary-action" disabled={testState === "busy"} onClick={() => void testDocument()}>
-            {testState === "busy" ? "Gerando documento…" : "Gerar documento de teste"}
+          <button type="button" className="primary-action" disabled={busy} aria-busy={testState === "busy"} onClick={() => void testDocument()}>
+            Gerar documento de teste
           </button>
-          {testState === "done" ? <span className="settings-confirmation" role="status">Documento de teste baixado.</span> : null}
-          {testState === "failed" ? <span className="field-error" role="alert">As configurações atuais não geraram um Word válido. Revise as imagens e o modelo e tente de novo.</span> : null}
+          {testState === "busy" ? <span role="status">Gerando o Word com as configurações salvas…</span> : null}
+          {testState === "done" ? <span className="settings-confirmation" role="status">Documento de teste gerado.</span> : null}
+          {testState === "failed" ? <span className="field-error" role="alert">Não foi possível gerar um documento válido com estas configurações.</span> : null}
         </div>
       </SettingSection>
     </div>

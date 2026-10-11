@@ -189,6 +189,18 @@ export async function removeAsset(role: AssetRole, expectedRevision: number) {
   return overview(await fetch(`${BASE}/assets/${role}/removal`, json("POST", { expected_revision: expectedRevision })));
 }
 
+export async function getAssetHistory(role: AssetRole, signal?: AbortSignal): Promise<SettingRevision[]> {
+  const response = await fetch(`${BASE}/assets/${role}/history`, { credentials: "same-origin", cache: "no-store", signal });
+  if (!response.ok) return failed(response);
+  const value = await response.json();
+  if (!Array.isArray(value?.items)) throw new SettingsApiError("unavailable");
+  return value.items as SettingRevision[];
+}
+
+export async function restoreAsset(role: AssetRole, revision: number, expectedRevision: number) {
+  return overview(await fetch(`${BASE}/assets/${role}/restore`, json("POST", { revision, expected_revision: expectedRevision })));
+}
+
 // O servidor responde com no-store; a tela troca a imagem pelo hash (key) do ativo.
 export function assetContentUrl(role: AssetRole) {
   return `${BASE}/assets/${role}/content`;
@@ -200,8 +212,11 @@ const DOCM = "application/vnd.ms-word.document.macroenabled.12";
 export async function downloadTestDocument(): Promise<{ blob: Blob; filename: string }> {
   const response = await fetch(`${BASE}/test-document`, { credentials: "same-origin", cache: "no-store" });
   if (!response.ok) return failed(response);
-  const macro = (response.headers.get("Content-Type") ?? "").split(";", 1)[0].trim().toLowerCase() === DOCM;
-  return { blob: await response.blob(), filename: macro ? "documento-de-teste.docm" : "documento-de-teste.docx" };
+  const mediaType = (response.headers.get("Content-Type") ?? "").split(";", 1)[0].trim().toLowerCase();
+  if (![DOCM, "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].includes(mediaType)) throw new SettingsApiError("unavailable");
+  const blob = await response.blob();
+  if (blob.size === 0) throw new SettingsApiError("unavailable");
+  return { blob, filename: mediaType === DOCM ? "documento-de-teste.docm" : "documento-de-teste.docx" };
 }
 
 // --- Configurações capturadas por uma perícia ------------------------------
@@ -216,7 +231,16 @@ export type WorkspaceSettingsDifferences = {
 export type WorkspaceSettingsView = {
   revision: number | null;
   updated_at: string | null;
-  snapshot: { reason: string; assets: Array<{ role: AssetRole; filename: string }> } | null;
+  snapshot: {
+    reason: string;
+    sources: Record<SettingKind, { revision: number; checksum_sha256: string } | null>;
+    assets: Array<{ role: AssetRole; filename: string; sha256?: string }>;
+    editorial_profile: EditorialProfile;
+    branding: Branding;
+    presentation: DocumentPresentation;
+    legal_editorial: LegalEditorial;
+    template_selection: TemplateSelection;
+  } | null;
   // null: as Configurações da instalação estão indisponíveis; o snapshot da perícia continua válido.
   differences: WorkspaceSettingsDifferences | null;
 };
