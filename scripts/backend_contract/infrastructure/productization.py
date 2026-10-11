@@ -657,6 +657,8 @@ def _verify_dependency_closure(revisions: tuple[ArtifactRevision, ...]) -> None:
                 if thaw_payload(property_source.payload) != captured_property["record"]:
                     raise RepositoryIntegrityError("backup report property authority diverges")
             binding = payload["source_snapshot"]
+            if "workspace_settings_revision" in binding:
+                require_record("WORKSPACE_SETTINGS_SNAPSHOT_V1", binding["workspace_settings_revision"], binding["workspace_settings_digest"])
             require("CASE_ANALYSIS_SNAPSHOT_V1", binding["case_analysis_revision"], binding["case_analysis_digest"], "snapshot_id", binding["case_analysis_snapshot_id"])
             require("INSPECTION_SESSION_V1", binding["inspection_session_revision"], binding["inspection_session_digest"], "session_id", binding["inspection_session_id"])
             technical_record = require("TECHNICAL_SNAPSHOT_V1", binding["technical_snapshot_revision"], binding["technical_snapshot_digest"], "snapshot_id", binding["technical_snapshot_id"])

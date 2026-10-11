@@ -47,8 +47,9 @@
       "inspection_session_id":{"$ref":"#/$defs/text"},"inspection_session_revision":{"$ref":"#/$defs/positive"},"inspection_session_digest":{"$ref":"#/$defs/digest"},
       "technical_snapshot_id":{"$ref":"#/$defs/text"},"technical_snapshot_revision":{"$ref":"#/$defs/positive"},"technical_snapshot_digest":{"$ref":"#/$defs/digest"},
       "construction_defect_analysis_snapshot_id":{"anyOf":[{"$ref":"#/$defs/text"},{"type":"null"}]},"construction_defect_analysis_revision":{"anyOf":[{"$ref":"#/$defs/positive"},{"type":"null"}]},"construction_defect_analysis_digest":{"anyOf":[{"$ref":"#/$defs/digest"},{"type":"null"}]},
-      "expert_profile_id":{"$ref":"#/$defs/text"},"expert_profile_revision":{"$ref":"#/$defs/positive"},"expert_profile_digest":{"$ref":"#/$defs/digest"}
-    },"oneOf":[
+      "expert_profile_id":{"$ref":"#/$defs/text"},"expert_profile_revision":{"$ref":"#/$defs/positive"},"expert_profile_digest":{"$ref":"#/$defs/digest"},
+      "workspace_settings_revision":{"$ref":"#/$defs/positive"},"workspace_settings_digest":{"$ref":"#/$defs/digest"}
+    },"dependentRequired":{"workspace_settings_revision":["workspace_settings_digest"],"workspace_settings_digest":["workspace_settings_revision"]},"oneOf":[
       {"properties":{"construction_defect_analysis_snapshot_id":{"type":"null"},"construction_defect_analysis_revision":{"type":"null"},"construction_defect_analysis_digest":{"type":"null"}}},
       {"properties":{"construction_defect_analysis_snapshot_id":{"$ref":"#/$defs/text"},"construction_defect_analysis_revision":{"$ref":"#/$defs/positive"},"construction_defect_analysis_digest":{"$ref":"#/$defs/digest"}}}
     ]},

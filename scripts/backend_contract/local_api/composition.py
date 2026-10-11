@@ -636,6 +636,7 @@ def build_local_api(
         get_construction_defect_analysis,
         get_site_location=get_site_location,
         get_property_record=get_property_record, get_process_record=get_report_process,
+        get_workspace_settings=workspace_settings,
     )
     save_report_snapshot = SaveReportSnapshot(
         store.revisions,
@@ -650,6 +651,7 @@ def build_local_api(
         get_construction_defect_analysis,
         get_site_location=get_site_location,
         get_property_record=get_property_record, get_process_record=get_report_process,
+        get_workspace_settings=workspace_settings,
     )
     get_delivery_snapshot = None
     get_delivery_history = None
@@ -745,6 +747,7 @@ def build_local_api(
         get_site_location=get_site_location,
         get_property_record=GetPropertyRecord(get_latest_artifact, projection_case_documents),
         get_process_record=get_report_process,
+        get_workspace_settings=workspace_settings,
     ))
     p_delivery = (
         windowed(GetDeliverySnapshot(get_latest_artifact, p_case, p_planning, p_inspection, p_technical, p_report))
@@ -970,6 +973,7 @@ def build_local_api(
             get_latest_artifact, get_case_analysis, get_inspection_session, get_technical_snapshot, get_expert_profile,
             save_report_snapshot, local_ids, get_construction_defect_analysis, get_site_location,
             get_property_record=get_property_record, get_process_record=get_report_process,
+            get_workspace_settings=workspace_settings,
         ),
         amend_report_draft=AmendReportDraft(get_report_snapshot, save_report_snapshot, local_ids, get_case_analysis, get_technical_snapshot, get_construction_defect_analysis, get_site_location, get_photo_library, get_property_record=get_property_record, get_process_record=get_report_process),
         list_report_sources=ListReportSources(get_case_analysis, get_inspection_session, get_technical_snapshot, get_construction_defect_analysis),
