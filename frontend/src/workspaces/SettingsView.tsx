@@ -602,14 +602,16 @@ export function SettingsView() {
       setMessage({ kind: "status", text: done });
       return true;
     } catch (error) {
-      if (error instanceof SettingsApiError && error.kind === "conflict") {
+      const conflict = error instanceof SettingsApiError && error.kind === "conflict";
+      const unknownResult = !(error instanceof SettingsApiError) || error.kind === "unavailable";
+      if (conflict || unknownResult) {
         try {
           const current = await getInstallationSettings();
           returnFocus.current = document.activeElement?.closest(".settings-section")?.querySelector("h2")?.id ?? null;
           setOverview(current);
           // Só reiniciar os drafts depois de observar a autoridade vigente.
           setGeneration((value) => value + 1);
-          setMessage({ kind: "alert", text: failure(error) });
+          setMessage({ kind: "alert", text: conflict ? failure(error) : "A resposta da alteração não foi confirmada. As configurações foram recarregadas; confira o resultado antes de continuar." });
         } catch {
           setLoadError(true);
         }

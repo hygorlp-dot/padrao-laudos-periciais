@@ -14,6 +14,8 @@ A única ampliação de backend expõe `POST /installation/assets/<ROLE>/restore
 
 Adversariais cobrem resposta e observação indisponíveis (não repetir refresh antes de ler a autoridade), troca de perícia durante consulta/confirmacão, conflitos, DTO extra/inválido e restauração de modelo em uso. Detalhes técnicos e históricos ficam em disclosures nativos.
 
+O primeiro PR_REVIEWER bloqueou o candidato por resultado desconhecido de mutação global: `run` só relia a autoridade em conflito, liberando comandos após falha de transporte. Dois testes montados reproduziram o defeito antes da correção. Agora falha de transporte ou resposta indisponível também aguarda GET, remonta drafts com a autoridade observada e pede conferência sem afirmar sucesso. Se GET falhar, formulários e geração permanecem inacessíveis até leitura manual bem-sucedida. Rejeições explícitas de validação preservam seus motivos. Um adversarial adicional cobre restauração de logotipo persistida sem resposta, observando rev3 com um único POST. O novo HEAD exige novo gate, CI e revisões finais; evidência anterior não aprova o candidato corrigido.
+
 ## Prova sintética no produto
 
 Build de produção e navegador real, duas instalações locais distintas; somente perfil, imagens e modelo Word sintéticos. Evidência operacional fora do Git: `C:/tmp/settings3d-20261011-evidence`.
@@ -43,9 +45,11 @@ Defeito reproduzido em 1024: coluna de conteúdo da imagem da marca d'água tinh
 
 Tracking P2: `CONTEXT_STALE design-sidecar-stale` — DESIGN.md é mais recente que `.impeccable/design.json`; o contexto canônico foi lido, sem refresh do sidecar nesta UOW. Não impede o fluxo nem autoriza alterar design. Nenhuma recomendação de expansão nesta execução.
 
+Tracking do primeiro Reviewer: os controles de registro na capa/assinatura e de marca d'água nos anexos são salvos pelo contrato, mas não consumidos pelo renderer atual (P2). Permanecem registrados sem redesenhar o renderer ou reabrir fidelidade nesta UOW; não constituem prova de efeito visual.
+
 ## Assurance e sequência terminal
 
-Frontend integral: **408 testes / 47 arquivos PASS**. Regressão focal e demais gates terão os recibos anexados à PR no HEAD final.
+Frontend integral após a correção do P1: **411 testes / 47 arquivos PASS**. Regressão focal e demais gates terão os recibos anexados à PR no HEAD final.
 
 Sequência restante obrigatória: gate integral fresco único → CI protegido → PR_REVIEWER independente → SYSTEMIC_AUDITOR independente → classificador first-party → Claude se requerido ou dispensa específica do proprietário → merge normal → uma prova pós-main → reconciliação da #291 se todos os incrementos terminais → parar.
 

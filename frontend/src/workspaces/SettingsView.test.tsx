@@ -43,6 +43,86 @@ function json(status: number, value: object) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Configurações da instalação (#270)", () => {
+  test("a lost save response blocks commands until the persisted configuration is observed", async () => {
+    let observe!: (response: Response) => void;
+    const committed = overview();
+    committed.settings.DOCUMENT_PRESENTATION_PROFILE_V1 = { ...committed.settings.DOCUMENT_PRESENTATION_PROFILE_V1, configured: true, revision: 1, payload: { ...PRESENTATION, cover: { ...PRESENTATION.cover, title: "TÍTULO JÁ SALVO" } } };
+    const fetchSpy = vi.fn().mockResolvedValueOnce(json(200, overview()))
+      .mockRejectedValueOnce(new TypeError("response lost"))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { observe = resolve; }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<SettingsView />);
+    const title = await screen.findByLabelText("Título");
+    await user.clear(title);
+    await user.type(title, "TÍTULO JÁ SALVO");
+    await user.click(screen.getByRole("button", { name: "Salvar apresentação do documento" }));
+    await waitFor(() => expect(observe).toBeTypeOf("function"));
+    expect(screen.getByRole("button", { name: "Salvar apresentação do documento" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Gerar documento de teste" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Salvar cores" }));
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+    observe(json(200, committed));
+    await waitFor(() => expect(screen.getByLabelText("Título")).toHaveValue("TÍTULO JÁ SALVO"));
+    expect(screen.getByRole("alert")).toHaveTextContent(/recarregadas/);
+    expect(screen.queryByText("Apresentação do documento salva.")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Gerar documento de teste" })).toBeEnabled();
+    expect(fetchSpy.mock.calls[2][0]).toBe("/app-api/v1/installation/settings");
+  });
+
+  test("an unobserved global mutation remains blocked until a manual read succeeds", async () => {
+    let observe!: (response: Response) => void;
+    const committed = overview();
+    committed.settings.DOCUMENT_PRESENTATION_PROFILE_V1 = { ...committed.settings.DOCUMENT_PRESENTATION_PROFILE_V1, configured: true, revision: 2, payload: { ...PRESENTATION, cover: { ...PRESENTATION.cover, title: "RESULTADO PERSISTIDO" } } };
+    const fetchSpy = vi.fn().mockResolvedValueOnce(json(200, overview()))
+      .mockResolvedValueOnce(json(503, {})).mockResolvedValueOnce(json(503, {}))
+      .mockResolvedValueOnce(json(503, {}))
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => { observe = resolve; }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<SettingsView />);
+    await user.click(await screen.findByRole("button", { name: "Salvar apresentação do documento" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Gerar documento de teste" })).not.toBeInTheDocument());
+    expect(screen.getByRole("alert")).toHaveTextContent(/Não foi possível/);
+    await user.click(screen.getByRole("button", { name: "Tentar novamente" }));
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(4));
+    expect(screen.queryByRole("button", { name: "Salvar cores" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Tentar novamente" }));
+    await waitFor(() => expect(observe).toBeTypeOf("function"));
+    expect(screen.queryByRole("button", { name: "Gerar documento de teste" })).not.toBeInTheDocument();
+    observe(json(200, committed));
+    await waitFor(() => expect(screen.getByLabelText("Título")).toHaveValue("RESULTADO PERSISTIDO"));
+    expect(screen.getByRole("button", { name: "Salvar cores" })).toBeEnabled();
+    expect(fetchSpy.mock.calls.filter(([, init]) => init?.method === "PUT")).toHaveLength(1);
+  });
+
+  test("an asset restore with a lost response observes the new revision without repeating restore", async () => {
+    const initial = overview();
+    initial.assets.PRIMARY_LOGO = { revision: 2, asset: null };
+    const restored = overview();
+    restored.assets.PRIMARY_LOGO = { revision: 3, asset: { asset_id: "synthetic-logo", role: "PRIMARY_LOGO", filename: "logo-restaurado.png", media_type: "image/png", byte_size: 100, sha256: "a".repeat(64), width: 160, height: 80 } };
+    const oldRevision = { revision: 1, revision_id: "synthetic-rev-1", created_at: "2026-10-11T10:00:00Z", checksum_sha256: "a".repeat(64), payload: { filename: "logo-restaurado.png" } };
+    let persisted = initial;
+    const fetchSpy = vi.fn().mockImplementation((url, init) => {
+      if (String(url).endsWith("/history")) return Promise.resolve(json(200, { items: [oldRevision] }));
+      if (init?.method === "POST") { persisted = restored; return Promise.reject(new TypeError("restore response lost")); }
+      return Promise.resolve(json(200, persisted));
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    const user = userEvent.setup();
+    render(<SettingsView />);
+    await user.click(await screen.findByText("Histórico de logotipo"));
+    await user.click(await screen.findByRole("button", { name: "Voltar a esta versão" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Trocar logotipo" })).toBeInTheDocument());
+    expect(screen.getByText("logo-restaurado.png · 160 × 80 px")).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/recarregadas/);
+    expect(screen.queryByText("Versão anterior restaurada como nova revisão.")).not.toBeInTheDocument();
+    const commands = fetchSpy.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(commands).toHaveLength(1);
+    expect(commands[0][0]).toBe("/app-api/v1/installation/assets/PRIMARY_LOGO/restore");
+    expect(JSON.parse(commands[0][1].body)).toEqual({ revision: 1, expected_revision: 2 });
+  });
+
   test("a conflicting draft is replaced only after the current authority arrives", async () => {
     let reload!: (response: Response) => void;
     const current = overview();
