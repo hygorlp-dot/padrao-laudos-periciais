@@ -195,13 +195,13 @@ class InstallationSettings:
         if kind is SettingKind.INSTALLATION_ASSET:
             raise ValueError("assets are stored through the asset command")
         canonical = validated_setting_payload(kind, DEFAULT_SETTING_ID, payload)
-        self._require_selection_consistent(kind, DEFAULT_SETTING_ID, canonical)
+        dependencies = self._require_selection_consistent(kind, DEFAULT_SETTING_ID, canonical)
         return self.store.append_if_latest(
             setting_kind=kind.value, setting_id=DEFAULT_SETTING_ID, revision_id=str(self.ids.new_uuid()),
-            created_at=self._now(), payload=canonical, expected_revision=expected_revision,
+            created_at=self._now(), payload=canonical, expected_revision=expected_revision, expected_dependencies=dependencies,
         )
 
-    def _require_selection_consistent(self, kind: SettingKind, setting_id: str, payload: dict) -> None:
+    def _require_selection_consistent(self, kind: SettingKind, setting_id: str, payload: dict) -> tuple:
         """A seleção CUSTOM cita o sha do modelo guardado; nenhuma gravação desfaz isso.
 
         Sem esta regra, trocar ou restaurar o modelo (ou restaurar uma seleção
@@ -211,15 +211,20 @@ class InstallationSettings:
         if kind is SettingKind.DEFAULT_TEMPLATE_SELECTION:
             selection = template_selection_from_mapping(payload)
             if selection.mode is TemplateMode.CUSTOM:
-                _, template = self.asset_record(AssetRole.DEFAULT_WORD_TEMPLATE)
+                record, template = self.asset_record(AssetRole.DEFAULT_WORD_TEMPLATE)
                 if template is None or template.sha256 != selection.template_sha256:
                     raise ValueError("the selected template is not the stored custom template")
+                return ((SettingKind.INSTALLATION_ASSET.value, AssetRole.DEFAULT_WORD_TEMPLATE.value, record.revision, record.checksum_sha256),)
         elif kind is SettingKind.INSTALLATION_ASSET and setting_id == AssetRole.DEFAULT_WORD_TEMPLATE.value:
             selection = self.latest(SettingKind.DEFAULT_TEMPLATE_SELECTION)
             if selection is not None and selection.payload.get("mode") == TemplateMode.CUSTOM.value:
                 _, current = self.asset_record(AssetRole.DEFAULT_WORD_TEMPLATE)
                 if payload.get("removed") is True or current is None or payload.get("sha256") != current.sha256:
                     raise CustomTemplateInUse("choose the product template before replacing or removing the custom template")
+            # Absence is also a dependency: selecting CUSTOM in another window
+            # must conflict with a mutation that checked an absent selection.
+            return ((SettingKind.DEFAULT_TEMPLATE_SELECTION.value, DEFAULT_SETTING_ID, selection.revision if selection else None, selection.checksum_sha256 if selection else None),)
+        return ()
 
     def consistent(self):
         """Um retrato só da instalação: seleção, perfil e ativos do mesmo estado."""
@@ -237,10 +242,10 @@ class InstallationSettings:
         payload = validated_setting_payload(kind, setting_id, dict(target.payload))
         if kind is SettingKind.INSTALLATION_ASSET and payload.get("removed") is not True and self.store.get_asset(payload["sha256"]) is None:
             raise RepositoryIntegrityError("the restored asset bytes are unavailable")
-        self._require_selection_consistent(kind, setting_id, payload)
+        dependencies = self._require_selection_consistent(kind, setting_id, payload)
         return self.store.append_if_latest(
             setting_kind=kind.value, setting_id=setting_id, revision_id=str(self.ids.new_uuid()),
-            created_at=self._now(), payload=payload, expected_revision=expected_revision,
+            created_at=self._now(), payload=payload, expected_revision=expected_revision, expected_dependencies=dependencies,
         )
 
     def upload_asset(self, role: AssetRole, *, filename: str, media_type: str, content: bytes, expected_revision: int | None):
@@ -260,22 +265,21 @@ class InstallationSettings:
             except ValueError as exc:
                 raise InstallationAssetRejected("TEMPLATE_INVALID") from exc
             width = height = None
-        if role is AssetRole.DEFAULT_WORD_TEMPLATE:
-            self._require_selection_consistent(SettingKind.INSTALLATION_ASSET, role.value, {"sha256": hashlib.sha256(content).hexdigest()})
+        dependencies = self._require_selection_consistent(SettingKind.INSTALLATION_ASSET, role.value, {"sha256": hashlib.sha256(content).hexdigest()})
         stored = self.store.put_asset(content, media_type)
         record = InstallationAssetRecord(
             "ASSET-" + self.ids.new_uuid().hex.upper(), role, filename, media_type, stored.byte_size, stored.sha256, width, height,
         )
         return self.store.append_if_latest(
             setting_kind=SettingKind.INSTALLATION_ASSET.value, setting_id=role.value, revision_id=str(self.ids.new_uuid()),
-            created_at=self._now(), payload=to_mapping(record), expected_revision=expected_revision,
+            created_at=self._now(), payload=to_mapping(record), expected_revision=expected_revision, expected_dependencies=dependencies,
         )
 
     def remove_asset(self, role: AssetRole, expected_revision: int):
-        self._require_selection_consistent(SettingKind.INSTALLATION_ASSET, role.value, {"removed": True})
+        dependencies = self._require_selection_consistent(SettingKind.INSTALLATION_ASSET, role.value, {"removed": True})
         return self.store.append_if_latest(
             setting_kind=SettingKind.INSTALLATION_ASSET.value, setting_id=role.value, revision_id=str(self.ids.new_uuid()),
-            created_at=self._now(), payload={"role": role.value, "removed": True}, expected_revision=expected_revision,
+            created_at=self._now(), payload={"role": role.value, "removed": True}, expected_revision=expected_revision, expected_dependencies=dependencies,
         )
 
     def asset_content(self, role: AssetRole):

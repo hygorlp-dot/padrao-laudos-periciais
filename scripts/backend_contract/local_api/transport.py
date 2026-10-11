@@ -840,6 +840,14 @@ class LocalApi:
                 if method != "GET":
                     return _error(405, "METHOD_NOT_ALLOWED")
                 return _json_response(200, {"items": [_installation_record_dto(item) for item in service.history(_Kind.INSTALLATION_ASSET, role.value)]})
+            if tail[2] == "restore":
+                if method != "POST":
+                    return _error(405, "METHOD_NOT_ALLOWED")
+                dto = self._request_dto(headers, body)
+                if set(dto) != {"revision", "expected_revision"} or any(type(dto[name]) is not int or dto[name] < 1 for name in ("revision", "expected_revision")):
+                    raise ValueError("asset restore request is invalid")
+                service.restore(_Kind.INSTALLATION_ASSET, dto["revision"], dto["expected_revision"], setting_id=role.value)
+                return _json_response(200, service.overview())
         return _error(404, "NOT_FOUND")
 
     def _request_dto(self, headers: dict[str, str], body: bytes) -> dict:

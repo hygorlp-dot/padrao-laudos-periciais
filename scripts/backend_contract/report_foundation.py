@@ -119,9 +119,20 @@ class ReportSourceSnapshot:
     expert_profile_id: str
     expert_profile_revision: int
     expert_profile_digest: str
+    workspace_settings_revision: int | None = None
+    workspace_settings_digest: str | None = None
 
     def __post_init__(self):
         _all_text(self, ("workspace_id", "case_analysis_snapshot_id", "inspection_session_id", "technical_snapshot_id", "expert_profile_id"))
+        if (self.workspace_settings_revision is None) != (self.workspace_settings_digest is None):
+            raise ValueError("report workspace settings binding is incomplete")
+        if self.workspace_settings_revision is not None and (
+            type(self.workspace_settings_revision) is not int
+            or self.workspace_settings_revision < 1
+            or type(self.workspace_settings_digest) is not str
+            or _SHA256.fullmatch(self.workspace_settings_digest) is None
+        ):
+            raise ValueError("report workspace settings binding is invalid")
         revisions = (self.case_analysis_revision, self.inspection_session_revision, self.technical_snapshot_revision, self.expert_profile_revision)
         if any(type(value) is not int or value < 1 for value in revisions):
             raise ValueError("report source revision is invalid")
@@ -939,8 +950,11 @@ def _construct(cls: type[T], value: object, *, nested: dict[str, type] | None = 
     if type(value) is not dict:
         raise ValueError(f"{cls.__name__} mapping is invalid")
     allowed = {item.name for item in fields(cls)}
-    if set(value) != allowed:
+    optional = {"workspace_settings_revision", "workspace_settings_digest"} if cls is ReportSourceSnapshot else set()
+    if set(value) not in (allowed, allowed - optional):
         raise ValueError(f"{cls.__name__} fields are invalid")
+    if optional & set(value) and any(value[name] is None for name in optional):
+        raise ValueError("report workspace settings binding cannot be null")
     data: dict[str, Any] = dict(value)
     for name, child in (nested or {}).items():
         data[name] = _construct(child, data[name])
@@ -1144,6 +1158,9 @@ def report_snapshot_to_mapping(value: ReportSnapshot) -> dict[str, Any]:
     if type(value) is not ReportSnapshot:
         raise TypeError("expected ReportSnapshot")
     mapping = json.loads(json.dumps(asdict(value), ensure_ascii=False))
+    if value.source_snapshot.workspace_settings_revision is None:
+        for name in ("workspace_settings_revision", "workspace_settings_digest"):
+            del mapping["source_snapshot"][name]
     mapping["expert_profile"] = expert_profile_to_mapping(value.expert_profile)
     mapping["editorial_profile"] = editorial_profile_to_mapping(value.editorial_profile)
     for answer in mapping["answers"]:

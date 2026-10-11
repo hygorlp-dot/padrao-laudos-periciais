@@ -522,8 +522,22 @@ class StoreDefaultDeliveryTemplate:
         if type(report) is not ReportSnapshot or report.state is not ReportState.APPROVED or report.upstream_stale:
             raise ValueError("default delivery template requires an approved report")
         settings = None
+        settings_record = None
         if self.get_workspace_settings is not None:
-            _record, settings = self.get_workspace_settings.current(workspace_id)
+            settings_record, settings = self.get_workspace_settings.current(workspace_id)
+        binding = report.source_snapshot
+        if binding.workspace_settings_revision is not None:
+            if (
+                settings_record is None
+                or settings_record.revision != binding.workspace_settings_revision
+                or settings_record.checksum_sha256 != binding.workspace_settings_digest
+            ):
+                raise ValueError("workspace settings changed since approved report")
+        elif settings_record is not None and (
+            settings_record.revision != 1
+            or getattr(settings, "reason", None) != "WORKSPACE_CREATED"
+        ):
+            raise ValueError("workspace settings changed since approved report without a captured binding")
         if settings is None:
             content = default_report_template(report.editorial_profile, professional=report.presentation is not None)
             manifest = default_template_manifest(professional=report.presentation is not None)

@@ -202,6 +202,29 @@ def test_history_is_append_only_and_restore_writes_a_new_revision(tmp_path):
         runtime.close()
 
 
+def test_asset_restore_is_reachable_without_rewriting_the_history_or_existing_case(tmp_path):
+    runtime = _runtime(tmp_path)
+    try:
+        first = _png()
+        assert _upload(runtime, "PRIMARY_LOGO", first, "logo-v1.png", "image/png", None)[0] == 201
+        _, workspace = _http(runtime, "POST", "/v1/workspaces", {"name": "Perícia sintética 3D"})
+        path = f"/v1/workspaces/{workspace['workspace_id']}/settings-snapshot"
+        captured = _http(runtime, "GET", path)[1]["snapshot"]
+        assert _http(runtime, "POST", "/v1/installation/assets/PRIMARY_LOGO/removal", {"expected_revision": 1})[0] == 200
+        status, restored = _http(runtime, "POST", "/v1/installation/assets/PRIMARY_LOGO/restore", {"revision": 1, "expected_revision": 2})
+        assert status == 200
+        assert restored["assets"]["PRIMARY_LOGO"]["revision"] == 3
+        assert restored["assets"]["PRIMARY_LOGO"]["asset"]["filename"] == "logo-v1.png"
+        assert [item["revision"] for item in _http(runtime, "GET", "/v1/installation/assets/PRIMARY_LOGO/history")[1]["items"]] == [1, 2, 3]
+        assert _http(runtime, "GET", path)[1]["snapshot"] == captured
+        assert _http(runtime, "POST", "/v1/installation/assets/PRIMARY_LOGO/restore", {"revision": 1, "expected_revision": 2})[0] == 409
+        for invalid in ({"revision": True, "expected_revision": 3}, {"revision": 1, "expected_revision": 0}, {"revision": 1, "expected_revision": 3, "force": True}):
+            assert _http(runtime, "POST", "/v1/installation/assets/PRIMARY_LOGO/restore", invalid)[0] == 400
+        assert _http(runtime, "GET", "/v1/installation/assets/PRIMARY_LOGO/restore")[0] == 405
+    finally:
+        runtime.close()
+
+
 def test_assets_accept_png_and_jpeg_only_and_refuse_bad_images(tmp_path):
     runtime = _runtime(tmp_path)
     try:
@@ -416,6 +439,8 @@ def test_custom_selection_always_names_the_stored_template_so_case_creation_neve
         assert _http(runtime, "PUT", "/v1/installation/settings/DEFAULT_TEMPLATE_SELECTION_V1", {"expected_revision": 2, "payload": {"mode": "CUSTOM", "template_sha256": sha_b}})[0] == 200
         status, refused = _http(runtime, "POST", "/v1/installation/settings/INSTALLATION_ASSET_V1/restore", {"revision": 1, "expected_revision": 2})
         assert status == 404  # ativos não têm restauração genérica pela rota de configurações
+        status, refused = _http(runtime, "POST", "/v1/installation/assets/DEFAULT_WORD_TEMPLATE/restore", {"revision": 1, "expected_revision": 2})
+        assert status == 409 and refused["error"]["code"] == "TEMPLATE_IN_USE"
         from scripts.backend_contract.application.installation_settings import AssetRole, CustomTemplateInUse, InstallationSettings, SettingKind
         from scripts.backend_contract.local_api.composition import _SystemClock, _UuidGenerator
         service = InstallationSettings(runtime._installation_store, _SystemClock(), _UuidGenerator(), None)
