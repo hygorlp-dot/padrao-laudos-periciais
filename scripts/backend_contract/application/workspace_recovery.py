@@ -3444,6 +3444,33 @@ class PromoteWorkspaceRecovery:
         if len(staged_private) != summary.private_contents:
             raise RecoveryNotPromotable("o staging divergiu da verificação")
 
+        # Contagens iguais não provam que a cópia ainda é a que foi verificada.
+        # O descriptor já captura o plano exato; conferir sob a custódia da
+        # mesma raiz antes do journal e de QUALQUER mutação viva.
+        custody = staging.duplicar_custodia_filesystem()
+        try:
+            descriptor = _descriptor_da_raiz(Path(staging.root), custody)
+        finally:
+            custody.close()
+        if descriptor is _SIDECAR_TRAVADO:
+            # Indisponibilidade não prova divergência e não pode tornar uma
+            # promoção parcial permanentemente irretomável.
+            raise OSError("o descriptor da recuperação está temporariamente indisponível")
+        plano = {
+            "workspace_id": str(staged_workspace.workspace_id),
+            "workspace_name": staged_workspace.name,
+            "workspace_created_at": staged_workspace.created_at,
+            "revisions": [[r.revision_id, r.artifact_kind, r.artifact_id, r.checksum_sha256] for r in staged_revisions],
+            "private_contents": sorted([str(m.content_id), m.checksum_sha256] for m in staged_private),
+        }
+        if (
+            not isinstance(descriptor, tuple)
+            or descriptor[1] != summary
+            or descriptor[0]["staging_identity"] != staging.identidade
+            or descriptor[0]["promotion_plan_sha256"] != _hash_plano_promocao(plano)
+        ):
+            raise RecoveryNotPromotable("o staging divergiu do plano verificado")
+
         # ORDEM DE ESCRITA — o conteúdo privado vem POR ÚLTIMO, de propósito.
         #
         # Tentou-se o inverso (privado primeiro, para que a falha de I/O mais

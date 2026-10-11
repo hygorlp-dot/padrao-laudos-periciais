@@ -36,6 +36,11 @@ function selectFile() {
   fireEvent.change(input, { target: { files: [backupFile()] } });
 }
 
+async function openReview() {
+  fireEvent.click(await screen.findByRole("button", { name: "Revisar recuperação" }));
+  return screen.findByRole("button", { name: "Promover recuperação" });
+}
+
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn());
   vi.stubGlobal("URL", {
@@ -77,15 +82,15 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
 
     await waitFor(() =>
-      expect(screen.getByRole("status").textContent).toContain("não"),
+      expect(screen.getByRole("status").textContent).toContain("Backup válido"),
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe("/app-api/v1/recovery/verify");
     expect(
-      screen.queryByRole("button", { name: "4. Promover recuperação" }),
+      screen.queryByRole("button", { name: "Promover recuperação" }),
     ).toBeNull();
   });
 
@@ -99,9 +104,9 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
 
     await waitFor(() =>
       expect(screen.getByRole("status").textContent).toContain("isolada"),
@@ -120,15 +125,15 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
 
-    const promote = await screen.findByRole("button", { name: "4. Promover recuperação" });
+    const promote = await openReview();
     expect(promote).toBeDisabled();
 
     fireEvent.click(screen.getByRole("checkbox"));
-    expect(screen.getByRole("button", { name: "4. Promover recuperação" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Promover recuperação" })).toBeEnabled();
   });
 
   it("promove somente após a confirmação e reporta a perícia ativa", async () => {
@@ -142,12 +147,12 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
+    await openReview();
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+    fireEvent.click(screen.getByRole("button", { name: "Promover recuperação" }));
 
     await waitFor(() =>
       expect(screen.getByRole("status").textContent).toContain("promovida"),
@@ -169,14 +174,14 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
     await screen.findByRole("button", { name: "Descartar recuperação preparada" });
     fireEvent.click(screen.getByRole("button", { name: "Descartar recuperação preparada" }));
 
     await waitFor(() =>
-      expect(screen.queryByRole("button", { name: "4. Promover recuperação" })).toBeNull(),
+      expect(screen.queryByRole("button", { name: "Promover recuperação" })).toBeNull(),
     );
     expect(fetchMock.mock.calls[2][0]).toBe(`/app-api/v1/recovery/${RECOVERY}/discard`);
   });
@@ -189,12 +194,12 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("não é um backup íntegro");
     expect(
-      screen.queryByRole("button", { name: "2. Preparar cópia recuperada" }),
+      screen.queryByRole("button", { name: "Preparar recuperação" }),
     ).toBeNull();
   });
 
@@ -211,12 +216,12 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
+    await openReview();
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+    fireEvent.click(screen.getByRole("button", { name: "Promover recuperação" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Já existe uma perícia com esta identidade");
@@ -236,12 +241,12 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
+    await openReview();
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+    fireEvent.click(screen.getByRole("button", { name: "Promover recuperação" }));
 
     // A saída existe, mas passa pelo descarte EXPLÍCITO: enquanto a cópia
     // isolada estiver no disco, "recomeçar" seria abandoná-la em silêncio.
@@ -250,7 +255,7 @@ describe("WorkspaceRecoveryView", () => {
       screen.getByRole("button", { name: "Descartar recuperação preparada" }),
     );
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
-    expect(screen.getByRole("button", { name: "1. Verificar backup" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Selecionar backup" })).toBeTruthy();
   });
   it("staging não promovível continua descartável: a cópia isolada existe em disco", async () => {
     const fetchMock = vi.mocked(fetch);
@@ -272,14 +277,14 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
 
     const alerta = await screen.findByRole("alert");
     expect(alerta.textContent).toContain("Já existe uma perícia com esta identidade");
     expect(
-      screen.queryByRole("button", { name: "4. Promover recuperação" }),
+      screen.queryByRole("button", { name: "Promover recuperação" }),
     ).toBeNull();
 
     const descartar = screen.getByRole("button", {
@@ -304,12 +309,12 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
+    await openReview();
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+    fireEvent.click(screen.getByRole("button", { name: "Promover recuperação" }));
 
     await screen.findByRole("alert");
     fireEvent.click(
@@ -333,10 +338,10 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
+    await openReview();
     fireEvent.click(
       screen.getByRole("button", { name: "Descartar recuperação preparada" }),
     );
@@ -367,12 +372,12 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
+    await openReview();
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+    fireEvent.click(screen.getByRole("button", { name: "Promover recuperação" }));
 
     const alerta = await screen.findByRole("alert");
     expect(alerta.textContent).toContain("retomada");
@@ -405,12 +410,12 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
+    await openReview();
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+    fireEvent.click(screen.getByRole("button", { name: "Promover recuperação" }));
 
     await screen.findByRole("alert");
     expect(document.body.textContent).not.toContain("Nada foi promovido");
@@ -442,10 +447,10 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
+    await openReview();
     fireEvent.click(
       screen.getByRole("button", { name: "Descartar recuperação preparada" }),
     );
@@ -468,11 +473,11 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
 
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    await openReview();
     expect(document.body.textContent).not.toContain("não substituiu nada");
     expect(document.body.textContent).toContain("RETOMADA");
     // Descartar uma retomada apagaria a autoridade: não é oferecido aqui.
@@ -498,12 +503,12 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    await screen.findByRole("button", { name: "2. Preparar cópia recuperada" });
-    fireEvent.click(screen.getByRole("button", { name: "2. Preparar cópia recuperada" }));
-    await screen.findByRole("button", { name: "4. Promover recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    await screen.findByRole("button", { name: "Preparar recuperação" });
+    fireEvent.click(screen.getByRole("button", { name: "Preparar recuperação" }));
+    await openReview();
     fireEvent.click(screen.getByRole("checkbox"));
-    fireEvent.click(screen.getByRole("button", { name: "4. Promover recuperação" }));
+    fireEvent.click(screen.getByRole("button", { name: "Promover recuperação" }));
 
     const alerta = await screen.findByRole("alert");
     expect(alerta.textContent).toContain("não pode mais ser concluída");
@@ -584,8 +589,8 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    fireEvent.click(await screen.findByRole("button", { name: "2. Preparar cópia recuperada" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preparar recuperação" }));
 
     expect(await screen.findByRole("button", {
       name: "Abandonar cópia de recuperação",
@@ -611,12 +616,12 @@ describe("WorkspaceRecoveryView", () => {
 
     render(<WorkspaceRecoveryView workspaceId={WORKSPACE} />);
     selectFile();
-    fireEvent.click(screen.getByRole("button", { name: "1. Verificar backup" }));
-    fireEvent.click(await screen.findByRole("button", { name: "2. Preparar cópia recuperada" }));
+    fireEvent.click(screen.getByRole("button", { name: "Verificar backup" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Preparar recuperação" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("Windows");
     expect(document.body.textContent).not.toContain("Cópia recuperada preparada");
-    expect(screen.queryByRole("button", { name: "4. Promover recuperação" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Promover recuperação" })).toBeNull();
   });
 });
