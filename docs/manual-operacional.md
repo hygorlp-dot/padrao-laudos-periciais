@@ -61,11 +61,15 @@ Pendentes: Human RC no Windows, execução de caso real e
 release/packaging distribuível. A dívida histórica de duração do `verify_core`
 permanece registrada no Issue #192 e não é alterada por este manual.
 
-A maturidade distingue a evidência de um candidato histórico do estado
-operacional vivo. `HUMAN_RC_READY = FALSE`: mudanças materiais posteriores
-exigem novo candidato; a readiness antiga não representa o HEAD atual e o
-aceite humano continua pendente. A declaração versionada aponta a evidência
-histórica, enquanto `python -m scripts.quality.product_maturity` lê o HEAD vivo.
+A maturidade distingue a evidência do candidato congelado do HEAD vivo.
+`HUMAN_RC_READY = TRUE` para o produto qualificado indicado por
+`current_rc_candidate` em `config/product-maturity-v1.json`;
+`HUMAN_RC_ACCEPTED = FALSE`.
+A declaração posterior não substitui esse candidato nem o aceite do perito.
+O candidato anterior permanece histórico. A declaração versionada aponta a
+evidência validada, enquanto `python -m scripts.quality.product_maturity` lê o
+HEAD vivo. Execute o produto no SHA congelado e use o roteiro atualizado em
+`docs/HUMAN_RC_WINDOWS_V2.md`, conforme os registros nas Issues #256 e #238.
 
 ## Histórico
 

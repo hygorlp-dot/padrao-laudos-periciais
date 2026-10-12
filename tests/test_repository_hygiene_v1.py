@@ -494,12 +494,26 @@ def test_fixture_indirect_private_consumer_is_never_opened(tmp_path, monkeypatch
 
 def test_maturity_readiness_does_not_promote_historical_candidate():
     declaration = json.loads((ROOT / "config/product-maturity-v1.json").read_text(encoding="utf-8"))
+    # Historical readiness alone must not grant current operational readiness.
+    declaration = {**declaration, "human_rc_ready": False, "current_rc_candidate": None}
     assert declaration["human_rc_ready"] is False
     assert declaration["historical_rc_candidate"]["human_rc_ready"] is True
     status = product_maturity.evaluate(declaration, "f" * 40)
     assert status["human_rc_ready"] is False
     assert status["human_rc_accepted"] is False
     assert product_maturity.evaluate(declaration, None)["contract_errors"]
+
+
+def test_qualified_maturity_preserves_product_candidate_and_pending_human_acceptance():
+    declaration = json.loads((ROOT / "config/product-maturity-v1.json").read_text(encoding="utf-8"))
+    assert declaration["current_rc_candidate"] == declaration["evidence_base_sha"]
+    assert declaration["current_rc_candidate"] != declaration["historical_rc_candidate"]["sha"]
+    status = product_maturity.evaluate(declaration, "f" * 40)
+    assert status["contract_errors"] == []
+    assert status["human_rc_ready"] is True
+    assert status["human_rc_accepted"] is False
+    assert product_maturity.evaluate(declaration, declaration["evidence_base_sha"])["human_rc_ready"] is False
+    assert product_maturity.evaluate(declaration, None)["human_rc_ready"] is False
 
 
 def test_reader_refuses_ancestor_reparse_point(tmp_path, monkeypatch):

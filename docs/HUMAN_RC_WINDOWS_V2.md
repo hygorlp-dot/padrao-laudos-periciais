@@ -12,6 +12,13 @@ para o perito executar pela interface normal, não uma suíte automatizada.
 | Dados | somente sintéticos nesta rodada; `PRIVATE_EGRESS = FALSE` |
 | SHA | `FINAL_RC_CANDIDATE_SHA` registrado nas Issues #256 e #238 |
 
+Candidato de produto congelado: `3a7c25116965712cab16084eae1c4642ff6f6b3c`.
+Este roteiro foi reconciliado em uma declaração posterior; use esta versão do
+roteiro e execute o produto no SHA congelado, não no HEAD da declaração.
+PROFESSIONAL_UX_V1 (3A–3D) está concluído. A prova automática
+[pré-RC](reviews/pre-human-rc-freeze-v1.md) qualifica o candidato, mas não
+substitui a rodada humana. `HUMAN_RC_ACCEPTED = FALSE` até o aceite do perito.
+
 ## Preparação (uma vez, fora do fluxo avaliado)
 
 Ainda não há instalador (`PACKAGING_GAP`). A preparação abaixo é feita uma vez e
@@ -45,16 +52,25 @@ confundir com o **C2** do bloco C, a interrupção durante a leitura do PJe.)
 
 ```powershell
 cd C:\SistemaPericial\app
-python -m pytest -q -rs tests/test_branded_report_template_v1.py -k word16 tests/test_office_word_native_matrix_v1.py
+python -m pytest -q -rs tests/test_professional_report_layout_v1.py tests/test_branded_report_template_v1.py tests/test_office_word_native_matrix_v1.py tests/test_default_report_template_v1.py tests/test_office_word_authority_v1.py
 ```
 
 Aceite: todos `passed` e **nenhum** `skipped` com o motivo "Microsoft Word 16
-unavailable". A prova `test_word16_real_proof_of_the_v2_and_the_custom_template`
-converte pelo Word 16 local e valida o PDF derivado (fidelidade) de:
-- um laudo fictício no modelo padrão V2, com logotipo, marca d'água, fundo,
+unavailable" ou dependência nativa ausente. A suíte profissional prova o modelo
+atual `PROFESSIONAL_REPORT_LAYOUT_V1` com branding `NONE` e
+`SYNTHETIC_CONFIGURED`, ficha, índice e capítulos. O teste histórico
+`test_word16_real_proof_of_the_v2_and_the_custom_template` mantém seu nome e
+cobre compatibilidade adicional. As suítes convertem pelo Word 16 local e
+validam o PDF derivado (fidelidade) de:
+- um laudo fictício com logotipo, marca d'água, fundo,
   cabeçalho, rodapé "Página X de Y" (PAGE/NUMPAGES atualizados em cada página),
   sumário (TOC) preenchido e várias partes no item 1;
 - um modelo Word personalizado.
+
+A qualificação neste SHA registrou 316 PASS e um skip documentado `GAP N-02c`
+(fixture OLE VBA válida ausente). DOCM básico passou; preservação de bytes VBA
+tem prova unitária. Não declarar conversão nativa de macro DOCM comprovada por
+esse skip. Ele não é indisponibilidade de Word e permanece registrado.
 
 Registre na Issue #238 a versão do Word (Arquivo → Conta → Sobre o Word) e a saída
 do comando.
@@ -84,15 +100,15 @@ Marque `PASS`, `FAIL` ou `N/A` em cada bloco e anote o que observou.
 | **G. Vistoria** | Registrar observação, medição, foto e declaração. Após um novo plano, usar **Iniciar nova vistoria** e **Reaproveitar selecionados** apenas para os registros escolhidos. | Vistoria anterior preservada; só o escolhido entra, com data, conteúdo e foto originais; itens continuam pendentes. |
 | **H. Evidências / Constatações** | Criar evidências e constatações; revisar a proposta PAT. Se a vistoria mudou, usar **Iniciar nova cadeia técnica** e **Gerar nova proposta PAT sobre a vistoria atual**. | Nada é promovido sem decisão profissional; cadeia anterior preservada. |
 | **I. Laudo** | Revisar conteúdo, quesitos, tabelas, figuras e autoria profissional. Abrir **Linguagem e pendências**: escrever um trecho com `[INFORMAÇÃO NECESSÁRIA: …]` e conferir que a emissão fica bloqueada e o local é indicado; resolver. Escrever um parágrafo que começa com "> " (citação longa). Aprovar. | Autoria e aprovação exatas; nenhuma autoridade genérica; avisos só sugerem; pendência aberta impede o Word final. |
-| **J. Word / PDF / Entrega** | Gerar o Word (modelo padrão V2 da perícia); renderizar a entrega; baixar Word e PDF e abri-los no Word 16 e no leitor de PDF; anexar um PDF de apoio à entrega. | Word é o artefato autoritativo e o PDF é derivado; a UI distingue os dois; capa, cabeçalho, rodapé, marca d'água e fundo iguais no Word e no PDF; o anexo de apoio **não** aparece entre os materiais do caso. |
+| **J. Word / PDF / Entrega** | Gerar o Word profissional (`PROFESSIONAL_REPORT_LAYOUT_V1` da perícia); renderizar a entrega; baixar Word e PDF e abri-los no Word 16 e no leitor de PDF; anexar um PDF de apoio; revisar, aprovar, finalizar e registrar a entrega. Após mudança válida do laudo, conferir o estado desatualizado e reemitir. | Word é o artefato autoritativo e o PDF é derivado; a UI distingue os dois; capa, cabeçalho, rodapé, marca d'água e fundo iguais no Word e no PDF; o anexo de apoio **não** aparece entre os materiais do caso; Word/PDF/anexos e decisões anteriores permanecem preservados; a reemissão cria novo rascunho, sem promover artefatos ou decisões anteriores, e preserva o predecessor. |
 | **K. Orçamento** | Registrar horas, honorários e um pagamento. | Orçamento separado do laudo e da entrega. |
 | **L. Backup** | Criar o backup pela UI e guardar o arquivo. | Backup gerado sem erro; nenhuma pendência offline escondida. |
 | **M. Fechar processo** | Fechar o navegador e a janela do atalho (encerrar o produto por completo). | Nenhum processo do produto continua rodando. |
 | **N. Reiniciar de verdade** | Duplo clique no atalho de novo; abrir o endereço. | Produto volta a funcionar sem passos extras. |
 | **O. Reabrir** | Abrir o workspace; conferir materiais, análise, planejamento, vistoria (com o reaproveitamento), constatações, laudo, entrega e orçamento. | Tudo igual ao momento antes de fechar. |
-| **P. Recovery** | Verificar o backup; preparar a recuperação (staging); promover explicitamente; reabrir o workspace recuperado. | Nenhuma promoção automática; nenhum dado perdido; workspace recuperado igual ao original, com a mesma identidade visual capturada. |
-| **Q. Configurações** | Fora de qualquer perícia, abrir **Configurações**: preencher o perfil profissional (sem CPF, RG ou endereço residencial); enviar logotipo, símbolo e imagens em PNG/JPEG (e tentar um arquivo recusado); ajustar capa, cabeçalho, rodapé, marca d'água (acima de 15% aparece aviso) e fundo; ajustar o padrão editorial; usar **Gerar documento de teste** e abrir no Word 16; restaurar uma revisão do histórico. Enviar um modelo Word personalizado, escolhê-lo e gerar o documento de teste de novo; voltar ao modelo do produto. | Nada muda em perícias já criadas; histórico preservado; recusas explicadas; o modelo personalizado preserva a própria identidade visual e não pode ser trocado enquanto estiver em uso. |
-| **R. Configurações da perícia** | Criar uma perícia nova depois de mudar as Configurações; em uma perícia anterior, abrir **Configurações desta perícia**, conferir as diferenças e usar **Atualizar a partir das configurações** com confirmação. | Perícia nova nasce com as configurações vigentes; a anterior só muda com confirmação explícita; laudo aprovado volta para revisão se o perfil mudar. |
+| **P. Recovery** | Selecionar e verificar o backup; preparar a recuperação (staging); revisar o resultado; promover explicitamente; reabrir o workspace recuperado. | Verificado e preparado não significam promovido; nenhuma promoção automática; fontes, mídia da vistoria, laudo, Word/PDF, histórico de entrega e configurações/branding capturados preservados; workspace recuperado igual ao original. |
+| **Q. Configurações** | Fora de qualquer perícia, abrir **Configurações**: preencher o perfil profissional (sem CPF, RG ou endereço residencial); enviar logotipo, símbolo e imagens sintéticos em PNG/JPEG, ou assets posteriormente fornecidos pelo proprietário (e tentar um arquivo recusado); ajustar capa, cabeçalho, rodapé, marca d'água (acima de 15% aparece aviso) e fundo; ajustar o padrão editorial; usar **Gerar documento de teste** e abrir no Word 16; restaurar uma revisão do histórico. Enviar um modelo Word personalizado, escolhê-lo e gerar o documento de teste de novo; voltar ao modelo do produto. | Nada muda em perícias já criadas; histórico preservado; recusas explicadas; o modelo personalizado preserva a própria identidade visual e não pode ser trocado enquanto estiver em uso. |
+| **R. Configurações da perícia** | Criar uma perícia nova depois de mudar as Configurações; em uma perícia anterior, abrir **Configurações desta perícia**, conferir as diferenças e usar **Atualizar a partir das configurações** com confirmação. | Perícia nova nasce com as configurações vigentes; a anterior só muda com confirmação explícita; mudança relevante para o laudo invalida sua aprovação, inclusive quando o perfil não é incluído; entrega anterior fica desatualizada e preservada. Histórico e restauração de configurações não reescrevem revisões anteriores. |
 
 ## O que observar durante toda a sessão
 

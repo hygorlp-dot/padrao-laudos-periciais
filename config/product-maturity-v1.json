@@ -1,9 +1,9 @@
 {
   "schema_version": "1.0.0",
   "generated_from": "POST_MAIN_LONGITUDINAL_PRODUCT_INTEGRITY_ORACLE_V1 + V7_FINAL_RC_ORACLE_V1",
-  "evidence_base_sha": "42de7be85462e6e8a38ac696dd3adb987b270ec0",
+  "evidence_base_sha": "3a7c25116965712cab16084eae1c4642ff6f6b3c",
   "evidence_base_semantics": "HISTORICAL_VALIDATED_COMMIT_NOT_LIVE_HEAD",
-  "evidence_base_proof": "post-main CI (core-safety, lint) green and final RC oracle at the frozen Round 3 candidate; recorded in #256 and #238",
+  "evidence_base_proof": "Fresh pre-Human-RC qualification after PROFESSIONAL_UX_V1 closure: longitudinal/final oracles, Word 16, fidelity, Delivery/Recovery/Settings, integral gate, protected identical-tree CI plus exact-main integration, privacy and independent RC Reviewer/Systemic Auditor P0/P1=0; standing owner Claude waiver bound to integrated candidate; recorded in #256/#238 and docs/reviews/pre-human-rc-freeze-v1.md",
   "live_head_source": "python -m scripts.quality.product_maturity (reads .git at run time; never stored here)",
   "roadmap_v6_item_2": "COMPLETE",
   "roadmap_v7": {
@@ -15,9 +15,9 @@
     "V7-5_docs_and_governance_reconciliation": "COMPLETE",
     "V7-6_final_synthetic_oracle": "COMPLETE"
   },
-  "human_rc_ready": false,
-  "readiness_reason": "MATERIAL_CHANGES_AFTER_HISTORICAL_RC_CANDIDATE; NO_CURRENT_CANDIDATE_ACCEPTED",
-  "current_rc_candidate": null,
+  "human_rc_ready": true,
+  "readiness_reason": "EXACT_PRODUCT_CANDIDATE_QUALIFIED_AND_FROZEN; HUMAN_ACCEPTANCE_PENDING",
+  "current_rc_candidate": "3a7c25116965712cab16084eae1c4642ff6f6b3c",
   "historical_rc_candidate": {
     "sha": "42de7be85462e6e8a38ac696dd3adb987b270ec0",
     "human_rc_ready": true,
