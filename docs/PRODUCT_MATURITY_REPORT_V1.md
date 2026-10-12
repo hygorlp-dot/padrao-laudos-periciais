@@ -39,12 +39,17 @@ truth; it is not authorization to begin a later stage.
   SHA-256 (#202, #203). Word stays authoritative; any refusal leaves the Word
   and no PDF.
 - Stage 10 is `IMPLEMENTED_PROPOSAL_ONLY`; it is not autonomous authority.
-- Operational `HUMAN_RC_READY = FALSE`: material changes occurred after the
-  historical candidate. No current RC candidate is declared (`current_rc_candidate = null`).
-  `historical_rc_candidate` preserves the earlier readiness and its SHA without
-  promoting that evidence to the live HEAD. Human acceptance remains false;
-  Human RC rounds and their findings are recorded in #238. No real case has
-  been run and there is no installer (`PACKAGING_GAP`).
+- `HUMAN_RC_READY = TRUE` for the frozen product candidate
+  `3a7c25116965712cab16084eae1c4642ff6f6b3c`, tree
+  `46d41055cfefdb9c5b1f387693a986b9a7100188`, after fresh qualification of
+  PROFESSIONAL_UX_V1 (3A–3D). The later declarative commit does not replace this
+  candidate. [Qualification record](reviews/pre-human-rc-freeze-v1.md) and
+  Issues #256/#238 bind the evidence to that exact product SHA.
+  `historical_rc_candidate` preserves the earlier candidate separately.
+  `HUMAN_RC_ACCEPTED = FALSE`: automated assurance does not accept the Human RC.
+  The owner must execute [A–R, W16 and C2](HUMAN_RC_WINDOWS_V2.md) against the
+  frozen product candidate. No real case has been run and there is no installer
+  (`PACKAGING_GAP`).
 - `PRODUCT_ROADMAP_STAGE_0_TO_12_COMPLETE = FALSE` because Stage 10 is proposal-only
   and human acceptance remains outstanding.
 - Repository visibility: GitHub reports the repository as public while earlier text
@@ -108,7 +113,8 @@ append-only audit and token/cost ceilings are covered by first-party tests.
   60-second threshold; the post-main run observed 345.693 seconds. Semantic
   gates passed and the timing debt remains explicitly visible rather than being
   hidden by retries.
-- Human RC readiness: `FALSE`; a new candidate and professional acceptance (#238) are still required.
+- Human RC readiness: `TRUE` for the frozen candidate above; professional
+  acceptance (#238) is still required. Automation stops at `HUMAN_RC_REQUIRED`.
 - Historical timing debt (#192) is superseded by the hybrid attribution policy
   (`docs/arquitetura/decisoes/ADR-hybrid-timing-attribution-v1.md`); the 60-second
   reference is unchanged and the runtime cost is tracked in Issue #259.
