@@ -525,8 +525,6 @@ class ReviewPathology:
             )
         if snapshot.upstream_stale:
             raise RepositoryConflict("Construction Defect Analysis upstream is stale")
-        if snapshot.gate == "BLOQUEADO_PARA_REDACAO":
-            raise ValueError("blocked PAT cannot receive professional approval")
         _inspection_record, inspection = self.get_inspection.execute(workspace_id)
         claimed = professional_id.strip() if type(professional_id) is str else ""
         if not claimed or claimed != inspection.responsible_professional:
@@ -538,6 +536,11 @@ class ReviewPathology:
             review_action = PathologyReviewAction(action)
         except (TypeError, ValueError) as exc:
             raise ValueError("pathology review action is invalid") from exc
+        if (
+            snapshot.gate == "BLOQUEADO_PARA_REDACAO"
+            and review_action is PathologyReviewAction.APPROVE
+        ):
+            raise ValueError("blocked PAT cannot receive professional approval")
         now = self.clock.now()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError("pathology review clock requires timezone")
