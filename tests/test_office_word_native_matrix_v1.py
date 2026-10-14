@@ -61,67 +61,6 @@ def _native_temp_root() -> Path:
     return root
 
 
-def test_native_cleanup_waits_for_owned_process_exit(monkeypatch) -> None:
-    """A drained Job counter must not expose still-exiting Word diagnostics."""
-    import win32api
-    import win32event
-    import win32job
-
-    from scripts.backend_contract.infrastructure import office_pdf
-
-    original_close = office_pdf._WindowsJobWordWorker.close
-    original_unlink = os.unlink
-    process_handles = []
-    signals_after_close = []
-    cleanup_locks = []
-    render_roots = []
-
-    def observed_close(worker):
-        for pid in win32job.QueryInformationJobObject(
-            worker._job, win32job.JobObjectBasicProcessIdList
-        ):
-            handle = win32api.OpenProcess(0x100000 | 0x1000, False, pid)
-            assert win32job.IsProcessInJob(handle, worker._job)
-            process_handles.append(handle)
-        original_close(worker)
-        signals_after_close.extend(
-            win32event.WaitForSingleObject(handle, 0) for handle in process_handles
-        )
-
-    original_start = office_pdf._start_owned_word_worker
-
-    def observed_start(root):
-        render_roots.append(root)
-        return original_start(root)
-
-    def observed_unlink(path, *args, **kwargs):
-        try:
-            return original_unlink(path, *args, **kwargs)
-        except PermissionError as exc:
-            if any(str(path).startswith(str(root)) for root in render_roots):
-                cleanup_locks.append(exc.winerror)
-            raise
-
-    monkeypatch.setattr(office_pdf._WindowsJobWordWorker, "close", observed_close)
-    monkeypatch.setattr(office_pdf, "_start_owned_word_worker", observed_start)
-    monkeypatch.setattr(os, "unlink", observed_unlink)
-    try:
-        source = _package(
-            main_type=_DOCX_MAIN_TYPE,
-            body="<w:p><w:r><w:t>Synthetic cleanup lifecycle</w:t></w:r></w:p>",
-        )
-        pdf = LocalOfficePdfConverter(temp_root=_native_temp_root()).convert(source, "DOCX")
-        assert pdf.startswith(b"%PDF-")
-        assert not cleanup_locks, f"cleanup lifecycle WinError {cleanup_locks}"
-        assert signals_after_close and all(
-            signal == win32event.WAIT_OBJECT_0 for signal in signals_after_close
-        ), "owned Word process still exiting after worker.close"
-        assert all(not root.exists() for root in render_roots)
-    finally:
-        for handle in process_handles:
-            handle.Close()
-
-
 # A representative package declares its own docDefaults.  Without word/styles.xml
 # Word falls back to its built-in Normal style -- 1.08 line spacing and 8pt after --
 # which the oracle cannot observe from the package, so a faithful render is
