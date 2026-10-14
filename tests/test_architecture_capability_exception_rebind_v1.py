@@ -666,7 +666,7 @@ def _git_blobs(sources: dict[str, str]) -> dict[str, bytes]:
 def test_word_render_contract_accepts_only_the_pre_reviewed_exact_digests():
     assert _word_render_digests_are_closed(dict(_WORD_PRODUCT_SHA256))
     assert _WORD_PRODUCT_SHA256 == {
-        WORD_PARENT_PATH: "b7394dc88f96e9c6e815d12345cd232b0fa6172471f3699db1127b7366883080",
+        WORD_PARENT_PATH: "59e1ff0eeb13ea496a697fa9a6f5ccc1d80349c51a4c6d84fa9ebc6f3817166e",
         WORD_WORKER_PATH: "a453ca2d4a8a8b2aefb2ee786911d1b1314fea7d31f30884845e439041bbf87e",
     }
 
@@ -688,7 +688,7 @@ def test_word_render_contract_accepts_only_the_pre_reviewed_exact_digests():
             "a453ca2d4a8a8b2aefb2ee786911d1b1314fea7d31f30884845e439041bbf87e",
         ),
         (
-            "b7394dc88f96e9c6e815d12345cd232b0fa6172471f3699db1127b7366883080",
+            "59e1ff0eeb13ea496a697fa9a6f5ccc1d80349c51a4c6d84fa9ebc6f3817166e",
             "753828e9d112a220c231a9d47f1663e7289e3b01d2d55ca65fcb09170ee6fa1b",
         ),
     ],

@@ -3,25 +3,8 @@
   "transitionId": "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1",
   "purpose": "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF",
   "scope": "LOCAL_WORD_COM_CONTAINMENT_V1",
-  "protectedBaseSha": "0275c4766f5292fcf9a599999bebc9fbff97ccb0",
+  "protectedBaseSha": "8ca8f95c6f2033ac3ea5b3baffdc3de3466cda61",
   "protectedArtifacts": [
-    {
-      "path": "config/capability-protected-artifacts-v1.json",
-      "base": {
-        "path": "config/capability-protected-artifacts-v1.json",
-        "state": "PRESENT",
-        "mode": "100644",
-        "objectType": "blob",
-        "blobSha": "52607072c7d5c9b3f5b6cbf0693fbebf1be6352a"
-      },
-      "candidate": {
-        "path": "config/capability-protected-artifacts-v1.json",
-        "state": "PRESENT",
-        "mode": "100644",
-        "objectType": "blob",
-        "blobSha": "be6d754a9a27361c317b5b8d9ac96734e8787d2a"
-      }
-    },
     {
       "path": "config/capability-exceptions-v1.json",
       "base": {
@@ -29,14 +12,31 @@
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "476669e5055822c67995574bf11089ff046b7895"
+        "blobSha": "e79d8ade92b1e4d2c1b5539c872305f50bb91845"
       },
       "candidate": {
         "path": "config/capability-exceptions-v1.json",
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "e79d8ade92b1e4d2c1b5539c872305f50bb91845"
+        "blobSha": "9594710936529abc377898bba25a229dff581729"
+      }
+    },
+    {
+      "path": "config/capability-protected-artifacts-v1.json",
+      "base": {
+        "path": "config/capability-protected-artifacts-v1.json",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "be6d754a9a27361c317b5b8d9ac96734e8787d2a"
+      },
+      "candidate": {
+        "path": "config/capability-protected-artifacts-v1.json",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "e5abce403af30d8d35d785c0ba4be34f43c9fe59"
       }
     },
     {
@@ -46,18 +46,35 @@
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "14421881173fb35aab368229afc81e0c00b1c163"
+        "blobSha": "592c36c15f5c54be5ce01fa91affb8d85221cb15"
       },
       "candidate": {
         "path": "scripts/quality/capability_gate_adapter.py",
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "592c36c15f5c54be5ce01fa91affb8d85221cb15"
+        "blobSha": "c6291990a74aa9ddfd575018143b9d7a7082dc77"
       }
     }
   ],
   "supportArtifacts": [
+    {
+      "path": "scripts/backend_contract/infrastructure/office_pdf.py",
+      "base": {
+        "path": "scripts/backend_contract/infrastructure/office_pdf.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "1879b648842d3495fac1988e0e0dd3f61000dfef"
+      },
+      "candidate": {
+        "path": "scripts/backend_contract/infrastructure/office_pdf.py",
+        "state": "PRESENT",
+        "mode": "100644",
+        "objectType": "blob",
+        "blobSha": "79be6ea0f029a55dbc77dee79c2fc922bbf60a9e"
+      }
+    },
     {
       "path": "tests/test_architecture_capability_exception_rebind_v1.py",
       "base": {
@@ -65,31 +82,31 @@
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "b1fbd3f985255f38553bc7cecd805de85ad5ccc6"
+        "blobSha": "4c79f40c18c027648d72a8015cd6b6df95149672"
       },
       "candidate": {
         "path": "tests/test_architecture_capability_exception_rebind_v1.py",
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "26dadf528f37d60a3455efc196e974567693d8b9"
+        "blobSha": "46d958a744d080f68c81835daaee18004960c3b9"
       }
     },
     {
-      "path": "tests/test_architecture_capability_word_trust_only_rebind_v1.py",
+      "path": "tests/test_office_word_containment_v1.py",
       "base": {
-        "path": "tests/test_architecture_capability_word_trust_only_rebind_v1.py",
+        "path": "tests/test_office_word_containment_v1.py",
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "37eb75fbb3f0d06ec31d447456bfd2911b784a02"
+        "blobSha": "ccd258580e62b9b4fa7f1f07817d66883a45b1e6"
       },
       "candidate": {
-        "path": "tests/test_architecture_capability_word_trust_only_rebind_v1.py",
+        "path": "tests/test_office_word_containment_v1.py",
         "state": "PRESENT",
         "mode": "100644",
         "objectType": "blob",
-        "blobSha": "d70301f6de06929ebf2cbe8787da026124ae2c7a"
+        "blobSha": "bf667571c5c4ef458714e848184756cc07f15e15"
       }
     }
   ]

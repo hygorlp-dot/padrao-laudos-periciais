@@ -159,7 +159,7 @@ def test_verified_job_remains_authoritative_when_process_observation_fails() -> 
     job = _Handle("job")
     win32event = types.SimpleNamespace(
         WAIT_OBJECT_0=0,
-        WaitForSingleObject=lambda _process, _milliseconds: 258,
+        WaitForSingleObject=lambda _process, _milliseconds: 258 if active["count"] else 0,
     )
 
     def _terminate_job(_job, _code) -> None:
@@ -168,7 +168,8 @@ def test_verified_job_remains_authoritative_when_process_observation_fails() -> 
 
     win32job = types.SimpleNamespace(
         JobObjectBasicAccountingInformation=1,
-        QueryInformationJobObject=lambda _job, _kind: {
+        JobObjectBasicProcessIdList=2,
+        QueryInformationJobObject=lambda _job, _kind: () if _kind == 2 else {
             "ActiveProcesses": active["count"]
         },
         TerminateJobObject=_terminate_job,
@@ -190,6 +191,72 @@ def test_verified_job_remains_authoritative_when_process_observation_fails() -> 
     worker.close()
 
     assert events == ["job-terminate", "process-close", "job-close"]
+
+
+def test_zero_job_accounting_does_not_prove_owned_process_exit() -> None:
+    """Windows may remove a terminating member from accounting before signalling."""
+    process, word, job = object(), object(), object()
+    exited = {process}
+    event_api = types.SimpleNamespace(
+        WAIT_OBJECT_0=0,
+        WaitForSingleObject=lambda handle, _ms: 0 if handle in exited else 258,
+    )
+    job_api = types.SimpleNamespace(
+        JobObjectBasicAccountingInformation=1,
+        JobObjectBasicProcessIdList=2,
+        QueryInformationJobObject=lambda _job, kind: () if kind == 2 else {"ActiveProcesses": 0},
+    )
+    worker = _WindowsJobWordWorker(process, job, _identity(), (event_api, job_api, None))
+    worker._member_handles[202] = word
+    assert worker.wait_contained(0) is False
+    exited.add(word)
+    assert worker.wait_contained(0) is True
+
+
+def test_unsignalled_owned_member_fails_closed_and_releases_handles(monkeypatch) -> None:
+    events = []
+
+    class Handle:
+        def __init__(self, name):
+            self.name = name
+
+        def Close(self):
+            events.append(self.name)
+
+    process, word, job = Handle("worker"), Handle("word"), Handle("job")
+    event_api = types.SimpleNamespace(
+        WAIT_OBJECT_0=0,
+        WaitForSingleObject=lambda handle, _ms: 0 if handle is process else 258,
+    )
+    job_api = types.SimpleNamespace(
+        JobObjectBasicAccountingInformation=1,
+        JobObjectBasicProcessIdList=2,
+        QueryInformationJobObject=lambda _job, kind: () if kind == 2 else {"ActiveProcesses": 0},
+        TerminateJobObject=lambda _job, _code: events.append("terminate"),
+    )
+    worker = _WindowsJobWordWorker(process, job, _identity(), (event_api, job_api, None))
+    worker._member_handles[202] = word
+    tick = iter(range(0, 1000, 10))
+    monkeypatch.setattr(office_pdf.time, "monotonic", lambda: next(tick))
+    with pytest.raises(office_pdf.RendererUnavailable, match="did not close cleanly"):
+        worker.close()
+    assert events == ["terminate", "terminate", "word", "worker", "job"]
+
+
+def test_ambiguous_job_member_is_never_adopted(monkeypatch) -> None:
+    events = []
+    handle = types.SimpleNamespace(Close=lambda: events.append("close"))
+    monkeypatch.setitem(sys.modules, "win32api", types.SimpleNamespace(OpenProcess=lambda *_: handle))
+    job_api = types.SimpleNamespace(
+        JobObjectBasicProcessIdList=2,
+        QueryInformationJobObject=lambda *_: (202,),
+        IsProcessInJob=lambda *_: False,
+    )
+    worker = _WindowsJobWordWorker(object(), object(), _identity(), (None, job_api, None))
+    with pytest.raises(office_pdf.RendererUnavailable, match="identity is ambiguous"):
+        worker._capture_members(worker._job)
+    assert events == ["close"]
+    assert worker._member_handles == {}
 
 
 def test_preexisting_user_word_is_not_a_termination_target() -> None:
@@ -395,3 +462,75 @@ def test_owned_word_command_line_disables_add_ins_and_global_templates() -> None
     assert command.split(" ")[1:4] == ["/a", "/x", "/q"]
     assert command.startswith(chr(34) + executable + chr(34))
     assert command.endswith(chr(34) + str(bootstrap) + chr(34))
+
+
+def test_native_cleanup_waits_for_owned_process_exit(monkeypatch) -> None:
+    """A drained Job counter must not expose still-exiting Word diagnostics."""
+    import os
+
+    pytest.importorskip("win32job")
+    from tests.test_office_word_native_matrix_v1 import (
+        _DOCX_MAIN_TYPE, _native_temp_root, _package, _word_available,
+    )
+    if not _word_available():
+        pytest.skip("native cleanup requires Microsoft Word Desktop 16.x")
+
+    import win32api
+    import win32event
+    import win32job
+
+    from scripts.backend_contract.infrastructure import office_pdf
+
+    original_close = office_pdf._WindowsJobWordWorker.close
+    original_unlink = os.unlink
+    process_handles = []
+    signals_after_close = []
+    cleanup_locks = []
+    render_roots = []
+
+    def observed_close(worker):
+        for pid in win32job.QueryInformationJobObject(
+            worker._job, win32job.JobObjectBasicProcessIdList
+        ):
+            handle = win32api.OpenProcess(0x100000 | 0x1000, False, pid)
+            assert win32job.IsProcessInJob(handle, worker._job)
+            process_handles.append(handle)
+        original_close(worker)
+        signals_after_close.extend(
+            win32event.WaitForSingleObject(handle, 0) for handle in process_handles
+        )
+
+    original_start = office_pdf._start_owned_word_worker
+
+    def observed_start(root):
+        render_roots.append(root)
+        return original_start(root)
+
+    def observed_unlink(path, *args, **kwargs):
+        try:
+            return original_unlink(path, *args, **kwargs)
+        except PermissionError as exc:
+            if any(str(path).startswith(str(root)) for root in render_roots):
+                cleanup_locks.append(exc.winerror)
+            raise
+
+    monkeypatch.setattr(office_pdf._WindowsJobWordWorker, "close", observed_close)
+    monkeypatch.setattr(office_pdf, "_start_owned_word_worker", observed_start)
+    monkeypatch.setattr(os, "unlink", observed_unlink)
+    try:
+        source = _package(
+            main_type=_DOCX_MAIN_TYPE,
+            body="<w:p><w:r><w:t>Synthetic cleanup lifecycle</w:t></w:r></w:p>",
+        )
+        pdf = office_pdf.LocalOfficePdfConverter(temp_root=_native_temp_root()).convert(source, "DOCX")
+        assert pdf.startswith(b"%PDF-")
+        assert not cleanup_locks, f"cleanup lifecycle WinError {cleanup_locks}"
+        assert signals_after_close and all(
+            signal == win32event.WAIT_OBJECT_0 for signal in signals_after_close
+        ), "owned Word process still exiting after worker.close"
+        assert all(not root.exists() for root in render_roots)
+    finally:
+        for handle in process_handles:
+            handle.Close()
+
+

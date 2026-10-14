@@ -7,7 +7,7 @@ No command, executable, argv, shell or COM operation is accepted from callers.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import ctypes
 from dataclasses import dataclass
 from hashlib import sha256
@@ -232,10 +232,12 @@ class _WindowsJobWordWorker:
     def __init__(self, process, job, identity: OwnedProcessIdentity, modules: tuple) -> None:
         self._process = process
         self._job = job
+        self._member_handles: dict[int, object] = {}
         self.identity = identity
         self._win32event, self._win32job, self._win32process = modules
 
     def wait(self, milliseconds: int) -> bool:
+        self._capture_members(self._job)
         result = self._win32event.WaitForSingleObject(self._process, milliseconds)
         return result == self._win32event.WAIT_OBJECT_0
 
@@ -252,7 +254,37 @@ class _WindowsJobWordWorker:
             return None
 
     def terminate_job(self) -> None:
+        self._capture_members(self._job)
         self._win32job.TerminateJobObject(self._job, 124)
+
+    def _capture_members(self, job) -> None:
+        for pid in self._win32job.QueryInformationJobObject(
+            job, self._win32job.JobObjectBasicProcessIdList
+        ):
+            if pid == self.identity.pid or pid in self._member_handles:
+                continue
+            import win32api
+
+            try:
+                # Pin the process object while it is still a verified member.
+                # A PID lookup after TerminateJobObject can miss an exiting Word.
+                handle = win32api.OpenProcess(0x100000 | 0x1000, False, pid)
+            except Exception as exc:
+                remaining = self._win32job.QueryInformationJobObject(
+                    job, self._win32job.JobObjectBasicProcessIdList
+                )
+                if pid not in remaining:
+                    continue
+                raise RendererUnavailable("owned Word member cannot be observed") from exc
+            try:
+                verified = self._win32job.IsProcessInJob(handle, job)
+            except Exception:
+                handle.Close()
+                raise
+            if not verified:
+                handle.Close()
+                raise RendererUnavailable("owned Word member identity is ambiguous")
+            self._member_handles[pid] = handle
 
     def wait_contained(self, milliseconds: int) -> bool:
         return self._wait_contained(self._job, self._process, milliseconds)
@@ -265,6 +297,7 @@ class _WindowsJobWordWorker:
         self._process = None
         self._job = None
         try:
+            self._capture_members(job)
             if not self._wait_contained(job, process, 0):
                 self._win32job.TerminateJobObject(job, 124)
             if not self._wait_contained(job, process, 5_000):
@@ -273,22 +306,38 @@ class _WindowsJobWordWorker:
                     raise RendererUnavailable("owned Word job did not close cleanly")
         finally:
             try:
-                process.Close()
+                with ExitStack() as handles:
+                    handles.callback(process.Close)
+                    for handle in self._member_handles.values():
+                        handles.callback(handle.Close)
+                    self._member_handles.clear()
             finally:
                 job.Close()
 
     def _wait_contained(self, job, process, milliseconds: int) -> bool:
         deadline = time.monotonic() + milliseconds / 1000
         while True:
+            self._capture_members(job)
             information = self._win32job.QueryInformationJobObject(
                 job, self._win32job.JobObjectBasicAccountingInformation
             )
-            if information["ActiveProcesses"] == 0:
+            handles = [process, *self._member_handles.values()]
+            pending = [
+                handle
+                for handle in handles
+                if self._win32event.WaitForSingleObject(handle, 0)
+                != self._win32event.WAIT_OBJECT_0
+            ]
+            # Job accounting can reach zero before the terminated Word process
+            # is signalled and its diagnostics mapping is released (#319).
+            if information["ActiveProcesses"] == 0 and not pending:
                 return True
             remaining_ms = int(max(0, (deadline - time.monotonic()) * 1000))
             if remaining_ms <= 0:
                 return False
-            self._win32event.WaitForSingleObject(process, min(50, remaining_ms))
+            self._win32event.WaitForSingleObject(
+                pending[0] if pending else process, min(50, remaining_ms)
+            )
 
 
 def _controlled_worker_environment(
