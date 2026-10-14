@@ -241,6 +241,9 @@ def cleanup_workspace(workspace):
     repo = workspace["repo"]
     _git(repo, "checkout", "-q", "--detach", CLEANUP_BASE)
     (repo / SUPPORT_TEST).write_bytes(_git(repo, "cat-file", "blob", CLEANUP_SECURITY_BLOB, text=False))
+    (repo / "tests/test_architecture_capability_word_trust_only_rebind_v1.py").write_bytes(
+        Path(__file__).read_bytes()
+    )
     base = _commit(repo, "exact predecessor security assertions")
     _git(repo, "checkout", "-q", "--detach", CLEANUP_SOURCE)
     _git(repo, "merge", "-q", "--no-verify", "--no-edit", base)
@@ -321,6 +324,16 @@ def test_cleanup_fixture_retains_exact_security_assertions(cleanup_workspace):
         f"{SUPPORT_TEST}::{node}" for node in nodes
     ]], cwd=w["repo"], capture_output=True, text=True, timeout=120,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+
+def test_future_binding_passes_required_current_digest_assertion(cleanup_workspace):
+    w = cleanup_workspace
+    _git(w["repo"], "checkout", "-q", "--detach", w["candidate"])
+    node = "tests/test_architecture_capability_word_trust_only_rebind_v1.py::test_head_carries_exactly_the_final_digests_and_nothing_superseded"
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", node], cwd=w["repo"],
+                            capture_output=True, text=True, timeout=120,
+                            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
     assert result.returncode == 0, (result.stdout, result.stderr)
 
 
@@ -491,15 +504,25 @@ def test_mode_a_is_wired_only_behind_the_failed_product_contract():
 
 def test_head_carries_exactly_the_final_digests_and_nothing_superseded():
     source = (ROOT / ADAPTER).read_text(encoding="utf-8")
-    assert all(source.count(value) == 1 for value in FINAL)
+    rows = [row for row in json.loads((ROOT / EXCEPTIONS).read_text(encoding="utf-8"))["exceptions"]
+            if row["canonicalPath"] == ADAPTER]
+    assert len(rows) == 1
+    evidence = rows[0]["reviewEvidence"]
+    assert evidence in {REVIEW_EVIDENCE, "LOCAL_WORD_COM_CONTAINMENT_CLEANUP_319"}
+    current = (CLEANUP_HASH, FINAL[1]) if evidence == "LOCAL_WORD_COM_CONTAINMENT_CLEANUP_319" else FINAL
+    assert all(source.count(value) == 1 for value in current)
     assert not any(value in source for value in SUPERSEDED)
     from scripts.quality.capability_gate_adapter import _word_render_digests_are_closed
 
     paths = trust_anchor._WORD_PRODUCT_PATHS
-    assert _word_render_digests_are_closed(dict(zip(paths, FINAL))) is True
+    assert _word_render_digests_are_closed(dict(zip(paths, current))) is True
+    if current != FINAL:
+        assert FINAL[0] not in source
+        assert _word_render_digests_are_closed(dict(zip(paths, FINAL))) is False
+        assert hashlib.sha256((ROOT / WORD_PARENT).read_bytes()).hexdigest() == CLEANUP_HASH
     assert _word_render_digests_are_closed(dict(zip(paths, SUPERSEDED))) is False
     assert _word_render_digests_are_closed(dict(zip(paths, ("0" * 64, FINAL[1])))) is False
-    assert _word_render_digests_are_closed(dict(zip(paths, (FINAL[0], "f" * 64)))) is False
+    assert _word_render_digests_are_closed(dict(zip(paths, (current[0], "f" * 64)))) is False
 
 
 def test_mode_a_is_closed_on_the_landed_main(workspace):
