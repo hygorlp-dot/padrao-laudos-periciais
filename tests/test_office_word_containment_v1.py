@@ -159,7 +159,7 @@ def test_verified_job_remains_authoritative_when_process_observation_fails() -> 
     job = _Handle("job")
     win32event = types.SimpleNamespace(
         WAIT_OBJECT_0=0,
-        WaitForSingleObject=lambda _process, _milliseconds: 258,
+        WaitForSingleObject=lambda _process, _milliseconds: 258 if active["count"] else 0,
     )
 
     def _terminate_job(_job, _code) -> None:
@@ -168,7 +168,8 @@ def test_verified_job_remains_authoritative_when_process_observation_fails() -> 
 
     win32job = types.SimpleNamespace(
         JobObjectBasicAccountingInformation=1,
-        QueryInformationJobObject=lambda _job, _kind: {
+        JobObjectBasicProcessIdList=2,
+        QueryInformationJobObject=lambda _job, _kind: () if _kind == 2 else {
             "ActiveProcesses": active["count"]
         },
         TerminateJobObject=_terminate_job,
@@ -190,6 +191,72 @@ def test_verified_job_remains_authoritative_when_process_observation_fails() -> 
     worker.close()
 
     assert events == ["job-terminate", "process-close", "job-close"]
+
+
+def test_zero_job_accounting_does_not_prove_owned_process_exit() -> None:
+    """Windows may remove a terminating member from accounting before signalling."""
+    process, word, job = object(), object(), object()
+    exited = {process}
+    event_api = types.SimpleNamespace(
+        WAIT_OBJECT_0=0,
+        WaitForSingleObject=lambda handle, _ms: 0 if handle in exited else 258,
+    )
+    job_api = types.SimpleNamespace(
+        JobObjectBasicAccountingInformation=1,
+        JobObjectBasicProcessIdList=2,
+        QueryInformationJobObject=lambda _job, kind: () if kind == 2 else {"ActiveProcesses": 0},
+    )
+    worker = _WindowsJobWordWorker(process, job, _identity(), (event_api, job_api, None))
+    worker._member_handles[202] = word
+    assert worker.wait_contained(0) is False
+    exited.add(word)
+    assert worker.wait_contained(0) is True
+
+
+def test_unsignalled_owned_member_fails_closed_and_releases_handles(monkeypatch) -> None:
+    events = []
+
+    class Handle:
+        def __init__(self, name):
+            self.name = name
+
+        def Close(self):
+            events.append(self.name)
+
+    process, word, job = Handle("worker"), Handle("word"), Handle("job")
+    event_api = types.SimpleNamespace(
+        WAIT_OBJECT_0=0,
+        WaitForSingleObject=lambda handle, _ms: 0 if handle is process else 258,
+    )
+    job_api = types.SimpleNamespace(
+        JobObjectBasicAccountingInformation=1,
+        JobObjectBasicProcessIdList=2,
+        QueryInformationJobObject=lambda _job, kind: () if kind == 2 else {"ActiveProcesses": 0},
+        TerminateJobObject=lambda _job, _code: events.append("terminate"),
+    )
+    worker = _WindowsJobWordWorker(process, job, _identity(), (event_api, job_api, None))
+    worker._member_handles[202] = word
+    tick = iter(range(0, 1000, 10))
+    monkeypatch.setattr(office_pdf.time, "monotonic", lambda: next(tick))
+    with pytest.raises(office_pdf.RendererUnavailable, match="did not close cleanly"):
+        worker.close()
+    assert events == ["terminate", "terminate", "word", "worker", "job"]
+
+
+def test_ambiguous_job_member_is_never_adopted(monkeypatch) -> None:
+    events = []
+    handle = types.SimpleNamespace(Close=lambda: events.append("close"))
+    monkeypatch.setitem(sys.modules, "win32api", types.SimpleNamespace(OpenProcess=lambda *_: handle))
+    job_api = types.SimpleNamespace(
+        JobObjectBasicProcessIdList=2,
+        QueryInformationJobObject=lambda *_: (202,),
+        IsProcessInJob=lambda *_: False,
+    )
+    worker = _WindowsJobWordWorker(object(), object(), _identity(), (None, job_api, None))
+    with pytest.raises(office_pdf.RendererUnavailable, match="identity is ambiguous"):
+        worker._capture_members(worker._job)
+    assert events == ["close"]
+    assert worker._member_handles == {}
 
 
 def test_preexisting_user_word_is_not_a_termination_target() -> None:
