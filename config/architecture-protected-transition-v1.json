@@ -1,16 +1,64 @@
 {
-  "schemaVersion": "2.0.0",
+  "schemaVersion": "3.0.0",
   "transitionId": "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
-  "protectedBaseSha": "152edad3fd9b70e3eef41b8c5c406699a2d5a196",
+  "protectedBaseSha": "8ca8f95c6f2033ac3ea5b3baffdc3de3466cda61",
   "artifacts": [
     {
-      "path": ".github/workflows/capability-protected.yml",
+      "path": "config/capability-protected-artifacts-v1.json",
       "baseMode": "100644",
       "baseObjectType": "blob",
-      "baseBlobSha": "f1e368e37f12bcb9a135097944fa2b52213f8695",
+      "baseBlobSha": "be6d754a9a27361c317b5b8d9ac96734e8787d2a",
       "candidateMode": "100644",
       "candidateObjectType": "blob",
-      "candidateBlobSha": "e0713a98994a4f2cdc138dd73160770b3e84dfbf"
+      "candidateBlobSha": "e5abce403af30d8d35d785c0ba4be34f43c9fe59"
+    }
+  ],
+  "supportScope": "LOCAL_WORD_COM_CONTAINMENT_V1",
+  "supportArtifacts": [
+    {
+      "path": "config/capability-exceptions-v1.json",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "e79d8ade92b1e4d2c1b5539c872305f50bb91845",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "9594710936529abc377898bba25a229dff581729"
+    },
+    {
+      "path": "config/capability-protected-transition-v1.json",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "46159889cb48c6126d5bd0c1fd47e73f90678fa6",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "039cd26155a1375ef34ac117617a09250f5da59f"
+    },
+    {
+      "path": "scripts/backend_contract/infrastructure/office_pdf.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "1879b648842d3495fac1988e0e0dd3f61000dfef",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "79be6ea0f029a55dbc77dee79c2fc922bbf60a9e"
+    },
+    {
+      "path": "scripts/quality/capability_gate_adapter.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "592c36c15f5c54be5ce01fa91affb8d85221cb15",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "c6291990a74aa9ddfd575018143b9d7a7082dc77"
+    },
+    {
+      "path": "tests/test_office_word_containment_v1.py",
+      "baseMode": "100644",
+      "baseObjectType": "blob",
+      "baseBlobSha": "ccd258580e62b9b4fa7f1f07817d66883a45b1e6",
+      "candidateMode": "100644",
+      "candidateObjectType": "blob",
+      "candidateBlobSha": "bf667571c5c4ef458714e848184756cc07f15e15"
     }
   ]
 }
