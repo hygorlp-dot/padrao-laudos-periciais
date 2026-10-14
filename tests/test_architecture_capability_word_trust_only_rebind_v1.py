@@ -216,6 +216,150 @@ def _judge(workspace: dict, base: str, candidate: str) -> tuple[int, dict]:
     return completed.returncode, json.loads(lines[-1]) if lines else {}
 
 
+# Owner-authorized #319: one concrete instantiation of the existing MODE B.
+# These commits remain historical fixture inputs after the transition closes.
+CLEANUP_BASE = "152edad3fd9b70e3eef41b8c5c406699a2d5a196"
+CLEANUP_SOURCE = "d40c1b5e53b8ccdeb9bafb395d8adeeec77f73e0"
+CLEANUP_HASH = "59e1ff0eeb13ea496a697fa9a6f5ccc1d80349c51a4c6d84fa9ebc6f3817166e"
+CLEANUP_TEST = "tests/test_office_word_containment_v1.py"
+
+
+def _cleanup_source() -> str:
+    lines = _workflow().splitlines()
+    # Before the predecessor exists, run the real base routing contract.  Its
+    # rejection of the concrete product/binding transition is the behavioral RED.
+    marker = "WORD_CLEANUP_319" if any("# WORD_CLEANUP_319_BEGIN" in x for x in lines) else "WORD_SUPPORT_ROUTING"
+    begin = next(i for i, line in enumerate(lines) if line.strip() == f"# {marker}_BEGIN")
+    end = next(i for i, line in enumerate(lines) if line.strip() == f"# {marker}_END")
+    indent = len(lines[begin]) - len(lines[begin].lstrip())
+    return "\n".join(line[indent:] for line in lines[begin:end + 1]) + "\n"
+
+
+@pytest.fixture(scope="module")
+def cleanup_workspace(workspace):
+    repo = workspace["repo"]
+    base = CLEANUP_BASE
+    _git(repo, "checkout", "-q", "--detach", CLEANUP_SOURCE)
+    for path in (WORD_PARENT, CLEANUP_TEST):
+        (repo / path).write_bytes(_git(repo, "show", f"{CLEANUP_SOURCE}:{path}", text=False))
+    adapter = (repo / ADAPTER).read_bytes().replace(FINAL[0].encode(), CLEANUP_HASH.encode())
+    (repo / ADAPTER).write_bytes(adapter)
+    (repo / SUPPORT_TEST).write_bytes(
+        (repo / SUPPORT_TEST).read_bytes().replace(FINAL[0].encode(), CLEANUP_HASH.encode())
+    )
+    binding = _commit(repo, "exact causal cleanup binding")
+    exceptions = json.loads((repo / EXCEPTIONS).read_text(encoding="utf-8"))
+    for row in exceptions["exceptions"]:
+        if row["canonicalPath"] == ADAPTER:
+            row.update(wholeFileSha256=hashlib.sha256(adapter).hexdigest(), baselineCommit=binding,
+                       reviewEvidence="LOCAL_WORD_COM_CONTAINMENT_CLEANUP_319")
+    (repo / EXCEPTIONS).write_text(json.dumps(exceptions, indent=2) + "\n", encoding="utf-8", newline="\n")
+    registry = json.loads((repo / REGISTRY).read_text(encoding="utf-8"))
+    registry["artifacts"] = [_identity(repo, row["path"]) for row in registry["artifacts"]]
+    (repo / REGISTRY).write_text(json.dumps(registry, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+    def row(path):
+        mode, kind, blob = _git(repo, "ls-tree", base, "--", path).split("\t")[0].split()
+        return {"path": path, "base": {"path": path, "state": "PRESENT", "mode": mode,
+                "objectType": kind, "blobSha": blob}, "candidate": _identity(repo, path)}
+
+    protected = {ADAPTER, EXCEPTIONS, REGISTRY}
+    transition = dict(schemaVersion="3.0.0", transitionId=trust_anchor.WORD_TRANSITION_ID,
+                      purpose=trust_anchor.WORD_TRANSITION_PURPOSE, scope=trust_anchor.WORD_TRANSITION_SCOPE,
+                      protectedBaseSha=base, protectedArtifacts=[row(p) for p in sorted(protected)],
+                      supportArtifacts=[row(p) for p in sorted({WORD_PARENT, CLEANUP_TEST, SUPPORT_TEST})])
+    (repo / TRANSITION).write_text(json.dumps(transition, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+    def architecture_row(path):
+        item = row(path)
+        return dict(path=path, baseMode=item["base"]["mode"], baseObjectType=item["base"]["objectType"],
+                    baseBlobSha=item["base"]["blobSha"], candidateMode=item["candidate"]["mode"],
+                    candidateObjectType=item["candidate"]["objectType"], candidateBlobSha=item["candidate"]["blobSha"])
+
+    architecture = dict(schemaVersion="3.0.0", transitionId="ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1",
+                        protectedBaseSha=base, artifacts=[architecture_row(REGISTRY)],
+                        supportScope=trust_anchor.WORD_TRANSITION_SCOPE,
+                        supportArtifacts=[architecture_row(p) for p in sorted({ADAPTER, EXCEPTIONS, TRANSITION,
+                                                                              WORD_PARENT, CLEANUP_TEST})])
+    (repo / ARCHITECTURE_TRANSITION).write_text(json.dumps(architecture, indent=2) + "\n", encoding="utf-8", newline="\n")
+    candidate = _commit(repo, "exact cleanup manifests")
+    return {**workspace, "base": base, "candidate": candidate}
+
+
+def _cleanup_judge(workspace, base, candidate):
+    result = subprocess.run([sys.executable, "-"], input=_cleanup_source(), cwd=ROOT, capture_output=True,
+                            text=True, timeout=600, env={**os.environ,
+                            "CAPABILITY_CANDIDATE_ROOT": str(workspace["repo"]),
+                            "CAPABILITY_PROTECTED_BASE_SHA": base, "CAPABILITY_EXPECTED_HEAD_SHA": candidate,
+                            "GITHUB_WORKSPACE": str(workspace["workspace"])})
+    return result.returncode, result.stdout, result.stderr
+
+
+def test_exact_cleanup_product_and_binding_transition_is_accepted(cleanup_workspace):
+    w = cleanup_workspace
+    code, out, err = _cleanup_judge(w, w["base"], w["candidate"])
+    assert code == 0, (out, err)
+
+
+@pytest.mark.parametrize("path,suffix", [
+    (WORD_PARENT, b"\n# unreviewed product bytes\n"),
+    ("scripts/backend_contract/infrastructure/office_word_worker.py", b"\n# worker drift\n"),
+    (ADAPTER, b"\nimport urllib.request\n"),
+    (CLEANUP_TEST, b"\n# test drift\n"),
+    (SUPPORT_TEST, b"\n# security test drift\n"),
+    (REGISTRY, b" "),
+    (TRANSITION, b"invalid manifest"),
+    ("config/capability-policy-v1.json", b" "),
+    ("scripts/quality/capability_analyzer.py", b"\n# analyzer drift\n"),
+])
+def test_cleanup_transition_rejects_unreviewed_bytes(cleanup_workspace, path, suffix):
+    w = cleanup_workspace
+    _git(w["repo"], "checkout", "-q", "--detach", w["candidate"])
+    file = w["repo"] / path
+    file.write_bytes(file.read_bytes() + suffix)
+    changed = _commit(w["repo"], "unreviewed drift")
+    assert _cleanup_judge(w, w["base"], changed)[0] != 0
+
+
+@pytest.mark.parametrize("case", ["wildcard", "scope", "wrong-base", "exception", "registry-path"])
+def test_cleanup_transition_rejects_authority_drift(cleanup_workspace, case):
+    w = cleanup_workspace
+    repo = w["repo"]
+    _git(repo, "checkout", "-q", "--detach", w["candidate"])
+    path = EXCEPTIONS if case == "exception" else REGISTRY if case == "registry-path" else TRANSITION
+    document = json.loads((repo / path).read_text(encoding="utf-8"))
+    if case == "wildcard":
+        document["supportArtifacts"][0]["path"] = "scripts/backend_contract/*"
+    elif case == "scope":
+        document["scope"] = "GENERIC_WORD"
+    elif case == "wrong-base":
+        document["protectedBaseSha"] = "0" * 40
+    elif case == "exception":
+        document["exceptions"][0]["reviewBy"] = "2099-01-01"
+    else:
+        document["artifacts"].append({"path": "new-capability", "state": "ABSENT"})
+    (repo / path).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
+    # Keep declared hashes coherent: refusal must be about authority drift,
+    # rather than an incidentally stale identity in the transition manifests.
+    capability = json.loads((repo / TRANSITION).read_text(encoding="utf-8"))
+    for row in capability["protectedArtifacts"]:
+        row["candidate"] = _identity(repo, row["path"])
+    (repo / TRANSITION).write_text(json.dumps(capability, indent=2) + "\n", encoding="utf-8", newline="\n")
+    architecture = json.loads((repo / ARCHITECTURE_TRANSITION).read_text(encoding="utf-8"))
+    for row in architecture["artifacts"] + architecture["supportArtifacts"]:
+        row["candidateBlobSha"] = _blob(repo, row["path"])
+    (repo / ARCHITECTURE_TRANSITION).write_text(json.dumps(architecture, indent=2) + "\n", encoding="utf-8", newline="\n")
+    changed = _commit(repo, "coherent authority drift")
+    assert _cleanup_judge(w, w["base"], changed)[0] != 0
+
+
+def test_cleanup_transition_cannot_be_replayed_after_landing(cleanup_workspace):
+    w = cleanup_workspace
+    _git(w["repo"], "checkout", "-q", "--detach", w["candidate"])
+    replay = _commit(w["repo"], "replay")
+    assert _cleanup_judge(w, w["candidate"], replay)[0] != 0
+
+
 def test_the_base_is_the_exact_pre_rebind_adapter(workspace):
     blob = _git(workspace["repo"], "rev-parse", f"{workspace['base']}:{ADAPTER}").strip()
     assert blob == BASE_ADAPTER_BLOB
