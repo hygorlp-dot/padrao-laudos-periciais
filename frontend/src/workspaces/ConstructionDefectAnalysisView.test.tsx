@@ -84,6 +84,87 @@ function fetchByUrl(pathologyResponse = response(200, envelope)) {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("construction defect analysis workbench", () => {
+  test("blocked PAT allows explicit REJECT and submits its bound professional command", async () => {
+    const blocked = { ...envelope, snapshot: { ...pathology, gate: "BLOQUEADO_PARA_REDACAO", reviews: [] } };
+    const routed = fetchByUrl();
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/construction-defect-analysis/pathology-reviews")) {
+        return Promise.resolve(response(200, { ...blocked, revision: 6, snapshot: { ...blocked.snapshot, reviews: [{ ...pathology.reviews[0], action: "REJECT", reason: "TEST_ONLY: rejeição sintética." }] } }));
+      }
+      if (String(input).endsWith("/construction-defect-analysis")) return Promise.resolve(response(200, blocked));
+      return routed(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+    await screen.findByRole("heading", { name: "PAT-001" });
+    expect(screen.getByLabelText("Profissional responsável")).toHaveValue("PROFESSIONAL-001");
+    fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "TEST_ONLY: rejeição sintética." } });
+    const button = screen.getByRole("button", { name: "Registrar revisão" });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    expect(await screen.findByText("Rejeitada pelo profissional")).toBeInTheDocument();
+    const posts = fetchMock.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(1);
+    expect(JSON.parse(String(posts[0][1]?.body))).toEqual({ expected_revision: 5, pat_id: "PAT-001", action: "REJECT", professional_id: "PROFESSIONAL-001", reason: "TEST_ONLY: rejeição sintética." });
+  });
+
+  test("blocked PAT keeps APPROVE disabled without submitting a review", async () => {
+    const blocked = { ...envelope, snapshot: { ...pathology, gate: "BLOQUEADO_PARA_REDACAO", reviews: [] } };
+    const fetchMock = fetchByUrl(response(200, blocked));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+    await screen.findByRole("heading", { name: "PAT-001" });
+    fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "TEST_ONLY: aprovação recusada." } });
+    fireEvent.change(screen.getByLabelText("Ação profissional"), { target: { value: "APPROVE" } });
+    expect(screen.getByText("A proposta bloqueada pode ser rejeitada, mas não aprovada.")).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Registrar revisão" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
+
+  test.each(["REJECT", "APPROVE"])("stale blocked PAT keeps %s disabled", async (action) => {
+    const stale = { ...envelope, snapshot: { ...pathology, gate: "BLOQUEADO_PARA_REDACAO", reviews: [], upstream_stale: true, upstream_stale_reasons: ["Inspection changed"] } };
+    const fetchMock = fetchByUrl(response(200, stale));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+    await screen.findByRole("heading", { name: "PAT-001" });
+    fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "TEST_ONLY: revisão stale." } });
+    fireEvent.change(screen.getByLabelText("Ação profissional"), { target: { value: action } });
+    const button = screen.getByRole("button", { name: "Registrar revisão" });
+    expect(button).toBeDisabled();
+    fireEvent.click(button);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
+
+  test("busy blocked PAT prevents a duplicate REJECT command", async () => {
+    const blocked = { ...envelope, snapshot: { ...pathology, gate: "BLOQUEADO_PARA_REDACAO", reviews: [] } };
+    const routed = fetchByUrl();
+    let finishReview!: (value: Response) => void;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/construction-defect-analysis/pathology-reviews")) {
+        return new Promise<Response>((resolve) => { finishReview = resolve; });
+      }
+      if (String(input).endsWith("/construction-defect-analysis")) return Promise.resolve(response(200, blocked));
+      return routed(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<ConstructionDefectAnalysisView workspaceId={ID} />);
+    await screen.findByRole("heading", { name: "PAT-001" });
+    fireEvent.change(screen.getByLabelText("Fundamentação da revisão"), { target: { value: "TEST_ONLY: rejeição pendente." } });
+    const button = screen.getByRole("button", { name: "Registrar revisão" });
+    fireEvent.click(button);
+    await waitFor(() => expect(button).toBeDisabled());
+    fireEvent.change(screen.getByLabelText("Ação profissional"), { target: { value: "APPROVE" } });
+    expect(button).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Ação profissional"), { target: { value: "REJECT" } });
+    fireEvent.click(button);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    finishReview(response(200, { ...blocked, revision: 6, snapshot: { ...blocked.snapshot, reviews: [{ ...pathology.reviews[0], action: "REJECT", reason: "TEST_ONLY: rejeição pendente." }] } }));
+    expect(await screen.findByText("Rejeitada pelo profissional")).toBeInTheDocument();
+    await waitFor(() => expect(button).toBeEnabled());
+  });
+
   test("same-caption photos and equal readings remain distinguishable without internal IDs", async () => {
     const duplicated = { ...inspectEnvelope, snapshot: { ...inspection,
       measurements: [...inspection.measurements, { ...inspection.measurements[0], measurement_id: "MED-002" }],

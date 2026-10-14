@@ -596,6 +596,126 @@ def _application_context() -> ObservationContext:
     )
 
 
+def test_blocked_pat_rejection_appends_without_promoting_authority():
+    from dataclasses import replace
+
+    services = _application_services()
+    first_record, proposal = services.start.execute(
+        WORKSPACE_ID,
+        observation_contexts=(
+            replace(
+                _application_context(),
+                outcome=ObservationOutcome.INCONCLUSIVE,
+                manifestation="Manifestacao sintetica inconclusiva TEST_ONLY",
+                measurement_ids=(),
+                photo_ids=(),
+            ),
+        ),
+    )
+    assert proposal.gate == "BLOQUEADO_PARA_REDACAO"
+    assert proposal.upstream_stale is False
+    original_payload = thaw_payload(first_record.payload)
+    record, rejected = services.review.execute(
+        WORKSPACE_ID,
+        pat_id="PAT-001",
+        action="REJECT",
+        professional_id="PROFESSIONAL-001",
+        reason="TEST_ONLY: rejeicao sintetica fundamentada.",
+        expected_revision=first_record.revision,
+    )
+    assert record.revision == 2
+    assert rejected.effective_pat_ids == ()
+    assert rejected.gate == "BLOQUEADO_PARA_REDACAO"
+    assert rejected.analysis_final == proposal.analysis_final
+    assert rejected.reviews[0].action is PathologyReviewAction.REJECT
+    assert rejected.reviews[0].professional_id == "PROFESSIONAL-001"
+    assert rejected.reviews[0].supersedes_review_id is None
+    later_review = replace(
+        services.review,
+        clock=SimpleNamespace(now=lambda: datetime(2026, 9, 8, 14, 1, tzinfo=UTC)),
+    )
+    next_record, second = later_review.execute(
+        WORKSPACE_ID,
+        pat_id="PAT-001",
+        action="REJECT",
+        professional_id="PROFESSIONAL-001",
+        reason="TEST_ONLY: nova rejeicao explicita.",
+        expected_revision=record.revision,
+    )
+    assert next_record.revision == 3
+    assert second.reviews[:-1] == rejected.reviews
+    assert second.reviews[-1].supersedes_review_id == rejected.reviews[0].review_id
+    assert second.effective_pat_ids == ()
+    assert thaw_payload(first_record.payload) == original_payload
+    _, reopened = services.get.execute(WORKSPACE_ID)
+    assert reopened.reviews == second.reviews
+    assert reopened.effective_pat_ids == ()
+
+
+@pytest.mark.parametrize(
+    ("change", "error", "message"),
+    [
+        ({"action": "APPROVE"}, ValueError, "professional approval"),
+        ({"professional_id": "OTHER-PROFESSIONAL"}, ValueError, "inspection authority"),
+        ({"reason": "  "}, ValueError, "reason is required"),
+        ({"action": "UNKNOWN"}, ValueError, "action is invalid"),
+        ({"expected_revision": 0}, RepositoryConflict, "revision is not latest"),
+        ({"pat_id": "PAT-MISSING"}, ValueError, "review target is invalid"),
+    ],
+)
+def test_blocked_pat_review_preserves_fail_closed_guards(change, error, message):
+    from dataclasses import replace
+
+    services = _application_services()
+    record, proposal = services.start.execute(
+        WORKSPACE_ID,
+        observation_contexts=(replace(
+            _application_context(), outcome=ObservationOutcome.INCONCLUSIVE,
+            manifestation="Manifestacao sintetica inconclusiva TEST_ONLY",
+            measurement_ids=(), photo_ids=(),
+        ),),
+    )
+    assert proposal.gate == "BLOQUEADO_PARA_REDACAO"
+    command = dict(
+        pat_id="PAT-001", action="REJECT", professional_id="PROFESSIONAL-001",
+        reason="TEST_ONLY: rejeicao sintetica.", expected_revision=record.revision,
+    )
+    with pytest.raises(error, match=message):
+        services.review.execute(WORKSPACE_ID, **(command | change))
+    assert len(services.store.history) == 1
+    _, current = services.get.execute(WORKSPACE_ID)
+    assert current.reviews == ()
+    assert current.effective_pat_ids == ()
+
+
+@pytest.mark.parametrize("action", ["REJECT", "APPROVE"])
+def test_blocked_pat_stale_review_cannot_append(action):
+    from dataclasses import replace
+
+    services = _application_services()
+    record, proposal = services.start.execute(
+        WORKSPACE_ID,
+        observation_contexts=(replace(
+            _application_context(), outcome=ObservationOutcome.INCONCLUSIVE,
+            manifestation="Manifestacao sintetica inconclusiva TEST_ONLY",
+            measurement_ids=(), photo_ids=(),
+        ),),
+    )
+    assert proposal.gate == "BLOQUEADO_PARA_REDACAO"
+    prior = services.inspection.record
+    services.inspection.record = _record(
+        prior.artifact_kind, prior.artifact_id, prior.revision + 1,
+        thaw_payload(prior.payload),
+    )
+    with pytest.raises(RepositoryConflict, match="upstream is stale"):
+        services.review.execute(
+            WORKSPACE_ID, pat_id="PAT-001", action=action,
+            professional_id="PROFESSIONAL-001", reason="TEST_ONLY: revisao tardia.",
+            expected_revision=record.revision,
+        )
+    assert len(services.store.history) == 1
+
+
 def test_application_binds_pat_to_exact_four_upstreams_and_reviews_append_only():
     services = _application_services()
 
