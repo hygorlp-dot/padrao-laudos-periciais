@@ -31,8 +31,14 @@ CAPABILITY_GATE_ADAPTER_PATH = "scripts/quality/capability_gate_adapter.py"
 WORD_PARENT_PATH = "scripts/backend_contract/infrastructure/office_pdf.py"
 WORD_WORKER_PATH = "scripts/backend_contract/infrastructure/office_word_worker.py"
 PROTECTED_BASE = "0275c4766f5292fcf9a599999bebc9fbff97ccb0"
-# The architecture transition now carries the Word support-routing judge predecessor.
-ARCHITECTURE_PROTECTED_BASE = "0f5527590896a80a6f296e627bb61717ff1eb8d4"
+# The owner-authorized #319 predecessor rotates only the protected workflow.
+ARCHITECTURE_PROTECTED_BASE = "152edad3fd9b70e3eef41b8c5c406699a2d5a196"
+CLEANUP_SOURCE = "d40c1b5e53b8ccdeb9bafb395d8adeeec77f73e0"
+CLEANUP_EVIDENCE = "LOCAL_WORD_COM_CONTAINMENT_CLEANUP_319"
+CLEANUP_SUPPORT = {WORD_PARENT_PATH, "tests/test_office_word_containment_v1.py",
+                   "tests/test_architecture_capability_exception_rebind_v1.py"}
+CLEANUP_ARCHITECTURE_SUPPORT = {WORD_PARENT_PATH, "tests/test_office_word_containment_v1.py",
+                                CAPABILITY_GATE_ADAPTER_PATH, EXCEPTIONS_PATH, CAPABILITY_TRANSITION_PATH}
 CAPABILITY_WORKFLOW_PATH = ".github/workflows/capability-protected.yml"
 SOURCE_ANCHORS = {
     "scripts/quality/capability_gate_adapter.py": "996d4c109f78fabc4c57d7bf771d698cf63b2c63",
@@ -88,6 +94,28 @@ def _architecture_transition_identity(row: dict, side: str) -> tuple[str, str, s
     return row[f"{prefix}Mode"], row[f"{prefix}ObjectType"], row[f"{prefix}BlobSha"]
 
 
+def _cleanup_binding() -> dict | None:
+    """Only the concrete #319 binding; retain historical rebind assertions otherwise."""
+    rows = [row for row in _json(EXCEPTIONS_PATH)["exceptions"]
+            if row["canonicalPath"] == CAPABILITY_GATE_ADAPTER_PATH]
+    assert len(rows) == 1
+    row = rows[0]
+    if row["reviewEvidence"] != CLEANUP_EVIDENCE:
+        return None
+    base = _json(CAPABILITY_TRANSITION_PATH)["protectedBaseSha"]
+    for older, newer in ((ARCHITECTURE_PROTECTED_BASE, base), (base, row["baselineCommit"]),
+                         (row["baselineCommit"], "HEAD"), (CLEANUP_SOURCE, "HEAD")):
+        assert subprocess.run(["git", "merge-base", "--is-ancestor", older, newer],
+                              cwd=ROOT, capture_output=True).returncode == 0
+    assert row["baselineCommit"] != base
+    assert _identity_from_commit(row["baselineCommit"], CAPABILITY_GATE_ADAPTER_PATH) == _identity_from_worktree(
+        CAPABILITY_GATE_ADAPTER_PATH
+    )
+    source = subprocess.check_output(["git", "show", f"{CLEANUP_SOURCE}:{WORD_PARENT_PATH}"], cwd=ROOT)
+    assert _WORD_PRODUCT_SHA256[WORD_PARENT_PATH] == hashlib.sha256(source).hexdigest()
+    return row
+
+
 def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
     capability_paths = {
         row["path"] for row in _json(CAPABILITY_TRANSITION_PATH)["protectedArtifacts"]
@@ -106,8 +134,9 @@ def test_transition_manifests_introduce_no_wildcard_or_package_wide_authority():
         EXCEPTIONS_PATH,
         CAPABILITY_GATE_ADAPTER_PATH,
     }
-    assert architecture_paths == {CAPABILITY_WORKFLOW_PATH}
-    assert support_paths == set()
+    cleanup = _cleanup_binding()
+    assert architecture_paths == {CAPABILITY_REGISTRY_PATH if cleanup else CAPABILITY_WORKFLOW_PATH}
+    assert support_paths == (CLEANUP_ARCHITECTURE_SUPPORT if cleanup else set())
 
 
 def test_capability_workflow_python_scope_admits_exception_transition_path():
@@ -219,7 +248,9 @@ def test_word_transition_routing_accepts_current_transition_with_word_change(tmp
 
 
 def test_rebind_rotates_only_exact_judge_exception_identities():
-    base_rows = _git("show", f"{PROTECTED_BASE}:{EXCEPTIONS_PATH}")
+    cleanup = _cleanup_binding()
+    base_sha = _json(CAPABILITY_TRANSITION_PATH)["protectedBaseSha"] if cleanup else PROTECTED_BASE
+    base_rows = _git("show", f"{base_sha}:{EXCEPTIONS_PATH}")
     base = json.loads(base_rows)
     candidate = _json(EXCEPTIONS_PATH)
 
@@ -231,8 +262,8 @@ def test_rebind_rotates_only_exact_judge_exception_identities():
             continue
         changed_paths.add(after["canonicalPath"])
         assert changed == {"baselineCommit", "reviewEvidence", "wholeFileSha256"}
-        assert after["baselineCommit"] == SOURCE_ANCHORS[after["canonicalPath"]]
-        assert after["reviewEvidence"] == REVIEW_EVIDENCE[after["canonicalPath"]]
+        assert after["baselineCommit"] == (cleanup["baselineCommit"] if cleanup else SOURCE_ANCHORS[after["canonicalPath"]])
+        assert after["reviewEvidence"] == (CLEANUP_EVIDENCE if cleanup else REVIEW_EVIDENCE[after["canonicalPath"]])
         assert after["wholeFileSha256"] == hashlib.sha256(
             (ROOT / after["canonicalPath"]).read_bytes()
         ).hexdigest()
@@ -252,27 +283,45 @@ def test_capability_registry_and_transition_bind_exact_exception_blob():
     assert transition["transitionId"] == "LOCAL_WORD_COM_CONTAINMENT_TRUST_TRANSITION_V1"
     assert transition["purpose"] == "BOUND_MICROSOFT_WORD_COM_EXECUTION_FOR_AUTHORITATIVE_WORD_TO_PDF"
     assert transition["scope"] == "LOCAL_WORD_COM_CONTAINMENT_V1"
-    assert transition["protectedBaseSha"] == PROTECTED_BASE
+    cleanup = _cleanup_binding()
+    if not cleanup:
+        assert transition["protectedBaseSha"] == PROTECTED_BASE
     assert {row["path"] for row in transition["protectedArtifacts"]} == {
         CAPABILITY_REGISTRY_PATH,
         EXCEPTIONS_PATH,
         CAPABILITY_GATE_ADAPTER_PATH,
     }
-    assert {row["path"] for row in transition["supportArtifacts"]} == SUPPORT_ARTIFACTS
+    assert {row["path"] for row in transition["supportArtifacts"]} == (CLEANUP_SUPPORT if cleanup else SUPPORT_ARTIFACTS)
+    if cleanup:
+        for row in transition["protectedArtifacts"] + transition["supportArtifacts"]:
+            assert _transition_identity(row, "base") == _identity_from_commit(transition["protectedBaseSha"], row["path"])
+            assert _transition_identity(row, "candidate") == _identity_from_worktree(row["path"])
 
 
 def test_architecture_transition_binds_current_trust_anchor_rotation():
     transition = _json(ARCHITECTURE_TRANSITION_PATH)
-    assert transition["schemaVersion"] == "2.0.0"
-    assert set(transition) == {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}
-    assert transition["protectedBaseSha"] == ARCHITECTURE_PROTECTED_BASE
+    cleanup = _cleanup_binding()
+    assert transition["schemaVersion"] == ("3.0.0" if cleanup else "2.0.0")
+    keys = {"schemaVersion", "transitionId", "protectedBaseSha", "artifacts"}
+    assert set(transition) == (keys | {"supportScope", "supportArtifacts"} if cleanup else keys)
+    assert transition["transitionId"] == "ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1"
+    assert transition["protectedBaseSha"] == (
+        _json(CAPABILITY_TRANSITION_PATH)["protectedBaseSha"] if cleanup else ARCHITECTURE_PROTECTED_BASE
+    )
 
     artifact_rows = {row["path"]: row for row in transition["artifacts"]}
-    assert set(artifact_rows) == {CAPABILITY_WORKFLOW_PATH}
+    assert set(artifact_rows) == {CAPABILITY_REGISTRY_PATH if cleanup else CAPABILITY_WORKFLOW_PATH}
+    support_rows = transition.get("supportArtifacts", [])
+    if cleanup:
+        assert transition["supportScope"] == "LOCAL_WORD_COM_CONTAINMENT_V1"
+        assert len(support_rows) == len(CLEANUP_ARCHITECTURE_SUPPORT)
+        assert {row["path"] for row in support_rows} == CLEANUP_ARCHITECTURE_SUPPORT
+    assert len(artifact_rows) == len(transition["artifacts"])
 
-    for path, row in artifact_rows.items():
+    for row in list(artifact_rows.values()) + support_rows:
+        path = row["path"]
         assert _architecture_transition_identity(row, "base") == _identity_from_commit(
-            ARCHITECTURE_PROTECTED_BASE, path
+            transition["protectedBaseSha"], path
         )
         assert _architecture_transition_identity(row, "candidate") == _identity_from_worktree(path)
 

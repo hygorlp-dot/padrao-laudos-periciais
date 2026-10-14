@@ -222,6 +222,7 @@ CLEANUP_BASE = "152edad3fd9b70e3eef41b8c5c406699a2d5a196"
 CLEANUP_SOURCE = "d40c1b5e53b8ccdeb9bafb395d8adeeec77f73e0"
 CLEANUP_HASH = "59e1ff0eeb13ea496a697fa9a6f5ccc1d80349c51a4c6d84fa9ebc6f3817166e"
 CLEANUP_TEST = "tests/test_office_word_containment_v1.py"
+CLEANUP_SECURITY_BLOB = "4c79f40c18c027648d72a8015cd6b6df95149672"
 
 
 def _cleanup_source() -> str:
@@ -238,8 +239,11 @@ def _cleanup_source() -> str:
 @pytest.fixture(scope="module")
 def cleanup_workspace(workspace):
     repo = workspace["repo"]
-    base = CLEANUP_BASE
+    _git(repo, "checkout", "-q", "--detach", CLEANUP_BASE)
+    (repo / SUPPORT_TEST).write_bytes(_git(repo, "cat-file", "blob", CLEANUP_SECURITY_BLOB, text=False))
+    base = _commit(repo, "exact predecessor security assertions")
     _git(repo, "checkout", "-q", "--detach", CLEANUP_SOURCE)
+    _git(repo, "merge", "-q", "--no-verify", "--no-edit", base)
     for path in (WORD_PARENT, CLEANUP_TEST):
         (repo / path).write_bytes(_git(repo, "show", f"{CLEANUP_SOURCE}:{path}", text=False))
     adapter = (repo / ADAPTER).read_bytes().replace(FINAL[0].encode(), CLEANUP_HASH.encode())
@@ -299,6 +303,25 @@ def test_exact_cleanup_product_and_binding_transition_is_accepted(cleanup_worksp
     w = cleanup_workspace
     code, out, err = _cleanup_judge(w, w["base"], w["candidate"])
     assert code == 0, (out, err)
+
+
+def test_cleanup_fixture_retains_exact_security_assertions(cleanup_workspace):
+    w = cleanup_workspace
+    _git(w["repo"], "checkout", "-q", "--detach", w["candidate"])
+    nodes = [
+        "test_transition_manifests_introduce_no_wildcard_or_package_wide_authority",
+        "test_rebind_rotates_only_exact_judge_exception_identities",
+        "test_capability_registry_and_transition_bind_exact_exception_blob",
+        "test_architecture_transition_binds_current_trust_anchor_rotation",
+        "test_word_render_contract_accepts_only_the_pre_reviewed_exact_digests",
+    ]
+    # Execute only the known, byte-pinned synthetic fixture's security tests;
+    # this is ordinary regression, never the protected workflow's judge route.
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", *[
+        f"{SUPPORT_TEST}::{node}" for node in nodes
+    ]], cwd=w["repo"], capture_output=True, text=True, timeout=120,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"})
+    assert result.returncode == 0, (result.stdout, result.stderr)
 
 
 @pytest.mark.parametrize("path,suffix", [
