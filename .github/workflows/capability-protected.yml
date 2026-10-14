@@ -94,6 +94,219 @@ jobs:
           # WORD_SUPPORT_ROUTING_END
           '@ | python -
           if ($LASTEXITCODE -ne 0) {
+            # Try only the exact owner-authorized #319 instantiation of MODE B;
+            # all legacy modes below retain their original closed contracts.
+            $cleanup = @'
+          # WORD_CLEANUP_319_BEGIN
+          import hashlib, json, os, re, subprocess
+          from datetime import date
+          from pathlib import Path
+          from scripts.quality.capability_analyzer import analyze_capabilities
+          from scripts.quality.capability_gate_adapter import apply_exact_exceptions
+          from scripts.quality.capability_trust_anchor import (
+              WORD_TRANSITION_ID, WORD_TRANSITION_PURPOSE, WORD_TRANSITION_SCOPE, _load_registry,
+          )
+
+          root = Path(os.environ['CAPABILITY_CANDIDATE_ROOT'])
+          base = os.environ['CAPABILITY_PROTECTED_BASE_SHA']
+          candidate = os.environ['CAPABILITY_EXPECTED_HEAD_SHA']
+          trusted = Path(os.environ['GITHUB_WORKSPACE']) / 'trusted'
+          adapter_path = 'scripts/quality/capability_gate_adapter.py'
+          exceptions_path = 'config/capability-exceptions-v1.json'
+          registry_path = 'config/capability-protected-artifacts-v1.json'
+          transition_path = 'config/capability-protected-transition-v1.json'
+          architecture_transition_path = 'config/architecture-protected-transition-v1.json'
+          # One finite instantiation of the existing dedicated Word transition (MODE B).
+          # No new capability, support scope or exception: the adapter changes only its
+          # parent digest.  Both old base bytes and exact reviewed #319 bytes are pinned.
+          # After landing, the base adapter/product identities differ and this is inert.
+          seed = '152edad3fd9b70e3eef41b8c5c406699a2d5a196'
+          source_head = 'd40c1b5e53b8ccdeb9bafb395d8adeeec77f73e0'
+          base_adapter_blob = '592c36c15f5c54be5ce01fa91affb8d85221cb15'
+          superseded = ('b7394dc88f96e9c6e815d12345cd232b0fa6172471f3699db1127b7366883080',)
+          final = ('59e1ff0eeb13ea496a697fa9a6f5ccc1d80349c51a4c6d84fa9ebc6f3817166e',)
+          worker_hash = 'a453ca2d4a8a8b2aefb2ee786911d1b1314fea7d31f30884845e439041bbf87e'
+          parent_path = 'scripts/backend_contract/infrastructure/office_pdf.py'
+          worker_path = 'scripts/backend_contract/infrastructure/office_word_worker.py'
+          containment_test = 'tests/test_office_word_containment_v1.py'
+          security_test = 'tests/test_architecture_capability_exception_rebind_v1.py'
+          base_security_blob = '4c79f40c18c027648d72a8015cd6b6df95149672'
+          review_evidence = 'LOCAL_WORD_COM_CONTAINMENT_CLEANUP_319'
+          rebind_fields = {'wholeFileSha256', 'baselineCommit', 'reviewEvidence'}
+          protected = {adapter_path, exceptions_path, registry_path}
+          required = protected | {transition_path, architecture_transition_path, parent_path, containment_test, security_test}
+
+          def git(*args, text=True):
+              return subprocess.check_output(['git', *args], cwd=root, text=text)
+
+          def ancestor(older, newer):
+              return subprocess.run(
+                  ['git', 'merge-base', '--is-ancestor', older, newer], cwd=root, capture_output=True
+              ).returncode == 0
+
+          def identity(commit, path):
+              output = git('ls-tree', commit, '--', path).strip()
+              if not output:
+                  return {'path': path, 'state': 'ABSENT'}
+              metadata, listed = output.split('\t', 1)
+              mode, object_type, blob = metadata.split()
+              if listed != path or object_type != 'blob':
+                  raise ValueError('identity path/type mismatch')
+              return {'path': path, 'state': 'PRESENT', 'mode': mode, 'objectType': object_type, 'blobSha': blob}
+
+          def rows_exact(declared, paths):
+              if not isinstance(declared, list):
+                  return False
+              by_path = {row.get('path'): row for row in declared if isinstance(row, dict)}
+              return (
+                  len(by_path) == len(declared) == len(paths)
+                  and set(by_path) == paths
+                  and all(
+                      set(by_path[path]) == {'path', 'base', 'candidate'}
+                      and by_path[path]['base'] == identity(base, path)
+                      and by_path[path]['candidate'] == identity(candidate, path)
+                      for path in paths
+                  )
+              )
+
+          def without_rebind_fields(document):
+              rows = []
+              for row in document['exceptions']:
+                  row = dict(row)
+                  if row.get('canonicalPath') == adapter_path:
+                      for field in rebind_fields:
+                          row.pop(field, None)
+                  rows.append(row)
+              return {**document, 'exceptions': rows}
+
+          result = {}
+          try:
+              result['ancestry'] = base != candidate and ancestor(seed, base) and ancestor(base, candidate) and ancestor(source_head, candidate)
+              changed = {item for item in git('diff', '--no-renames', '--name-only', '-z', base, candidate).split('\0') if item}
+              result['paths'] = changed == required
+              base_adapter = git('show', f'{base}:{adapter_path}', text=False)
+              candidate_adapter = git('show', f'{candidate}:{adapter_path}', text=False)
+              result['base'] = identity(base, adapter_path).get('blobSha') == base_adapter_blob and all(
+                  base_adapter.count(old.encode()) == 1 and new.encode() not in base_adapter
+                  for old, new in zip(superseded, final)
+              )
+              expected_adapter = base_adapter
+              for old, new in zip(superseded, final):
+                  expected_adapter = expected_adapter.replace(old.encode(), new.encode())
+              # The digest swap is the whole adapter change: no import, call or
+              # authority can ride along with it.
+              result['adapter'] = candidate_adapter == expected_adapter
+              def digest(commit, path):
+                  return hashlib.sha256(git('show', f'{commit}:{path}', text=False)).hexdigest()
+              result['product'] = (
+                  digest(base, parent_path) == superseded[0]
+                  and digest(candidate, parent_path) == final[0]
+                  and digest(base, worker_path) == digest(candidate, worker_path) == worker_hash
+                  and identity(candidate, parent_path) == {
+                      'path': parent_path, 'state': 'PRESENT', 'mode': '100644', 'objectType': 'blob',
+                      'blobSha': '79be6ea0f029a55dbc77dee79c2fc922bbf60a9e',
+                  }
+                  and identity(candidate, containment_test) == {
+                      'path': containment_test, 'state': 'PRESENT', 'mode': '100644', 'objectType': 'blob',
+                      'blobSha': 'bf667571c5c4ef458714e848184756cc07f15e15',
+                  }
+                  and identity(base, security_test) == {
+                  'path': security_test, 'state': 'PRESENT', 'mode': '100644', 'objectType': 'blob',
+                  'blobSha': base_security_blob,
+              }
+                  and git('show', f'{candidate}:{security_test}', text=False)
+                      == git('show', f'{base}:{security_test}', text=False).replace(superseded[0].encode(), final[0].encode())
+                  and all(identity(candidate, path).get('mode') == '100644' for path in required)
+              )
+              transition = json.loads(git('show', f'{candidate}:{transition_path}'))
+              result['transition'] = (
+                  isinstance(transition, dict)
+                  and set(transition) == {'schemaVersion', 'transitionId', 'purpose', 'scope', 'protectedBaseSha', 'protectedArtifacts', 'supportArtifacts'}
+                  and transition['schemaVersion'] == '3.0.0'
+                  and transition['transitionId'] == WORD_TRANSITION_ID
+                  and transition['purpose'] == WORD_TRANSITION_PURPOSE
+                  and transition['scope'] == WORD_TRANSITION_SCOPE
+                  and transition['protectedBaseSha'] == base
+              )
+              result['rows'] = result['transition'] and rows_exact(
+                  transition['protectedArtifacts'], changed & protected
+              ) and rows_exact(
+                  transition['supportArtifacts'],
+                  changed - protected - {transition_path, architecture_transition_path},
+              )
+              base_registry = _load_registry(root, base)
+              candidate_registry = _load_registry(root, candidate)
+              result['registry'] = (
+                  base_registry is not None
+                  and base_registry == _load_registry(root, seed)
+                  and candidate_registry is not None
+                  and candidate_registry == [identity(candidate, row['path']) for row in base_registry]
+              )
+              base_exceptions = json.loads(git('show', f'{base}:{exceptions_path}'))
+              candidate_exceptions = json.loads(git('show', f'{candidate}:{exceptions_path}'))
+              rebound = [row for row in candidate_exceptions['exceptions'] if row.get('canonicalPath') == adapter_path]
+              result['exceptions'] = (
+                  base_exceptions == json.loads(git('show', f'{seed}:{exceptions_path}'))
+                  and without_rebind_fields(base_exceptions) == without_rebind_fields(candidate_exceptions)
+                  and len(rebound) == 1
+                  and all(
+                      row['wholeFileSha256'] == hashlib.sha256(candidate_adapter).hexdigest()
+                      and row['reviewEvidence'] == review_evidence
+                      and re.fullmatch('[0-9a-f]{40}', row['baselineCommit']) is not None
+                      and row['baselineCommit'] != base
+                      and ancestor(base, row['baselineCommit'])
+                      and ancestor(row['baselineCommit'], candidate)
+                      and git('show', f"{row['baselineCommit']}:{adapter_path}", text=False) == candidate_adapter
+                      for row in rebound
+                  )
+              )
+              # The architecture judge remains authoritative; also bind its exact
+              # existing schema/scope here, so no undeclared support accompanies this UOW.
+              architecture = json.loads(git('show', f'{candidate}:{architecture_transition_path}'))
+              def architecture_row(path):
+                  left, right = identity(base, path), identity(candidate, path)
+                  return {
+                      'path': path, 'baseMode': left['mode'], 'baseObjectType': left['objectType'],
+                      'baseBlobSha': left['blobSha'], 'candidateMode': right['mode'],
+                      'candidateObjectType': right['objectType'], 'candidateBlobSha': right['blobSha'],
+                  }
+              result['architecture'] = architecture == {
+                  'schemaVersion': '3.0.0', 'transitionId': 'ARCHITECTURE_TRUST_ANCHOR_ROTATION_V1',
+                  'protectedBaseSha': base, 'supportScope': WORD_TRANSITION_SCOPE,
+                  'artifacts': [architecture_row(registry_path)],
+                  'supportArtifacts': [architecture_row(path) for path in sorted({
+                      adapter_path, exceptions_path, transition_path, parent_path, containment_test,
+                  })],
+              }
+              # Reject structural drift before the expensive analyzer comparison.  The
+              # analyzer and policy execute only from the protected base and are unchanged.
+              if len(result) != 10 or not all(result.values()):
+                  print(json.dumps(result, sort_keys=True))
+                  raise SystemExit(1)
+              policy = trusted / 'config/capability-policy-v1.json'
+              tree = lambda commit: git('rev-parse', f'{commit}^{{tree}}').strip()
+              key = lambda item: (item.get('code'), item.get('canonicalPath'), item.get('module'), item.get('location', {}).get('line'), item.get('location', {}).get('column'), item.get('normalizedAstSha256'), item.get('policyVersion'), item.get('analyzer'))
+              base_findings = analyze_capabilities(root, base, tree(base), policy_path=policy)
+              candidate_findings = analyze_capabilities(root, candidate, tree(candidate), policy_path=policy)
+              result['findings'] = sorted(map(key, base_findings)) == sorted(map(key, candidate_findings))
+              result['baseExceptions'] = not apply_exact_exceptions(
+                  root, base_findings, base, base, registry_path=exceptions_path,
+                  schema_path=trusted / 'schemas/capability-exception-v1.schema.json', now=date.today(),
+              )
+          except (OSError, KeyError, TypeError, ValueError, UnicodeError, subprocess.CalledProcessError) as exc:
+              result['error'] = type(exc).__name__
+          print(json.dumps(result, sort_keys=True))
+          if 'error' in result or len(result) != 12 or not all(result.values()):
+              raise SystemExit(1)
+          # WORD_CLEANUP_319_END
+          '@ | python -
+            $cleanupExit = $LASTEXITCODE
+            Write-Output $cleanup
+            if ($cleanupExit -eq 0) {
+              "CAPABILITY_WORD_SCOPE_CHANGED=true" >> $env:GITHUB_ENV
+              "CAPABILITY_TRUST_TRANSITION_APPROVED=true" >> $env:GITHUB_ENV
+              exit 0
+            }
             # A trust-only hash rebind edits the adapter, so it enters the Word
             # scope, yet by construction carries no product bytes for the
             # contract above to close over.  Only the single finite rebind
@@ -278,7 +491,7 @@ jobs:
         run: |
           python -c "import os,sys; from pathlib import Path; from scripts.quality.capability_trust_anchor import validate_inert_trust_anchor; findings=validate_inert_trust_anchor(Path(os.environ['CAPABILITY_CANDIDATE_ROOT']), os.environ['CAPABILITY_PROTECTED_BASE_SHA'], os.environ['CAPABILITY_EXPECTED_HEAD_SHA']); print(findings); sys.exit(1 if findings else 0)"
       - name: Validate dedicated Word trust transition
-        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT == 'true' && env.CAPABILITY_WORD_SCOPE_CHANGED == 'true' && env.CAPABILITY_WORD_TRUST_ONLY_REBIND != 'true'
+        if: env.CAPABILITY_BASE_BOOTSTRAP_PRESENT == 'true' && env.CAPABILITY_WORD_SCOPE_CHANGED == 'true' && env.CAPABILITY_WORD_TRUST_ONLY_REBIND != 'true' && env.CAPABILITY_TRUST_TRANSITION_APPROVED != 'true'
         working-directory: trusted
         shell: pwsh
         env:
